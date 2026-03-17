@@ -1,0 +1,62 @@
+"""Dental Studio Pro - FastAPI Backend"""
+import os
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from backend.database import engine, Base, SessionLocal
+from backend.models import *  # noqa - import all models so Base.metadata knows them
+from backend.routers.auth import router as auth_router
+from backend.routers.admin.admin_routes import router as admin_router
+from backend.routers.clinic.clinic_routes import router as clinic_router
+from backend.routers.bot_routes import router as bot_router
+from backend.seed import run_seed
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create tables on startup (in dev; Alembic for production)
+    Base.metadata.create_all(bind=engine)
+    # Seed initial data
+    db = SessionLocal()
+    try:
+        run_seed(db)
+    finally:
+        db.close()
+    yield
+
+
+app = FastAPI(
+    title="Dental Studio Pro",
+    description="Sistema de gestión integral para consultorios odontológicos",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# ── CORS ────────────────────────────────────────────────
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Routers ─────────────────────────────────────────────
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(clinic_router)
+app.include_router(bot_router)
+
+# ── Serve Frontend (SPA) ───────────────────────────────
+frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+if os.path.exists(frontend_path):
+    app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
+
+
+@app.get("/api/health")
+def health_check():
+    return {"status": "ok", "service": "Dental Studio Pro"}
