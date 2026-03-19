@@ -64,12 +64,11 @@ app.include_router(admin_router)
 app.include_router(clinic_router)
 app.include_router(bot_router)
 
+@app.get("/api/health")
+def health_check():
+    return {"status": "ok", "service": "Dental Studio Pro"}
+
 # ── Serve Frontend (SPA) ───────────────────────────────
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
 if os.path.exists(frontend_path):
     app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
-
-
-@app.get("/api/health")
-def health_check():
-    return {"status": "ok", "service": "Dental Studio Pro"}
