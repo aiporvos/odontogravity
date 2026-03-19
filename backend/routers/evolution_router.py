@@ -50,15 +50,19 @@ def get_or_create_session(db: Session, platform_user_id: str):
     return session
 
 def load_history(db: Session, session_id) -> list[dict]:
-    messages = db.query(ChatMessage).filter(
+    # Fetch LATEST 50 messages, ordered oldest-to-newest for the LLM
+    subquery = db.query(ChatMessage).filter(
         ChatMessage.session_id == session_id
-    ).order_by(ChatMessage.created_at.asc()).limit(50).all()
+    ).order_by(ChatMessage.created_at.desc()).limit(50).all()
     
-    print(f"DEBUG: History for {session_id}: {len(messages)} msgs")
-    for m in messages:
+    # Reverse them to be in chronological order
+    subquery.reverse()
+    
+    print(f"DEBUG: History for {session_id}: {len(subquery)} msgs (NEWEST FIRST FIXED)")
+    for m in subquery:
         print(f"  - {m.role.value}: {m.content[:50]}... ({m.created_at})")
         
-    return [{"role": m.role.value, "content": m.content} for m in messages]
+    return [{"role": m.role.value, "content": m.content} for m in subquery]
 
 def save_message(db: Session, session_id, role: MessageRole, content: str):
     import time
