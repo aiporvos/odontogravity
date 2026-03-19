@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
+from sqlalchemy import text
 from backend.database import engine, Base, SessionLocal
 from backend.models import *  # noqa - import all models so Base.metadata knows them
 from backend.routers.auth import router as auth_router
@@ -13,11 +13,24 @@ from backend.routers.clinic.clinic_routes import router as clinic_router
 from backend.routers.bot_routes import router as bot_router
 from backend.seed import run_seed
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Create tables on startup (in dev; Alembic for production)
     Base.metadata.create_all(bind=engine)
+    
+    # Ensure new enum values exist (PostgreSQL doesn't update them automatically)
+    with engine.connect() as conn:
+        try:
+            # Check for PostgreSQL
+            if "postgresql" in str(engine.url):
+                new_symbols = ["sff", "fracture", "bridge"]
+                for symbol in new_symbols:
+                    # PostgreSQL requires ALTER TYPE outside of a transaction or with check
+                    conn.execute(text(f"ALTER TYPE toothsymbol ADD VALUE IF NOT EXISTS '{symbol}'"))
+                conn.commit()
+        except Exception:
+            pass # Swallow if already exists or not PG
+
     # Seed initial data
     db = SessionLocal()
     try:

@@ -71,11 +71,11 @@ const ProfessionalsPage = {
                 </div>
                 <div class="form-group">
                     <label>Especialidades (separar con coma)</label>
-                    <input type="text" name="specialties" value="${prof.specialties.join(', ')}" placeholder="Extracciones, Implantes">
+                    <input type="text" name="specialties" value="${(prof.specialties || []).join(', ')}" placeholder="Extracciones, Implantes">
                 </div>
                 <div class="form-group">
                     <label>Sedes (separar con coma)</label>
-                    <input type="text" name="locations" value="${prof.locations.join(', ')}" placeholder="San Rafael, Alvear">
+                    <input type="text" name="locations" value="${(prof.locations || []).join(', ')}" placeholder="San Rafael, Alvear">
                 </div>
                 <div class="form-group">
                     <label>Teléfono</label>

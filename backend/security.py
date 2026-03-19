@@ -1,4 +1,5 @@
 import os
+import bcrypt
 from datetime import datetime, timedelta
 from typing import Annotated
 from uuid import UUID
@@ -6,6 +7,12 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
+
+# Hack for passlib compatibility with bcrypt 4.0.0+
+# https://github.com/pyca/bcrypt/issues/684
+if not hasattr(bcrypt, "__about__"):
+    bcrypt.__about__ = type('About', (object,), {'__version__': bcrypt.__version__})
+
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 

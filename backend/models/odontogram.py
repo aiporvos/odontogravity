@@ -31,6 +31,9 @@ class ToothSymbol(str, enum.Enum):
     cavity = "cavity"               # caries O
     root_canal = "root_canal"       # tratamiento de conducto
     implant = "implant"             # implante
+    sff = "sff"                     # sellador de fosas y fisuras
+    fracture = "fracture"           # fractura
+    bridge = "bridge"               # puente (prótesis fija)
 
 
 class OdontogramEntry(Base):

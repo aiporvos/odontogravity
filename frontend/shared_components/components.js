@@ -6,12 +6,20 @@ const UI = {
     showModal(title, bodyHtml, footerHtml = '') {
         document.getElementById('modal-title').textContent = title;
         document.getElementById('modal-body').innerHTML = bodyHtml;
-        document.getElementById('modal-footer').innerHTML = footerHtml;
+        const footer = document.getElementById('modal-footer');
+        footer.innerHTML = footerHtml;
+        footer.classList.toggle('hidden', !footerHtml);
         document.getElementById('modal-overlay').classList.remove('hidden');
+    },
+
+    modal(html, title = 'Información') {
+        this.showModal(title, html, '');
     },
 
     closeModal() {
         document.getElementById('modal-overlay').classList.add('hidden');
+        document.getElementById('modal-body').innerHTML = '';
+        document.getElementById('modal-footer').innerHTML = '';
     },
 
     // ── Toast ──────────────────────────────────────────
@@ -82,8 +90,10 @@ const UI = {
             if (input.name) {
                 if (input.type === 'checkbox') {
                     data[input.name] = input.checked;
+                } else if (input.type === 'number') {
+                    data[input.name] = input.value === '' ? null : Number(input.value);
                 } else {
-                    data[input.name] = input.value || null;
+                    data[input.name] = input.value;
                 }
             }
         });

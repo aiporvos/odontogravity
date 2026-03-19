@@ -11,13 +11,27 @@ import asyncio
 from bot.ai_agent import chat
 from backend.database import SessionLocal
 from backend.models.chat_session import ChatSession, ChatMessage, ChatPlatform, MessageRole
+from backend.models.config import AppConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL", "")
-BOT_PORT = int(os.getenv("BOT_PORT", "8443"))
+def get_config(key: str, default: str = ""):
+    """Read a configuration from database, fallback to environment."""
+    db = SessionLocal()
+    try:
+        conf = db.query(AppConfig).filter(AppConfig.key == key).first()
+        if conf and conf.value:
+            return conf.value
+    except Exception as e:
+        logger.warning(f"Failed to read {key} from database: {e}")
+    finally:
+        db.close()
+    return os.getenv(key, default)
+
+TELEGRAM_TOKEN = get_config("TELEGRAM_BOT_TOKEN")
+WEBHOOK_URL = get_config("TELEGRAM_WEBHOOK_URL")
+BOT_PORT = int(get_config("BOT_PORT", "8443"))
 
 bot = Bot(token=TELEGRAM_TOKEN) if TELEGRAM_TOKEN else None
 dp = Dispatcher()
@@ -95,12 +109,22 @@ async def main():
         return
     dp.startup.register(on_startup)
     if WEBHOOK_URL:
+        logger.info(f"🚀 Bot starting in WEBHOOK mode on port {BOT_PORT}")
         app = web.Application()
-        handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-        handler.register(app, path="/webhook")
+        SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
         setup_application(app, dp, bot=bot)
-        await web._run_app(app, port=BOT_PORT)
+        
+        # Async runner for aiohttp inside existing event loop
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host="0.0.0.0", port=BOT_PORT)
+        await site.start()
+        
+        logger.info(f"📢 Webhook server listening on 0.0.0.0:{BOT_PORT}")
+        # Keep running
+        await asyncio.Event().wait()
     else:
+        logger.info("⚡ Bot starting in POLLING mode (no WEBHOOK_URL set)")
         await dp.start_polling(bot)
 
 

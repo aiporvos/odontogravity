@@ -121,7 +121,15 @@ const API = {
     deleteProfessional(id) { return this.del(`/admin/professionals/${id}`); },
 
     getLocations() { return this.get('/admin/locations'); },
+    createLocation(data) { return this.post('/admin/locations', data); },
+    deleteLocation(id) { return this.del(`/admin/locations/${id}`); },
+
     getInsurances() { return this.get('/admin/insurances'); },
+    createInsurance(data) { return this.post('/admin/insurances', data); },
+    deleteInsurance(id) { return this.del(`/admin/insurances/${id}`); },
+
+    getConfigs() { return this.get('/admin/configs'); },
+    setConfig(key, value, description = '') { return this.post('/admin/configs', { key, value, description }); },
 };
 
 API.init();

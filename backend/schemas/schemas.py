@@ -208,6 +208,44 @@ class OdontogramEntryRead(BaseModel):
 
 
 # ═══════════════════════════════════════════════════════
+# ADMIN CONFIG / LOCATIONS / INSURANCES
+# ═══════════════════════════════════════════════════════
+class ConfigCreate(BaseModel):
+    key: str
+    value: str
+    description: Optional[str] = None
+
+class ConfigRead(BaseModel):
+    key: str
+    value: str
+    description: Optional[str]
+    model_config = {"from_attributes": True}
+
+class LocationCreate(BaseModel):
+    name: str
+    address: Optional[str] = None
+    phone: Optional[str] = None
+
+class LocationRead(BaseModel):
+    id: UUID
+    name: str
+    address: Optional[str]
+    phone: Optional[str]
+    is_active: bool
+    model_config = {"from_attributes": True}
+
+class InsuranceCreate(BaseModel):
+    name: str
+    code: Optional[str] = None
+
+class InsuranceRead(BaseModel):
+    id: UUID
+    name: str
+    code: Optional[str]
+    is_active: bool
+    model_config = {"from_attributes": True}
+
+# ═══════════════════════════════════════════════════════
 # SEARCH / OMNIBOX
 # ═══════════════════════════════════════════════════════
 class SearchResult(BaseModel):
