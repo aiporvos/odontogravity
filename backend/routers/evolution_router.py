@@ -121,11 +121,14 @@ async def evolution_webhook(request: Request, background_tasks: BackgroundTasks)
     """Evolution API Webhook handler."""
     try:
         payload = await request.json()
+        logger.info(f"📩 Webhook de Evolution recibido: {json.dumps(payload, indent=2)}")
     except Exception:
+        logger.error("❌ Error al parsear JSON del webhook")
         return {"status": "error", "message": "Invalid JSON"}
 
     event = payload.get("event")
     if event != "messages.upsert":
+        logger.info(f"⏭️ Evento ignorado: {event}")
         return {"status": "ignored"}
 
     data = payload.get("data", {})
@@ -133,15 +136,19 @@ async def evolution_webhook(request: Request, background_tasks: BackgroundTasks)
     key = data.get("key", {})
     
     if key.get("fromMe"):
+        logger.info("⏭️ Mensaje propio (ignorado)")
         return {"status": "ignored_self"}
 
     remote_jid = key.get("remoteJid")
     if not remote_jid or "@s.whatsapp.net" not in remote_jid:
+        logger.info(f"⏭️ JID ignorado (no es chat privado): {remote_jid}")
         return {"status": "ignored_non_private"}
 
     text = ""
     message_type = data.get("messageType")
     
+    logger.info(f"📝 Tipo de mensaje: {message_type} de {remote_jid}")
+
     if message_type == "conversation":
         text = message.get("conversation")
     elif message_type == "extendedTextMessage":
@@ -149,14 +156,16 @@ async def evolution_webhook(request: Request, background_tasks: BackgroundTasks)
     elif message_type == "audioMessage":
         audio_url = message.get("audioMessage", {}).get("url")
         if audio_url:
-            # Audios are processed in background to avoid timeout
+            logger.info("🎙️ Procesando mensaje de audio...")
             background_tasks.add_task(handle_audio_message, remote_jid, audio_url)
             return {"status": "processing_audio"}
     
     if text:
+        logger.info(f"🤖 Procesando texto: {text}")
         background_tasks.add_task(handle_text_message, remote_jid, text)
         return {"status": "processing_text"}
 
+    logger.warning("⚠️ Mensaje sin contenido de texto o audio")
     return {"status": "ignored_empty"}
 
 async def handle_text_message(remote_jid: str, text: str):
