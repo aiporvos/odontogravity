@@ -21,6 +21,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - dentinet
 
   # ── Backend (FastAPI + Frontend SPA) ──────────────────
   backend:
@@ -44,6 +46,8 @@ services:
     volumes:
       - ./frontend:/app/frontend
       - ./backend:/app/backend
+    networks:
+      - dentinet
 
   # ── DentiBot (Telegram) ──────────────────────────────
   bot:
@@ -71,6 +75,12 @@ services:
     volumes:
       - ./bot:/app/bot
       - ./backend:/app/backend
+    networks:
+      - dentinet
+
+networks:
+  dentinet:
+    driver: bridge
 
 volumes:
   pgdata:
