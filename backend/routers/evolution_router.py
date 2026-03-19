@@ -28,12 +28,7 @@ def get_config(key: str, default: str = ""):
         db.close()
     return os.getenv(key, default)
 
-EVOLUTION_API_URL = get_config("EVOLUTION_API_URL").rstrip("/")
-EVOLUTION_API_KEY = get_config("EVOLUTION_API_KEY")
-EVOLUTION_INSTANCE = get_config("EVOLUTION_INSTANCE_ID")
-
-logger.info(f"🔗 Config Evolution - URL: {'YES' if EVOLUTION_API_URL else 'NO'}, KEY: {'YES' if EVOLUTION_API_KEY else 'NO'}, INSTANCE: {EVOLUTION_INSTANCE or 'NO'}")
-print(f"DEBUG: Evolution Config - URL: {EVOLUTION_API_URL}, KEY: {EVOLUTION_API_KEY[:5] if EVOLUTION_API_KEY else 'NO'}, INST: {EVOLUTION_INSTANCE}")
+# Config will be read at runtime in the send function
 
 def get_or_create_session(db: Session, platform_user_id: str):
     session = db.query(ChatSession).filter(
@@ -64,13 +59,19 @@ def save_message(db: Session, session_id, role: MessageRole, content: str):
 
 async def send_whatsapp_message(number: str, text: str):
     """Send message back through Evolution API."""
-    if not EVOLUTION_API_URL or not EVOLUTION_API_KEY or not EVOLUTION_INSTANCE:
-        logger.warning("Evolution API config missing, cannot send message")
+    url_base = get_config("EVOLUTION_API_URL", "").rstrip("/")
+    api_key = get_config("EVOLUTION_API_KEY", "")
+    instance = get_config("EVOLUTION_INSTANCE_ID", "")
+    
+    logger.info(f"🔍 Audit Config -> URL: {url_base}, KEY: {api_key[:5] if api_key else 'EMPTY'}, INST: {instance}")
+
+    if not url_base or not api_key or not instance:
+        logger.warning(f"❌ Evolution API config missing! URL={bool(url_base)}, KEY={bool(api_key)}, INST={bool(instance)}")
         return
 
-    url = f"{EVOLUTION_API_URL}/message/sendText/{EVOLUTION_INSTANCE}"
+    url = f"{url_base}/message/sendText/{instance}"
     headers = {
-        "apikey": EVOLUTION_API_KEY,
+        "apikey": api_key,
         "Content-Type": "application/json"
     }
     payload = {
