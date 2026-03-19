@@ -28,7 +28,7 @@ def get_config(key: str, default: str = ""):
         db.close()
     return os.getenv(key, default)
 
-EVOLUTION_API_URL = get_config("EVOLUTION_API_URL")
+EVOLUTION_API_URL = get_config("EVOLUTION_API_URL").rstrip("/")
 EVOLUTION_API_KEY = get_config("EVOLUTION_API_KEY")
 EVOLUTION_INSTANCE = get_config("EVOLUTION_INSTANCE_ID")
 
