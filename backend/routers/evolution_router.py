@@ -32,6 +32,9 @@ EVOLUTION_API_URL = get_config("EVOLUTION_API_URL").rstrip("/")
 EVOLUTION_API_KEY = get_config("EVOLUTION_API_KEY")
 EVOLUTION_INSTANCE = get_config("EVOLUTION_INSTANCE_ID")
 
+logger.info(f"🔗 Config Evolution - URL: {'YES' if EVOLUTION_API_URL else 'NO'}, KEY: {'YES' if EVOLUTION_API_KEY else 'NO'}, INSTANCE: {EVOLUTION_INSTANCE or 'NO'}")
+print(f"DEBUG: Evolution Config - URL: {EVOLUTION_API_URL}, KEY: {EVOLUTION_API_KEY[:5] if EVOLUTION_API_KEY else 'NO'}, INST: {EVOLUTION_INSTANCE}")
+
 def get_or_create_session(db: Session, platform_user_id: str):
     session = db.query(ChatSession).filter(
         ChatSession.platform == ChatPlatform.whatsapp,
