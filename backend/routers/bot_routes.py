@@ -13,7 +13,7 @@ from backend.models.appointment import Appointment, AppointmentStatus, Appointme
 from backend.models.professional import Professional
 from backend.schemas.schemas import (
     BotAppointmentRequest, BotCancelRequest, BotRescheduleRequest, BotQueryRequest,
-    AppointmentRead, PatientRead,
+    BotAvailabilityRequest, AppointmentRead, PatientRead,
 )
 
 router = APIRouter(prefix="/api/bot", tags=["Bot"])
@@ -151,9 +151,7 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
 
 
 @router.post("/availability", dependencies=[Depends(verify_bot_key)])
-def bot_get_availability(data: BotQueryRequest, db: Session = Depends(get_db)):
-    # Reusing BotQueryRequest because it has 'dni', but technically we only need date/location.
-    # Actually, I'll allow an optional location and date.
-    # For now, let's keep it simple.
-    # We'll use a new schema if needed, but for now BotQueryRequest is fine (or we can just use raw dict).
-    return get_available_slots(db, datetime.utcnow().isoformat(), "San Rafael")
+def bot_get_availability(data: BotAvailabilityRequest, db: Session = Depends(get_db)):
+    # Use the provided date or current time if empty
+    target_date = data.date if data.date else datetime.utcnow().isoformat()
+    return get_available_slots(db, target_date, data.location)

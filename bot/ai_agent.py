@@ -11,6 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from bot.tools.appointment_tools import ALL_TOOLS
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
+from backend.services.appointment_service import get_clinic_now
 
 def get_config(key: str, default: str = ""):
     db = SessionLocal()
@@ -49,16 +50,18 @@ Tu objetivo es ayudar a los pacientes a agendar, cancelar o consultar turnos.
 1. **Sede y Motivo:** Preguntá dónde quiere atenderse (San Rafael o Alvear) y el motivo.
 2. **Disponibilidad:** DEBÉS usar `consultar_disponibilidad` para ver qué horarios hay libres en esa sede. 
    - El bot buscará automáticamente hasta 7 días adelante si hoy está lleno.
-   - **PROACTIVIDAD:** Ofrecé siempre **3 opciones claras** de turnos. Intentá que sean variadas (ej: "tengo mañana a las 9:15, o el lunes a las 17:00 y 17:30").
-   - Si no hay nada hoy, decí: "Para hoy ya no tengo huecos, pero te puedo ofrecer para mañana o los próximos días: ..."
-3. **Datos Personales:** Una vez elegida la hora, pedí Nombre, Apellido, DNI, Teléfono y Obra Social (o si es Particular).
+   - **PROACTIVIDAD:** Ofrecé siempre **3 opciones claras** de turnos. Intentá que sean variadas.
+   - Si no hay nada hoy, informalo y ofrece para los días siguientes.
+3. **Datos Personales (REVISÁ EL HISTORIAL):**
+   - Antes de preguntar, mirá si el paciente ya escribió su Nombre, DNI, etc.
+   - **NO preguntes lo que ya sabés.** Si ya tenés el Nombre y DNI, preguntá solo el Apellido y Teléfono que falten.
+   - Necesitás: Nombre, Apellido, DNI, Teléfono y Obra Social.
 4. **Resumen y Confirmación:** Antes de usar `agendar_turno`, resumí todo y pedí el OK final.
-   - Usá el parámetro `duration_minutes` correcto según el servicio.
 
 ### 🛠 REGLAS DE ORO:
 - Respondé en español argentino, profesional pero cálido.
-- No muestres UUIDs largos. Usá solo los primeros 8 caracteres como "Código de Turno".
-- Usá emojis (📅, 🏥, 🦷) para una mejor experiencia.
+- Si el paciente confirma ("Si", "Dale", "Confirmado"), usá INMEDIATAMENTE `agendar_turno`.
+- No muestres UUIDs largos.
 - Hoy es {today}.
 """
 
@@ -79,7 +82,7 @@ def build_agent():
     ])
 
     agent = create_openai_tools_agent(llm, ALL_TOOLS, prompt)
-    return AgentExecutor(agent=agent, tools=ALL_TOOLS, verbose=True, max_iterations=5)
+    return AgentExecutor(agent=agent, tools=ALL_TOOLS, verbose=True, max_iterations=10)
 
 
 # Singleton agent
@@ -112,6 +115,6 @@ def chat(user_message: str, history: list[dict] | None = None) -> str:
     result = agent.invoke({
         "input": user_message, 
         "chat_history": chat_history,
-        "today": datetime.now().strftime("%d/%m/%Y %H:%M") # Include time for better context
+        "today": get_clinic_now().strftime("%d/%m/%Y %H:%M") # Use clinic local time
     })
     return result["output"]

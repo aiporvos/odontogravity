@@ -283,3 +283,8 @@ class BotRescheduleRequest(BaseModel):
 
 class BotQueryRequest(BaseModel):
     dni: str
+
+class BotAvailabilityRequest(BaseModel):
+    location: str  # "San Rafael" | "Alvear"
+    dni: Optional[str] = "ignore"
+    date: Optional[str] = "" # YYYY-MM-DD or empty for today
