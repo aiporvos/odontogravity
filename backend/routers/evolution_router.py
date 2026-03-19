@@ -185,7 +185,9 @@ async def handle_text_message(remote_jid: str, text: str):
         save_message(db, session.id, MessageRole.user, text)
         
         logger.info(f"🧠 Consultando a la IA para {remote_jid}...")
-        response = chat(text, history)
+        # chat is sync, run in executor to not block event loop (and allow tool calls to this same server)
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, chat, text, history)
         logger.info(f"🤖 IA respondió: {response[:50]}...")
         
         save_message(db, session.id, MessageRole.assistant, response)

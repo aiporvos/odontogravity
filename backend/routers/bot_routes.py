@@ -7,6 +7,7 @@ from sqlalchemy import or_
 import os
 
 from backend.database import get_db
+from backend.services.appointment_service import create_appointment_logic
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
@@ -57,48 +58,21 @@ def route_professional(reason: str, db: Session) -> Professional | None:
 # ── Agendar Turno ──────────────────────────────────────
 @router.post("/appointments", dependencies=[Depends(verify_bot_key)])
 def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(get_db)):
-    # Find or create patient
-    patient = db.query(Patient).filter(Patient.dni == data.dni, Patient.is_deleted == False).first()
-    if not patient:
-        patient = Patient(
-            first_name=data.patient_name,
-            last_name=data.patient_last_name,
-            dni=data.dni,
-            phone=data.phone,
-            insurance_name=data.insurance_name,
-        )
-        db.add(patient)
-        db.commit()
-        db.refresh(patient)
-
-    # Route professional
-    prof = route_professional(data.reason, db)
-    if not prof:
-        raise HTTPException(404, "No hay profesionales disponibles")
-
-    # Parse date or use next available
-    start = datetime.fromisoformat(data.preferred_date) if data.preferred_date else datetime.utcnow()
-
-    appt = Appointment(
-        patient_id=patient.id,
-        professional_id=prof.id,
-        start_time=start,
+    result = create_appointment_logic(
+        db=db,
+        patient_name=data.patient_name,
+        patient_last_name=data.patient_last_name,
+        dni=data.dni,
+        phone=data.phone,
         reason=data.reason,
         location=data.location,
-        channel=AppointmentChannel.bot_whatsapp,
-        status=AppointmentStatus.pending,
+        insurance_name=data.insurance_name,
+        preferred_date=data.preferred_date,
+        channel=AppointmentChannel.bot_whatsapp
     )
-    db.add(appt)
-    db.commit()
-    db.refresh(appt)
-
-    return {
-        "status": "ok",
-        "message": f"Turno agendado con {prof.full_name} en {data.location}",
-        "appointment_id": str(appt.id),
-        "professional": prof.full_name,
-        "datetime": str(appt.start_time),
-    }
+    if "error" in result:
+        raise HTTPException(404, result["error"])
+    return result
 
 
 # ── Cancelar Turno ─────────────────────────────────────
