@@ -19,6 +19,12 @@ ROUTING_MAP = {
     "endodoncia": "Helena Murad",
 }
 
+CLINIC_TZ_OFFSET = -3 # UTC-3 for Argentina
+
+def get_clinic_now():
+    """Returns the current time in the clinic's timezone."""
+    return datetime.utcnow() + timedelta(hours=CLINIC_TZ_OFFSET)
+
 def route_professional(reason: str, db: Session) -> Professional | None:
     reason_lower = reason.lower()
     for keyword, prof_name in ROUTING_MAP.items():
@@ -65,9 +71,9 @@ def create_appointment_logic(
 
     # Parse date
     try:
-        start = datetime.fromisoformat(preferred_date) if preferred_date else datetime.utcnow()
+        start = datetime.fromisoformat(preferred_date) if preferred_date else get_clinic_now()
     except Exception:
-        start = datetime.utcnow()
+        start = get_clinic_now()
 
     appt = Appointment(
         patient_id=patient.id,
@@ -91,16 +97,17 @@ def create_appointment_logic(
         "datetime": str(appt.start_time),
     }
 
-def get_available_slots(db: Session, target_date: str, location: str):
+def get_available_slots(db: Session, target_date: str, location: str, recursive_depth=0):
     """Calculate free slots for a given date and location based on clinic schedule."""
+    clinic_now = get_clinic_now()
     try:
+        # If target_date is a full ISO string, we take the date part
         day_dt = datetime.fromisoformat(target_date)
         day = day_dt.date()
-        weekday = day.weekday() # 0=Mon, 2=Wed
     except Exception:
-        day_dt = datetime.utcnow()
-        day = day_dt.date()
-        weekday = day.weekday()
+        day = clinic_now.date()
+        
+    weekday = day.weekday() # 0=Mon, 2=Wed
         
     # Clinic schedule:
     # Mon-Fri: 09:00 - 12:30
@@ -113,6 +120,9 @@ def get_available_slots(db: Session, target_date: str, location: str):
             shifts.append((py_time(17, 0), py_time(20, 30)))
     
     if not shifts:
+        # If it's a weekend, try next Monday if we are auto-searching
+        if recursive_depth < 3: # Don't search too far
+            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, recursive_depth + 1)
         return {"date": str(day), "location": location, "available_slots": [], "message": "Cerrado los fines de semana."}
 
     # Existing appointments for that day and location
@@ -137,22 +147,24 @@ def get_available_slots(db: Session, target_date: str, location: str):
         shift_end = datetime.combine(day, shift_end_time)
         
         while current + timedelta(minutes=15) <= shift_end:
-            # Check if this slot (let's check 15 min granularity) overlaps with any existing appt
             slot_end = current + timedelta(minutes=15)
             is_occupied = False
             for occ_start, occ_end in occupied_ranges:
-                # Overlap check: (start1 < end2) and (start2 < end1)
                 if current < occ_end and occ_start < slot_end:
                     is_occupied = True
                     break
             
-            if not is_occupied and current > datetime.utcnow():
+            if not is_occupied and current > clinic_now:
                 available_slots.append(current.strftime("%H:%M"))
             
             current += timedelta(minutes=15)
+    
+    # If no slots found for today, auto-search next available day
+    if not available_slots and recursive_depth < 3:
+        return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, recursive_depth + 1)
         
     return {
         "date": str(day),
         "location": location,
-        "available_slots": available_slots[:15] # Return more options
+        "available_slots": available_slots[:15]
     }
