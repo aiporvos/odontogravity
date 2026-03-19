@@ -40,6 +40,10 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
       API_BASE_URL: ${API_BASE_URL:-http://backend:8000}
       BOT_API_KEY: ${BOT_API_KEY:-dev-bot-key-change-in-prod}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
+      EVOLUTION_INSTANCE_ID: ${EVOLUTION_INSTANCE_ID:-}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
