@@ -16,19 +16,21 @@ def agendar_turno(
     phone: str,
     reason: str,
     location: str,
-    insurance_name: str = "",
+    insurance_name: str = "Particular",
     preferred_date: str = "",
+    duration_minutes: int = 30
 ) -> str:
-    """Agenda un nuevo turno para un paciente.
+    """Agenda un nuevo turno en el sistema.
     Args:
-        patient_name: Nombre del paciente.
-        patient_last_name: Apellido del paciente.
-        dni: Documento Nacional de Identidad.
-        phone: Teléfono de contacto.
-        reason: Motivo de consulta (ej: Extracción, Ortodoncia, Implante, Conducto).
-        location: Sede (San Rafael o Alvear).
-        insurance_name: Nombre de la obra social (opcional).
-        preferred_date: Fecha y hora preferida en formato ISO (opcional).
+        patient_name: Nombre del paciente
+        patient_last_name: Apellido del paciente
+        dni: DNI del paciente (solo números)
+        phone: Teléfono de contacto
+        reason: Motivo de la consulta (ej: Limpieza, Extracción)
+        location: Sede (San Rafael o Alvear)
+        insurance_name: Obra Social (usar 'Particular' si no tiene)
+        preferred_date: Fecha/Hora sugerida (ej: 2024-03-25 10:00)
+        duration_minutes: Duración en minutos (Extracción: 30, Endodoncia: 60, Consulta/Limpieza: 15, Ortodoncia: 30)
     """
     payload = {
         "patient_name": patient_name,
@@ -37,8 +39,9 @@ def agendar_turno(
         "phone": phone,
         "reason": reason,
         "location": location,
-        "insurance_name": insurance_name or None,
-        "preferred_date": preferred_date or None,
+        "insurance_name": insurance_name,
+        "preferred_date": preferred_date,
+        "duration_minutes": duration_minutes
     }
     try:
         r = httpx.post(f"{API_BASE}/api/bot/appointments", json=payload, headers=HEADERS, timeout=30)

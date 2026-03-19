@@ -267,6 +267,7 @@ class BotAppointmentRequest(BaseModel):
     reason: str
     location: str  # "San Rafael" | "Alvear"
     preferred_date: Optional[str] = None
+    duration_minutes: int = 30
 
 
 class BotCancelRequest(BaseModel):

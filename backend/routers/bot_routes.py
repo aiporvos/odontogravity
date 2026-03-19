@@ -68,6 +68,7 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
         location=data.location,
         insurance_name=data.insurance_name,
         preferred_date=data.preferred_date,
+        duration_minutes=data.duration_minutes,
         channel=AppointmentChannel.bot_whatsapp
     )
     if "error" in result:

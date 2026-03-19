@@ -7,16 +7,16 @@ from backend.models.appointment import Appointment, AppointmentStatus, Appointme
 from backend.models.professional import Professional
 
 ROUTING_MAP = {
-    "extracciones": "Dr. Silvestro",
-    "extracción": "Dr. Silvestro",
-    "implantes": "Dr. Silvestro",
-    "implante": "Dr. Silvestro",
-    "prótesis": "Dr. Silvestro",
-    "protesis": "Dr. Silvestro",
-    "ortodoncia": "Dra. Murad",
-    "conductos": "Dra. Murad",
-    "conducto": "Dra. Murad",
-    "endodoncia": "Dra. Murad",
+    "extracciones": "Martin Silvestro",
+    "extracción": "Martin Silvestro",
+    "implantes": "Martin Silvestro",
+    "implante": "Martin Silvestro",
+    "prótesis": "Martin Silvestro",
+    "protesis": "Martin Silvestro",
+    "ortodoncia": "Helena Murad",
+    "conductos": "Helena Murad",
+    "conducto": "Helena Murad",
+    "endodoncia": "Helena Murad",
 }
 
 def route_professional(reason: str, db: Session) -> Professional | None:
@@ -41,7 +41,8 @@ def create_appointment_logic(
     location: str,
     insurance_name: str = None,
     preferred_date: str = None,
-    channel: AppointmentChannel = AppointmentChannel.bot_whatsapp
+    channel: AppointmentChannel = AppointmentChannel.bot_whatsapp,
+    duration_minutes: int = 30
 ):
     # Find or create patient
     patient = db.query(Patient).filter(Patient.dni == dni, Patient.is_deleted == False).first()
@@ -72,6 +73,7 @@ def create_appointment_logic(
         patient_id=patient.id,
         professional_id=prof.id,
         start_time=start,
+        duration_minutes=duration_minutes if duration_minutes else 30,
         reason=reason,
         location=location,
         channel=channel,
@@ -90,17 +92,33 @@ def create_appointment_logic(
     }
 
 def get_available_slots(db: Session, target_date: str, location: str):
-    """Calculate free slots for a given date and location."""
+    """Calculate free slots for a given date and location based on clinic schedule."""
     try:
-        day = datetime.fromisoformat(target_date).date()
+        day_dt = datetime.fromisoformat(target_date)
+        day = day_dt.date()
+        weekday = day.weekday() # 0=Mon, 2=Wed
     except Exception:
-        day = datetime.utcnow().date()
+        day_dt = datetime.utcnow()
+        day = day_dt.date()
+        weekday = day.weekday()
         
-    # Standard working hours: 09:00 to 18:00
-    start_of_day = datetime.combine(day, py_time(9, 0))
-    end_of_day = datetime.combine(day, py_time(18, 0))
+    # Clinic schedule:
+    # Mon-Fri: 09:00 - 12:30
+    # Mon-Fri (except Wed): 17:00 - 20:30
     
+    shifts = []
+    if weekday < 5: # Mon-Fri
+        shifts.append((py_time(9, 0), py_time(12, 30)))
+        if weekday != 2: # Not Wednesday
+            shifts.append((py_time(17, 0), py_time(20, 30)))
+    
+    if not shifts:
+        return {"date": str(day), "location": location, "available_slots": [], "message": "Cerrado los fines de semana."}
+
     # Existing appointments for that day and location
+    start_of_day = datetime.combine(day, py_time(0, 0))
+    end_of_day = datetime.combine(day, py_time(23, 59))
+    
     existing = db.query(Appointment).filter(
         Appointment.location == location,
         Appointment.is_deleted == False,
@@ -109,22 +127,32 @@ def get_available_slots(db: Session, target_date: str, location: str):
         Appointment.start_time <= end_of_day
     ).all()
     
-    occupied_starts = [a.start_time for a in existing]
+    occupied_ranges = []
+    for a in existing:
+        occupied_ranges.append((a.start_time, a.start_time + timedelta(minutes=a.duration_minutes)))
     
-    slots = []
-    current = start_of_day
-    # 20 minute slots
-    while current < end_of_day:
-        # Check if the current slot is occupied
-        # (Simplified: check if any appointment starts at this exact time)
-        if not any(abs((current - t).total_seconds()) < 1200 for t in occupied_starts):
-            # Also don't offer slots in the past
-            if current > datetime.utcnow():
-                slots.append(current.strftime("%H:%M"))
-        current += timedelta(minutes=20)
+    available_slots = []
+    for shift_start_time, shift_end_time in shifts:
+        current = datetime.combine(day, shift_start_time)
+        shift_end = datetime.combine(day, shift_end_time)
+        
+        while current + timedelta(minutes=15) <= shift_end:
+            # Check if this slot (let's check 15 min granularity) overlaps with any existing appt
+            slot_end = current + timedelta(minutes=15)
+            is_occupied = False
+            for occ_start, occ_end in occupied_ranges:
+                # Overlap check: (start1 < end2) and (start2 < end1)
+                if current < occ_end and occ_start < slot_end:
+                    is_occupied = True
+                    break
+            
+            if not is_occupied and current > datetime.utcnow():
+                available_slots.append(current.strftime("%H:%M"))
+            
+            current += timedelta(minutes=15)
         
     return {
         "date": str(day),
         "location": location,
-        "available_slots": slots[:10] # Return top 10
+        "available_slots": available_slots[:15] # Return more options
     }
