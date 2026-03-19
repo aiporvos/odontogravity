@@ -144,8 +144,9 @@ async def evolution_webhook(request: Request, background_tasks: BackgroundTasks)
         return {"status": "ignored_self"}
 
     remote_jid = key.get("remoteJid")
-    if not remote_jid or "@s.whatsapp.net" not in remote_jid:
+    if not remote_jid or ("@s.whatsapp.net" not in remote_jid and "@lid" not in remote_jid):
         logger.info(f"⏭️ JID ignorado (no es chat privado): {remote_jid}")
+        print(f"DEBUG: JID ignorado: {remote_jid}")
         return {"status": "ignored_non_private"}
 
     text = ""
