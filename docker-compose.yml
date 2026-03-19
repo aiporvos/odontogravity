@@ -43,9 +43,6 @@ services:
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
-    volumes:
-      - ./frontend:/app/frontend
-      - ./backend:/app/backend
     networks:
       - dentinet
 
@@ -72,9 +69,6 @@ services:
     command: ["python", "-m", "bot.telegram_bot"]
     ports:
       - "8443:8443"
-    volumes:
-      - ./bot:/app/bot
-      - ./backend:/app/backend
     networks:
       - dentinet
 
