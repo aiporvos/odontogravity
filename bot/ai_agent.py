@@ -99,12 +99,8 @@ def get_agent() -> AgentExecutor:
 
 
 def chat(user_message: str, history: list[dict] | None = None) -> str:
-    """Process a user message and return agent response.
-    
-    Args:
-        user_message: The user's message
-        history: List of dicts with 'role' and 'content' keys
-    """
+    """Process a user message and return agent response."""
+    print(f"DEBUG: AI_AGENT_IN -> Msg: '{user_message}', HistLen: {len(history) if history else 0}")
     agent = get_agent()
     chat_history = []
     if history:
