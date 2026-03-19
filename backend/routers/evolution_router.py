@@ -78,10 +78,12 @@ async def send_whatsapp_message(number: str, text: str):
     
     async with httpx.AsyncClient() as client:
         try:
+            logger.info(f"📤 Enviando mensaje a WA ({number}). URL: {url}")
             r = await client.post(url, json=payload, headers=headers)
+            logger.info(f"📥 Respuesta de Evolution API: {r.status_code} - {r.text}")
             r.raise_for_status()
         except Exception as e:
-            logger.error(f"Error sending WhatsApp message: {e}")
+            logger.error(f"❌ Error al enviar mensaje de WhatsApp: {e}")
 
 async def transcribe_audio_url(url: str) -> str:
     """Transcribe audio from URL using OpenAI Whisper."""
@@ -176,7 +178,9 @@ async def handle_text_message(remote_jid: str, text: str):
         
         save_message(db, session.id, MessageRole.user, text)
         
+        logger.info(f"🧠 Consultando a la IA para {remote_jid}...")
         response = chat(text, history)
+        logger.info(f"🤖 IA respondió: {response[:50]}...")
         
         save_message(db, session.id, MessageRole.assistant, response)
         
