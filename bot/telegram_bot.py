@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 import asyncio
+import httpx
 
 from bot.ai_agent import chat
 from backend.database import SessionLocal
@@ -68,22 +69,73 @@ def save_message(db, session_id, role: MessageRole, content: str):
     db.commit()
 
 
-@dp.message()
-async def handle_message(message: types.Message):
-    if not message.text:
-        await message.reply("Solo puedo procesar mensajes de texto por ahora. 📝")
-        return
+async def transcribe_voice(file_path: str) -> str:
+    """Transcribe voice message using OpenAI Whisper."""
+    api_key = get_config("OPENAI_API_KEY")
+    if not api_key:
+        return ""
+    
+    url = "https://api.openai.com/v1/audio/transcriptions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            with open(file_path, "rb") as f:
+                files = {"file": ("voice.ogg", f, "audio/ogg"), "model": (None, "whisper-1")}
+                r = await client.post(url, headers=headers, files=files, timeout=60)
+                r.raise_for_status()
+                return r.json()["text"]
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        return ""
 
+
+@dp.message(F.voice)
+async def handle_voice(message: types.Message):
+    """Handle voice messages by transcribing them first."""
+    if not bot:
+        return
+    await message.reply("⏳ Procesando audio...")
+    
+    file_id = message.voice.file_id
+    file = await bot.get_file(file_id)
+    file_path = f"/tmp/{file_id}.ogg"
+    await bot.download_file(file.file_path, file_path)
+    
+    try:
+        text = await transcribe_voice(file_path)
+        if not text:
+            await message.reply("No pude transcribir el audio. ¿Podrías escribirlo? ✍️")
+            return
+        
+        # Now process as text
+        await process_text_message(message, text)
+    except Exception as e:
+        logger.error(f"Error transcribing voice: {e}")
+        await message.reply("Tuve un problema al escuchar el audio. ¿Podrías intentar de nuevo o escribirlo? 🙏")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+
+@dp.message()
+async def handle_text(message: types.Message):
+    if not message.text:
+        return
+    await process_text_message(message, message.text)
+
+
+async def process_text_message(message: types.Message, text: str):
     db = SessionLocal()
     try:
         session = get_or_create_session(db, str(message.from_user.id))
         history = load_history(db, session.id)
 
         # Save user message
-        save_message(db, session.id, MessageRole.user, message.text)
+        save_message(db, session.id, MessageRole.user, text)
 
         # Get AI response
-        response = chat(message.text, history)
+        response = chat(text, history)
 
         # Save AI response
         save_message(db, session.id, MessageRole.assistant, response)
