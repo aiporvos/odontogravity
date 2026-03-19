@@ -16,6 +16,9 @@ from backend.models.config import AppConfig
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/whatsapp", tags=["WhatsApp"])
 
+# Global locks to prevent race conditions per user
+user_locks = {}
+
 def get_config(key: str, default: str = ""):
     db = SessionLocal()
     try:
@@ -49,7 +52,7 @@ def get_or_create_session(db: Session, platform_user_id: str):
 def load_history(db: Session, session_id) -> list[dict]:
     messages = db.query(ChatMessage).filter(
         ChatMessage.session_id == session_id
-    ).order_by(ChatMessage.created_at).limit(20).all()
+    ).order_by(ChatMessage.created_at).limit(50).all()
     return [{"role": m.role.value, "content": m.content} for m in messages]
 
 def save_message(db: Session, session_id, role: MessageRole, content: str):
@@ -63,7 +66,8 @@ async def send_whatsapp_message(number: str, text: str):
     api_key = get_config("EVOLUTION_API_KEY", "")
     instance = get_config("EVOLUTION_INSTANCE_ID", "")
     
-    logger.info(f"🔍 Audit Config -> URL: {url_base}, KEY: {api_key[:5] if api_key else 'EMPTY'}, INST: {instance}")
+    api_key_str = str(api_key or "")
+    logger.info(f"🔍 Audit Config -> URL: {url_base}, KEY: {api_key_str[:5] if api_key_str else 'EMPTY'}, INST: {instance}")
 
     if not url_base or not api_key or not instance:
         logger.warning(f"❌ Evolution API config missing! URL={bool(url_base)}, KEY={bool(api_key)}, INST={bool(instance)}")
@@ -177,26 +181,30 @@ async def evolution_webhook(request: Request, background_tasks: BackgroundTasks)
     return {"status": "ignored_empty"}
 
 async def handle_text_message(remote_jid: str, text: str):
-    db = SessionLocal()
-    try:
-        session = get_or_create_session(db, remote_jid)
-        history = load_history(db, session.id)
-        
-        save_message(db, session.id, MessageRole.user, text)
-        
-        logger.info(f"🧠 Consultando a la IA para {remote_jid}...")
-        # chat is sync, run in executor to not block event loop (and allow tool calls to this same server)
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(None, chat, text, history)
-        logger.info(f"🤖 IA respondió: {response[:50]}...")
-        
-        save_message(db, session.id, MessageRole.assistant, response)
-        
-        await send_whatsapp_message(remote_jid, response)
-    except Exception as e:
-        logger.error(f"Error handling WA text: {e}")
-    finally:
-        db.close()
+    # Acquire lock for this user
+    if remote_jid not in user_locks:
+        user_locks[remote_jid] = asyncio.Lock()
+    
+    async with user_locks[remote_jid]:
+        db = SessionLocal()
+        try:
+            session = get_or_create_session(db, remote_jid)
+            history = load_history(db, session.id)
+            
+            save_message(db, session.id, MessageRole.user, text)
+            
+            logger.info(f"🧠 Consultando a la IA para {remote_jid}...")
+            # chat is sync, run in executor to not block event loop
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, chat, text, history)
+            logger.info(f"🤖 IA respondió: {response[:50]}...")
+            
+            save_message(db, session.id, MessageRole.assistant, response)
+            await send_whatsapp_message(remote_jid, response)
+        except Exception as e:
+            logger.error(f"Error handling WA text: {e}")
+        finally:
+            db.close()
 
 async def handle_audio_message(remote_jid: str, url: str):
     text = await transcribe_audio_url(url)
