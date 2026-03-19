@@ -53,14 +53,16 @@ Llevar al paciente de forma fluida a través de la recolección de datos para ag
    - Una vez que tengas sede y motivo, informá quién lo atiende y pedí sus datos personales.
    - **CONFIRMACIÓN:** Antes de usar la herramienta `agendar_turno`, resumí los datos (incluyendo la Obra Social) y pedí confirmación final.
 
-5. **ESTÉTICA Y CÓDIGOS:** 
+6. **ESTÉTICA Y CÓDIGOS:** 
    - No muestres el ID largo (UUID) completo. Es confuso. 
    - Al confirmar, decí simplemente "Código de Turno: [primeros 8 caracteres]".
    - Usá emojis (📅, 🏥, 🦷) para que el mensaje sea agradable.
 
-### 📅 CONTEXTO:
+### 📅 DISPONIBILIDAD:
 - Hoy es {today}.
-- Si el paciente no especifica fecha, se agenda para el próximo horario disponible (no hace falta que él diga la fecha exacta, vos podés ofrecerla o simplemente agendar).
+- **IMPORTANTE:** Antes de ofrecer una fecha u hora, o antes de confirmar el turno, DEBÉS usar la herramienta `consultar_disponibilidad` para la sede elegida.
+- Ofrecé al paciente 2 o 3 opciones de la lista que te devuelva la herramienta.
+- Una vez que el paciente elija una, procedé a pedir los datos finales y agendar.
 """
 
 
@@ -73,7 +75,7 @@ def build_agent():
     )
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT.format(today=datetime.now().strftime("%d/%m/%Y"))),
+        ("system", SYSTEM_PROMPT),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
@@ -110,5 +112,9 @@ def chat(user_message: str, history: list[dict] | None = None) -> str:
             elif msg["role"] == "assistant":
                 chat_history.append(AIMessage(content=msg["content"]))
 
-    result = agent.invoke({"input": user_message, "chat_history": chat_history})
+    result = agent.invoke({
+        "input": user_message, 
+        "chat_history": chat_history,
+        "today": datetime.now().strftime("%d/%m/%Y %H:%M") # Include time for better context
+    })
     return result["output"]

@@ -1,6 +1,7 @@
 
-from datetime import datetime
+from datetime import datetime, timedelta, time as py_time
 from sqlalchemy.orm import Session
+from sqlalchemy import and_
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
@@ -86,4 +87,44 @@ def create_appointment_logic(
         "appointment_id": str(appt.id),
         "professional": prof.full_name,
         "datetime": str(appt.start_time),
+    }
+
+def get_available_slots(db: Session, target_date: str, location: str):
+    """Calculate free slots for a given date and location."""
+    try:
+        day = datetime.fromisoformat(target_date).date()
+    except Exception:
+        day = datetime.utcnow().date()
+        
+    # Standard working hours: 09:00 to 18:00
+    start_of_day = datetime.combine(day, py_time(9, 0))
+    end_of_day = datetime.combine(day, py_time(18, 0))
+    
+    # Existing appointments for that day and location
+    existing = db.query(Appointment).filter(
+        Appointment.location == location,
+        Appointment.is_deleted == False,
+        Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
+        Appointment.start_time >= start_of_day,
+        Appointment.start_time <= end_of_day
+    ).all()
+    
+    occupied_starts = [a.start_time for a in existing]
+    
+    slots = []
+    current = start_of_day
+    # 20 minute slots
+    while current < end_of_day:
+        # Check if the current slot is occupied
+        # (Simplified: check if any appointment starts at this exact time)
+        if not any(abs((current - t).total_seconds()) < 1200 for t in occupied_starts):
+            # Also don't offer slots in the past
+            if current > datetime.utcnow():
+                slots.append(current.strftime("%H:%M"))
+        current += timedelta(minutes=20)
+        
+    return {
+        "date": str(day),
+        "location": location,
+        "available_slots": slots[:10] # Return top 10
     }

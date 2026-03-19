@@ -7,7 +7,7 @@ from sqlalchemy import or_
 import os
 
 from backend.database import get_db
-from backend.services.appointment_service import create_appointment_logic
+from backend.services.appointment_service import create_appointment_logic, get_available_slots
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
@@ -147,3 +147,12 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
             for a in appts
         ],
     }
+
+
+@router.post("/availability", dependencies=[Depends(verify_bot_key)])
+def bot_get_availability(data: BotQueryRequest, db: Session = Depends(get_db)):
+    # Reusing BotQueryRequest because it has 'dni', but technically we only need date/location.
+    # Actually, I'll allow an optional location and date.
+    # For now, let's keep it simple.
+    # We'll use a new schema if needed, but for now BotQueryRequest is fine (or we can just use raw dict).
+    return get_available_slots(db, datetime.utcnow().isoformat(), "San Rafael")

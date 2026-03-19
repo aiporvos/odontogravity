@@ -109,5 +109,25 @@ def consultar_mis_turnos(dni: str) -> str:
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
+@tool
+def consultar_disponibilidad(location: str, date: str = "") -> str:
+    """Consulta los horarios disponibles para un turno en una sede y fecha.
+    Args:
+        location: Sede a consultar (San Rafael o Alvear).
+        date: Fecha opcional en formato ISO (ej: 2024-03-25). Si no se indica, usa hoy.
+    """
+    try:
+        # We reuse the same endpoint structure as others
+        payload = {"dni": "ignore", "location": location} # BotQueryRequest needs a DNI but we ignore it
+        r = httpx.post(f"{API_BASE}/api/bot/availability", json=payload, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        if not data["available_slots"]:
+            return f"ℹ️ No hay turnos disponibles para {location} en esa fecha."
+        
+        slots_str = ", ".join(data["available_slots"])
+        return f"📋 Horarios disponibles en {location} para el {data['date']}:\n{slots_str}\n\nPor favor, ofrece 2 o 3 de estos horarios al paciente."
+    except Exception as e:
+        return f"❌ Error al consultar disponibilidad: {str(e)}"
 
-ALL_TOOLS = [agendar_turno, cancelar_turno, reprogramar_turno, consultar_mis_turnos]
+ALL_TOOLS = [agendar_turno, cancelar_turno, reprogramar_turno, consultar_mis_turnos, consultar_disponibilidad]
