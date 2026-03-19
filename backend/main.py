@@ -1,5 +1,5 @@
-"""Dental Studio Pro - FastAPI Backend"""
 import os
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +13,14 @@ from backend.routers.clinic.clinic_routes import router as clinic_router
 from backend.routers.bot_routes import router as bot_router
 from backend.routers.evolution_router import router as evolution_router
 from backend.seed import run_seed
+
+# ── Logging Configuration ────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(name)s: %(message)s"
+)
+logger = logging.getLogger(__name__)
+logger.info("🚀 Dental Studio Pro Backend Starting...")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

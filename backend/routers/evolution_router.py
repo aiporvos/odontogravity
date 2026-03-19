@@ -124,8 +124,10 @@ async def evolution_webhook(request: Request, background_tasks: BackgroundTasks)
     try:
         payload = await request.json()
         logger.info(f"📩 Webhook de Evolution recibido: {json.dumps(payload, indent=2)}")
+        print(f"DEBUG: Webhook WA recibido: {payload.get('event')}")
     except Exception:
         logger.error("❌ Error al parsear JSON del webhook")
+        print("DEBUG: Error al parsear JSON")
         return {"status": "error", "message": "Invalid JSON"}
 
     event = payload.get("event")
