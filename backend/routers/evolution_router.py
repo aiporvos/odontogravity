@@ -61,9 +61,11 @@ def load_history(db: Session, session_id) -> list[dict]:
     return [{"role": m.role.value, "content": m.content} for m in messages]
 
 def save_message(db: Session, session_id, role: MessageRole, content: str):
+    import time
     msg = ChatMessage(session_id=session_id, role=role, content=content)
     db.add(msg)
     db.commit()
+    time.sleep(0.02) # Ensure next message has a different timestamp
 
 async def send_whatsapp_message(number: str, text: str):
     """Send message back through Evolution API."""
