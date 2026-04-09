@@ -25,9 +25,6 @@ def get_config(key: str, default: str = ""):
         db.close()
     return os.getenv(key, default)
 
-OPENAI_API_KEY = get_config("OPENAI_API_KEY")
-MODEL_NAME = get_config("OPENAI_MODEL", "gpt-4o-mini")
-
 SYSTEM_PROMPT = """Sos DentiBot 🦷, el asistente virtual de "Dental Studio Pro". 
 Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Hablá en español argentino (voseo), profesional pero muy amable.
 
@@ -52,12 +49,30 @@ Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Habl
 - Si no entendés algo, preguntá con dulzura.
 """
 
-
 def build_agent():
     """Create the LangChain agent with tools."""
+    provider = get_config("AI_PROVIDER", "openai").lower()
+    model_name = get_config("AI_MODEL", "gpt-4o-mini")
+    api_key = ""
+    base_url = None
+
+    if provider == "openrouter":
+        api_key = get_config("OPENROUTER_API_KEY")
+        base_url = "https://openrouter.ai/api/v1"
+    elif provider == "groq":
+        api_key = get_config("GROQ_API_KEY")
+        base_url = "https://api.groq.com/openai/v1"
+    else:  # openai
+        api_key = get_config("OPENAI_API_KEY")
+        base_url = None # Use default
+
+    if not api_key:
+        print(f"ERROR: No API key found for provider {provider}")
+
     llm = ChatOpenAI(
-        model=MODEL_NAME,
-        api_key=OPENAI_API_KEY,
+        model=model_name,
+        api_key=api_key,
+        base_url=base_url,
         temperature=0.3,
     )
 
@@ -86,7 +101,11 @@ def get_agent() -> AgentExecutor:
 def chat(user_message: str, history: list[dict] | None = None) -> str:
     """Process a user message and return agent response."""
     print(f"DEBUG: AI_AGENT_IN -> Msg: '{user_message}', HistLen: {len(history) if history else 0}")
+    
+    # Refresh agent if provider changed (simplified singleton management)
+    # In production, we might want a more robust way to handle dynamic config changes
     agent = get_agent()
+    
     chat_history = []
     if history:
         for msg in history:
@@ -101,3 +120,4 @@ def chat(user_message: str, history: list[dict] | None = None) -> str:
         "today": get_clinic_now().strftime("%d/%m/%Y %H:%M") # Use clinic local time
     })
     return result["output"]
+

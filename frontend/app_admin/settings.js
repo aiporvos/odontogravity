@@ -69,22 +69,36 @@ Router.register('settings', async (container) => {
                 </div>
                 <form id="form-config" style="display:flex;flex-direction:column;gap:1rem;padding-top:.5rem;">
                     <div class="form-group">
-                        <label>Telegram Bot Token</label>
-                        <input type="password" name="TELEGRAM_BOT_TOKEN" value="${getConfig('TELEGRAM_BOT_TOKEN')}" placeholder="123456:ABC-DEF...">
-                        <small style="color:var(--slate-400)">Token proporcionado por @BotFather</small>
+                        <label>AI Provider</label>
+                        <select name="AI_PROVIDER" class="form-control">
+                            <option value="openai" ${getConfig('AI_PROVIDER') === 'openai' ? 'selected' : ''}>OpenAI</option>
+                            <option value="openrouter" ${getConfig('AI_PROVIDER') === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+                            <option value="groq" ${getConfig('AI_PROVIDER') === 'groq' ? 'selected' : ''}>Groq</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>AI Model</label>
+                        <input type="text" name="AI_MODEL" value="${getConfig('AI_MODEL') || 'gpt-4o-mini'}" placeholder="gpt-4o-mini, meta-llama/llama-3-70b-instruct, etc.">
                     </div>
                     <div class="form-group">
                         <label>OpenAI API Key</label>
                         <input type="password" name="OPENAI_API_KEY" value="${getConfig('OPENAI_API_KEY')}" placeholder="sk-...">
-                        <small style="color:var(--slate-400)">Necesario para el cerebro del bot (GPT-4o)</small>
                     </div>
                     <div class="form-group">
-                        <label>WhatsApp (Meta/Twilio API Key)</label>
-                        <input type="text" name="WHATSAPP_API_KEY" value="${getConfig('WHATSAPP_API_KEY')}" placeholder="Configuración de WhatsApp...">
+                        <label>OpenRouter API Key</label>
+                        <input type="password" name="OPENROUTER_API_KEY" value="${getConfig('OPENROUTER_API_KEY')}" placeholder="sk-or-v1-...">
+                    </div>
+                    <div class="form-group">
+                        <label>Groq API Key</label>
+                        <input type="password" name="GROQ_API_KEY" value="${getConfig('GROQ_API_KEY')}" placeholder="gsk_...">
+                    </div>
+                    <div class="form-group">
+                        <label>Telegram Bot Token</label>
+                        <input type="password" name="TELEGRAM_BOT_TOKEN" value="${getConfig('TELEGRAM_BOT_TOKEN')}" placeholder="123456:ABC-DEF...">
                     </div>
                     <div class="form-group">
                         <label>Webhook URL</label>
-                        <input type="text" name="TELEGRAM_WEBHOOK_URL" value="${getConfig('TELEGRAM_WEBHOOK_URL')}" placeholder="https://tu-dominio.com/api/bot/webhook">
+                        <input type="text" name="TELEGRAM_WEBHOOK_URL" value="${getConfig('TELEGRAM_WEBHOOK_URL')}" placeholder="https://tu-dominio.com/webhook">
                     </div>
                     <button type="button" class="btn btn-primary" onclick="SettingsPage.saveConfigs()">Guardar Configuración</button>
                     <p style="font-size:.75rem;color:var(--slate-500);margin-top:.5rem;">⚠️ La mayoría de los cambios requieren reiniciar los contenedores para aplicarse.</p>
