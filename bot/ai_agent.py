@@ -52,18 +52,21 @@ Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Habl
 def build_agent():
     """Create the LangChain agent with tools."""
     provider = get_config("AI_PROVIDER", "openai").lower()
-    model_name = get_config("AI_MODEL", "gpt-4o-mini")
     api_key = ""
+    model_name = ""
     base_url = None
 
     if provider == "openrouter":
         api_key = get_config("OPENROUTER_API_KEY")
+        model_name = get_config("OPENROUTER_MODEL", "google/gemini-flash-1.5")
         base_url = "https://openrouter.ai/api/v1"
     elif provider == "groq":
         api_key = get_config("GROQ_API_KEY")
+        model_name = get_config("GROQ_MODEL", "llama-3.1-70b-versatile")
         base_url = "https://api.groq.com/openai/v1"
     else:  # openai
         api_key = get_config("OPENAI_API_KEY")
+        model_name = get_config("OPENAI_MODEL", "gpt-4o-mini")
         base_url = None # Use default
 
     if not api_key:

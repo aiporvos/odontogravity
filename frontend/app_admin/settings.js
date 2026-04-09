@@ -67,41 +67,64 @@ Router.register('settings', async (container) => {
                 <div class="card-header">
                     <h2>🤖 Integraciones (Chatbot)</h2>
                 </div>
-                <form id="form-config" style="display:flex;flex-direction:column;gap:1rem;padding-top:.5rem;">
+                <form id="form-config" style="display:flex;flex-direction:column;gap:1.5rem;padding-top:.5rem;">
                     <div class="form-group">
-                        <label>AI Provider</label>
-                        <select name="AI_PROVIDER" class="form-control">
+                        <label style="font-weight:700; color:var(--primary-600);">🚀 Proveedor Activo</label>
+                        <select name="AI_PROVIDER" class="form-control" style="border: 2px solid var(--primary-200);">
                             <option value="openai" ${getConfig('AI_PROVIDER') === 'openai' ? 'selected' : ''}>OpenAI</option>
                             <option value="openrouter" ${getConfig('AI_PROVIDER') === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
                             <option value="groq" ${getConfig('AI_PROVIDER') === 'groq' ? 'selected' : ''}>Groq</option>
                         </select>
+                        <small>Elegí qué motor usará el bot para responder.</small>
                     </div>
-                    <div class="form-group">
-                        <label>AI Model</label>
-                        <input type="text" name="AI_MODEL" value="${getConfig('AI_MODEL') || 'gpt-4o-mini'}" placeholder="gpt-4o-mini, meta-llama/llama-3-70b-instruct, etc.">
+
+                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
+                        <h4 style="margin-bottom:.8rem;">OpenAI Config</h4>
+                        <div class="form-group">
+                            <label>Modelo</label>
+                            <input type="text" name="OPENAI_MODEL" value="${getConfig('OPENAI_MODEL') || 'gpt-4o-mini'}" placeholder="gpt-4o-mini">
+                        </div>
+                        <div class="form-group">
+                            <label>API Key</label>
+                            <input type="password" name="OPENAI_API_KEY" value="${getConfig('OPENAI_API_KEY')}" placeholder="sk-...">
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>OpenAI API Key</label>
-                        <input type="password" name="OPENAI_API_KEY" value="${getConfig('OPENAI_API_KEY')}" placeholder="sk-...">
+
+                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
+                        <h4 style="margin-bottom:.8rem;">OpenRouter Config</h4>
+                        <div class="form-group">
+                            <label>Modelo</label>
+                            <input type="text" name="OPENROUTER_MODEL" value="${getConfig('OPENROUTER_MODEL') || 'google/gemini-flash-1.5'}" placeholder="google/gemini-flash-1.5">
+                        </div>
+                        <div class="form-group">
+                            <label>API Key</label>
+                            <input type="password" name="OPENROUTER_API_KEY" value="${getConfig('OPENROUTER_API_KEY')}" placeholder="sk-or-v1-...">
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>OpenRouter API Key</label>
-                        <input type="password" name="OPENROUTER_API_KEY" value="${getConfig('OPENROUTER_API_KEY')}" placeholder="sk-or-v1-...">
+
+                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
+                        <h4 style="margin-bottom:.8rem;">Groq Config</h4>
+                        <div class="form-group">
+                            <label>Modelo</label>
+                            <input type="text" name="GROQ_MODEL" value="${getConfig('GROQ_MODEL') || 'llama-3.1-70b-versatile'}" placeholder="llama-3.1-70b-versatile">
+                        </div>
+                        <div class="form-group">
+                            <label>API Key</label>
+                            <input type="password" name="GROQ_API_KEY" value="${getConfig('GROQ_API_KEY')}" placeholder="gsk_...">
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>Groq API Key</label>
-                        <input type="password" name="GROQ_API_KEY" value="${getConfig('GROQ_API_KEY')}" placeholder="gsk_...">
-                    </div>
+
                     <div class="form-group">
                         <label>Telegram Bot Token</label>
                         <input type="password" name="TELEGRAM_BOT_TOKEN" value="${getConfig('TELEGRAM_BOT_TOKEN')}" placeholder="123456:ABC-DEF...">
                     </div>
+                    
                     <div class="form-group">
-                        <label>Webhook URL</label>
+                        <label>Webhook URL (Dokploy)</label>
                         <input type="text" name="TELEGRAM_WEBHOOK_URL" value="${getConfig('TELEGRAM_WEBHOOK_URL')}" placeholder="https://tu-dominio.com/webhook">
                     </div>
-                    <button type="button" class="btn btn-primary" onclick="SettingsPage.saveConfigs()">Guardar Configuración</button>
-                    <p style="font-size:.75rem;color:var(--slate-500);margin-top:.5rem;">⚠️ La mayoría de los cambios requieren reiniciar los contenedores para aplicarse.</p>
+
+                    <button type="button" class="btn btn-primary" onclick="SettingsPage.saveConfigs()">Guardar Todo</button>
                 </form>
             </div>
         </div>
