@@ -77,6 +77,7 @@ def build_agent():
         api_key=api_key,
         base_url=base_url,
         temperature=0.3,
+        max_tokens=1000,
     )
 
     prompt = ChatPromptTemplate.from_messages([
