@@ -141,10 +141,33 @@ def update_appointment(appt_id: UUID, data: AppointmentUpdate, db: Session = Dep
     a = db.query(Appointment).filter(Appointment.id == appt_id, Appointment.is_deleted == False).first()
     if not a:
         raise HTTPException(404, "Turno no encontrado")
+    
+    was_cancelled = False
+    if getattr(data, "status", None) == "cancelled" and a.status != "cancelled":
+        was_cancelled = True
+
     for key, val in data.model_dump(exclude_unset=True).items():
         setattr(a, key, val)
     db.commit()
     db.refresh(a)
+
+    if was_cancelled and a.patient and a.patient.phone:
+        try:
+            import httpx
+            from backend.models.config import AppConfig
+            evo_url = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_URL").first()
+            evo_key = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_KEY").first()
+            evo_instance = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_INSTANCE").first()
+            if evo_url and evo_key and evo_instance:
+                payload = {
+                    "number": a.patient.phone,
+                    "textMessage": {"text": f"Hola {a.patient.first_name}, te informamos que tu turno del {a.start_time.strftime('%Y-%m-%d %H:%M')} en la sede {a.location} ha sido cancelado desde la clínica. Por favor, contactate con nosotros si deseas reprogramarlo."}
+                }
+                headers = {"apikey": evo_key.value}
+                httpx.post(f"{evo_url.value}/message/sendText/{evo_instance.value}", json=payload, headers=headers, timeout=5)
+        except Exception as e:
+            print(f"Error notifying patient of cancellation: {e}")
+
     return a
 
 
@@ -154,7 +177,26 @@ def soft_delete_appointment(appt_id: UUID, db: Session = Depends(get_db)):
     if not a:
         raise HTTPException(404, "Turno no encontrado")
     a.is_deleted = True
+    a.status = "cancelled"
     db.commit()
+
+    if a.patient and a.patient.phone:
+        try:
+            import httpx
+            from backend.models.config import AppConfig
+            evo_url = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_URL").first()
+            evo_key = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_KEY").first()
+            evo_instance = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_INSTANCE").first()
+            if evo_url and evo_key and evo_instance:
+                payload = {
+                    "number": a.patient.phone,
+                    "textMessage": {"text": f"Hola {a.patient.first_name}, te informamos que tu turno del {a.start_time.strftime('%Y-%m-%d %H:%M')} en la sede {a.location} ha sido cancelado desde la clínica. Por favor, contactate con nosotros si deseas reprogramarlo."}
+                }
+                headers = {"apikey": evo_key.value}
+                httpx.post(f"{evo_url.value}/message/sendText/{evo_instance.value}", json=payload, headers=headers, timeout=5)
+        except Exception as e:
+            print(f"Error notifying patient of cancellation: {e}")
+
     return {"detail": "Turno eliminado (soft-delete)"}
 
 
