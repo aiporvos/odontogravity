@@ -124,6 +124,20 @@ Router.register('settings', async (container) => {
                         <input type="text" name="TELEGRAM_WEBHOOK_URL" value="${getConfig('TELEGRAM_WEBHOOK_URL')}" placeholder="https://tu-dominio.com/webhook">
                     </div>
 
+                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
+                        <h4 style="margin-bottom:.8rem;">Configuración de Recordatorios (WhatsApp)</h4>
+                        <div class="form-group">
+                            <label>Números para Notificar Cancelaciones</label>
+                            <input type="text" name="ADMIN_NOTIFY_NUMBERS" value="${getConfig('ADMIN_NOTIFY_NUMBERS')}" placeholder="Ej: 549112345678,549112345679">
+                            <small>Separados por coma. Ejemplo: 5492604123456</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Horas previas para Recordatorio</label>
+                            <input type="number" name="REMINDER_HOURS_BEFORE" value="${getConfig('REMINDER_HOURS_BEFORE') || '24'}" placeholder="24">
+                            <small>Cuántas horas antes del turno se envía el recordatorio por WhatsApp.</small>
+                        </div>
+                    </div>
+
                     <button type="button" class="btn btn-primary" onclick="SettingsPage.saveConfigs()">Guardar Todo</button>
                 </form>
             </div>
