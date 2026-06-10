@@ -106,7 +106,7 @@ def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)
     db.commit()
 
     # Notificar a los admins
-    from backend.schemas.schemas import AppConfig
+    from backend.models.config import AppConfig
     try:
         admin_numbers = db.query(AppConfig).filter(AppConfig.key == "ADMIN_NOTIFY_NUMBERS").first()
         if admin_numbers and admin_numbers.value:
