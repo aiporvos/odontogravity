@@ -214,6 +214,7 @@ async def handle_text_message(remote_jid: str, text: str):
             await send_whatsapp_message(remote_jid, response)
         except Exception as e:
             logger.error(f"Error handling WA text: {e}")
+            await send_whatsapp_message(remote_jid, "Lo siento, tuve un problema interno al procesar tu mensaje. Por favor, avisale al administrador que revise la configuración de la Inteligencia Artificial (API Keys o Modelos).")
         finally:
             db.close()
 
