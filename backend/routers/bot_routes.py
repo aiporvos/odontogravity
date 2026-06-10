@@ -88,15 +88,41 @@ def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)
         Appointment.is_deleted == False,
         Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
     )
+    
     if data.appointment_id:
-        query = query.filter(Appointment.id == data.appointment_id)
-
-    appt = query.order_by(Appointment.start_time).first()
-    if not appt:
-        raise HTTPException(404, "No se encontró turno para cancelar")
+        appt = query.filter(Appointment.id == data.appointment_id).first()
+        if not appt:
+            raise HTTPException(404, "No se encontró el turno especificado para cancelar")
+    else:
+        appts = query.order_by(Appointment.start_time).all()
+        if not appts:
+            raise HTTPException(404, "No se encontraron turnos activos para cancelar")
+        if len(appts) > 1:
+            appts_list = ", ".join([f"ID: {a.id} el {a.start_time.strftime('%Y-%m-%d %H:%M')}" for a in appts])
+            raise HTTPException(400, f"Múltiples turnos encontrados. Por favor especifique cuál cancelar usando su ID: {appts_list}")
+        appt = appts[0]
 
     appt.status = AppointmentStatus.cancelled
     db.commit()
+
+    # Notificar a los admins
+    from backend.schemas.schemas import AppConfig
+    try:
+        admin_numbers = db.query(AppConfig).filter(AppConfig.key == "ADMIN_NOTIFY_NUMBERS").first()
+        if admin_numbers and admin_numbers.value:
+            import httpx
+            from backend.routers.evolution_router import evolution_url, evolution_api_key, evolution_instance
+            numbers = [n.strip() for n in admin_numbers.value.split(",") if n.strip()]
+            for number in numbers:
+                payload = {
+                    "number": number,
+                    "textMessage": {"text": f"⚠️ Turno Cancelado por Bot:\nPaciente: {patient.first_name} {patient.last_name} ({patient.dni})\nFecha original: {appt.start_time.strftime('%Y-%m-%d %H:%M')}\nSede: {appt.location}"}
+                }
+                headers = {"apikey": evolution_api_key}
+                httpx.post(f"{evolution_url}/message/sendText/{evolution_instance}", json=payload, headers=headers, timeout=5)
+    except Exception as e:
+        print(f"Error notifying admins of cancellation: {e}")
+
     return {"status": "ok", "message": "Turno cancelado exitosamente", "appointment_id": str(appt.id)}
 
 
