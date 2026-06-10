@@ -159,5 +159,5 @@ def chat(user_message: str, history: list[dict] | None = None) -> str:
             last_error = f"{provider}: {str(e)}"
 
     # Si todos fallan o no hay agentes disponibles:
-    return f"DEBUG - Error técnico con la IA. Detalle del último fallo: {last_error}"
+    return "No pudimos procesar tu solicitud automáticamente debido a un inconveniente técnico con nuestra Inteligencia Artificial. Un agente se pondrá en contacto a la brevedad."
 
