@@ -154,8 +154,8 @@ def chat(user_message: str, history: list[dict] | None = None) -> str:
             return result["output"]
         except Exception as e:
             logger.error(f"Error usando proveedor {provider}: {e}")
-            last_error = str(e)
+            last_error = f"{provider}: {str(e)}"
 
     # Si todos fallan o no hay agentes disponibles:
-    return "No pudimos procesar tu solicitud automáticamente debido a un inconveniente técnico con nuestra Inteligencia Artificial. Un agente se pondrá en contacto a la brevedad."
+    return f"DEBUG - Error técnico con la IA. Detalle del último fallo: {last_error}"
 
