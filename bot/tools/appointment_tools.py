@@ -113,14 +113,15 @@ def consultar_mis_turnos(dni: str) -> str:
         return f"❌ Error: {str(e)}"
 
 @tool
-def consultar_disponibilidad(location: str, date: str = "") -> str:
+def consultar_disponibilidad(location: str, date: str = "", obra_social: str = "Particular") -> str:
     """Consulta los horarios disponibles para una sede y fecha.
     Args:
         location: Sede (San Rafael o Alvear)
         date: Fecha opcional (YYYY-MM-DD). Si se omite, busca para hoy.
+        obra_social: Obra social del paciente (ej: Particular, PAMI, OSDE, etc.)
     """
     try:
-        payload = {"location": location, "date": date}
+        payload = {"location": location, "date": date, "obra_social": obra_social}
         r = httpx.post(f"{API_BASE}/api/bot/availability", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
         data = r.json()

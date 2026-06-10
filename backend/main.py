@@ -12,7 +12,9 @@ from backend.routers.admin.admin_routes import router as admin_router
 from backend.routers.clinic.clinic_routes import router as clinic_router
 from backend.routers.bot_routes import router as bot_router
 from backend.routers.evolution_router import router as evolution_router
+from backend.routers.public_routes import router as public_router
 from backend.seed import run_seed
+from backend.services.reminders_loop import start_reminders_loop
 
 # ── Logging Configuration ────────────────────────────────
 logging.basicConfig(
@@ -46,6 +48,9 @@ async def lifespan(app: FastAPI):
         run_seed(db)
     finally:
         db.close()
+        
+    start_reminders_loop()
+    
     yield
 
 
@@ -73,6 +78,7 @@ app.include_router(admin_router)
 app.include_router(clinic_router)
 app.include_router(bot_router)
 app.include_router(evolution_router)
+app.include_router(public_router)
 
 @app.get("/api/health")
 def health_check():

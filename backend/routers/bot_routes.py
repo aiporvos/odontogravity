@@ -154,4 +154,4 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
 def bot_get_availability(data: BotAvailabilityRequest, db: Session = Depends(get_db)):
     # Use the provided date or current time if empty
     target_date = data.date if data.date else datetime.utcnow().isoformat()
-    return get_available_slots(db, target_date, data.location)
+    return get_available_slots(db, target_date, data.location, data.obra_social)

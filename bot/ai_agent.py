@@ -11,6 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from bot.tools.appointment_tools import ALL_TOOLS
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
+from backend.models.insurance import Insurance
 from backend.services.appointment_service import get_clinic_now
 
 def get_config(key: str, default: str = ""):
@@ -25,6 +26,16 @@ def get_config(key: str, default: str = ""):
         db.close()
     return os.getenv(key, default)
 
+def get_active_insurances() -> list[str]:
+    db = SessionLocal()
+    try:
+        insurances = db.query(Insurance).filter(Insurance.is_active == True).all()
+        return [i.name for i in insurances]
+    except Exception:
+        return ["PAMI", "OSDE", "Sancor Salud", "Medifé", "Swiss Medical"]
+    finally:
+        db.close()
+
 SYSTEM_PROMPT = """Sos DentiBot 🦷, el asistente virtual de "Dental Studio Pro". 
 Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Hablá en español argentino (voseo), profesional pero muy amable.
 
@@ -36,12 +47,16 @@ Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Habl
 ### 🎯 TU DINÁMICA DE CONVERSACIÓN:
 1. **Sé Humano:** No parezcas un formulario. Saludá, escuchá y respondé con naturalidad. Si el usuario te dice "hola", no le tires una lista de preguntas; saludá y ponete a disposición.
 2. **Memoria Total:** El historial que recibís es sagrado. **NUNCA** asumas un motivo de consulta que se haya hablado hace mucho tiempo o en otro contexto. Si no estás seguro de por qué viene hoy, preguntá de nuevo de forma amable. 
-3. **No Repitas:** Si el usuario ya mencionó su nombre, sede o motivo en los últimos mensajes, usá esa información. **Prohibido pedir datos que ya tenés.**
+3. **Obra Social o Particular:** Para empezar, siempre preguntale al paciente cuál es el motivo de su consulta y si la atención es "Particular" o por "Obra Social".
+   - Si es por Obra Social, preguntale cuál es.
+   - Obras sociales aceptadas actualmente: {insurances}.
+   - Si su obra social no está en la lista o no la cubrimos, ofrecele atención "Particular".
+   - IMPORTANTE: Si la obra social es PAMI, el sistema solo permite turnos los días Viernes. No se lo expliques directamente como una regla, simplemente decile que tenés turnos disponibles para el viernes cuando uses `consultar_disponibilidad`.
 4. **Agendamiento Proactivo:**
-   - Antes de agendar, siempre usá `consultar_disponibilidad` para la sede elegida.
-   - Ofrecé **3 opciones variadas** (mañana y tarde, o diferentes días) para que el paciente elija. Ej: "Para hoy no me queda nada, pero mañana tengo a las 9:15, o el lunes a las 17:00. ¿Alguna te sirve?".
-5. **Datos Personales:** Pedí los datos (Nombre, Apellido, DNI, Teléfono, Obra Social) solo cuando la hora ya esté clara, y hacelo de forma conversacional.
-6. **Cierre:** Antes de usar `agendar_turno`, confirmá los detalles finales. Si el usuario dice "Si", "Dale" o similar, procedé inmediatamente.
+   - Antes de agendar, siempre usá `consultar_disponibilidad` pasándole la sede y la obra social (importante si es PAMI).
+   - Ofrecé **3 opciones variadas** (mañana y tarde, o diferentes días) para que el paciente elija.
+5. **Datos Personales:** Pedí los datos (Nombre, Apellido, DNI, Teléfono) solo cuando la hora ya esté clara, y hacelo de forma conversacional.
+6. **Cierre:** Antes de usar `agendar_turno`, confirmá los detalles finales (Asegurate de pasar el nombre de la obra social al agendar). Si el usuario dice "Si", "Dale" o similar, procedé inmediatamente.
 
 ### 🛠 REGLAS DE ORO:
 - Hoy es {today}.
@@ -121,7 +136,8 @@ def chat(user_message: str, history: list[dict] | None = None) -> str:
     result = agent.invoke({
         "input": user_message, 
         "chat_history": chat_history,
-        "today": get_clinic_now().strftime("%d/%m/%Y %H:%M") # Use clinic local time
+        "today": get_clinic_now().strftime("%d/%m/%Y %H:%M"), # Use clinic local time
+        "insurances": ", ".join(get_active_insurances())
     })
     return result["output"]
 
