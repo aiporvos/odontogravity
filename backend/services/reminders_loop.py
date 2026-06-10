@@ -67,7 +67,8 @@ async def check_reminders():
     while True:
         try:
             db = SessionLocal()
-            hours_before = int(get_config(db, "REMINDER_HOURS_BEFORE", "24"))
+            hours_val = get_config(db, "REMINDER_HOURS_BEFORE", "24")
+            hours_before = int(hours_val) if hours_val else 24
             public_url = get_config(db, "PUBLIC_APP_URL", "http://localhost:8000")
             
             now = datetime.utcnow()
@@ -95,9 +96,11 @@ async def check_reminders():
                 msg = f"Hola {patient.first_name}, te recordamos tu turno en Dental Studio Pro el {time_str} en nuestra sede de {appt.location}.\n\nSi no podés asistir, por favor cancelalo en el siguiente link:\n{cancel_link}"
                 await send_whatsapp_message(patient.phone, msg)
                 
-            db.close()
         except Exception as e:
             logger.error(f"Reminder loop error: {e}")
+        finally:
+            if 'db' in locals():
+                db.close()
         
         await asyncio.sleep(15 * 60) # check every 15 mins
 
