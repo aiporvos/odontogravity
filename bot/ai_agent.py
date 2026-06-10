@@ -106,15 +106,8 @@ def build_agent():
     return AgentExecutor(agent=agent, tools=ALL_TOOLS, verbose=True, max_iterations=10)
 
 
-# Singleton agent
-_agent_executor = None
-
-
 def get_agent() -> AgentExecutor:
-    global _agent_executor
-    if _agent_executor is None:
-        _agent_executor = build_agent()
-    return _agent_executor
+    return build_agent()
 
 
 def chat(user_message: str, history: list[dict] | None = None) -> str:
