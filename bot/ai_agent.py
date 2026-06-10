@@ -64,9 +64,9 @@ Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Habl
 - Si no entendés algo, preguntá con dulzura.
 """
 
-def build_agent():
+def build_agent(provider: str = "openai") -> AgentExecutor | None:
     """Create the LangChain agent with tools."""
-    provider = get_config("AI_PROVIDER", "openai").lower()
+    provider = provider.lower()
     api_key = ""
     model_name = ""
     base_url = None
@@ -86,6 +86,7 @@ def build_agent():
 
     if not api_key:
         print(f"ERROR: No API key found for provider {provider}")
+        return None
 
     llm = ChatOpenAI(
         model=model_name,
@@ -106,18 +107,24 @@ def build_agent():
     return AgentExecutor(agent=agent, tools=ALL_TOOLS, verbose=True, max_iterations=10)
 
 
-def get_agent() -> AgentExecutor:
-    return build_agent()
+def get_agent(provider: str) -> AgentExecutor | None:
+    return build_agent(provider)
 
 
 def chat(user_message: str, history: list[dict] | None = None) -> str:
     """Process a user message and return agent response."""
     print(f"DEBUG: AI_AGENT_IN -> Msg: '{user_message}', HistLen: {len(history) if history else 0}")
     
-    # Refresh agent if provider changed (simplified singleton management)
-    # In production, we might want a more robust way to handle dynamic config changes
-    agent = get_agent()
+    provider_1 = get_config("AI_PROVIDER", "openai").lower()
+    provider_2 = get_config("AI_PROVIDER_2", "none").lower()
+    provider_3 = get_config("AI_PROVIDER_3", "none").lower()
     
+    providers = [p for p in [provider_1, provider_2, provider_3] if p != "none"]
+    seen = set()
+    providers = [p for p in providers if not (p in seen or seen.add(p))]
+    if not providers:
+        providers = ["openai"]
+
     chat_history = []
     if history:
         for msg in history:
@@ -126,11 +133,29 @@ def chat(user_message: str, history: list[dict] | None = None) -> str:
             elif msg["role"] == "assistant":
                 chat_history.append(AIMessage(content=msg["content"]))
 
-    result = agent.invoke({
-        "input": user_message, 
-        "chat_history": chat_history,
-        "today": get_clinic_now().strftime("%d/%m/%Y %H:%M"), # Use clinic local time
-        "insurances": ", ".join(get_active_insurances())
-    })
-    return result["output"]
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    last_error = None
+    for attempt, provider in enumerate(providers, 1):
+        try:
+            print(f"DEBUG: AI_AGENT -> Intentando proveedor {attempt}/{len(providers)}: {provider}")
+            agent = get_agent(provider)
+            if not agent:
+                print(f"DEBUG: AI_AGENT -> Omitiendo {provider} por falta de API Key.")
+                continue
+            
+            result = agent.invoke({
+                "input": user_message, 
+                "chat_history": chat_history,
+                "today": get_clinic_now().strftime("%d/%m/%Y %H:%M"),
+                "insurances": ", ".join(get_active_insurances())
+            })
+            return result["output"]
+        except Exception as e:
+            logger.error(f"Error usando proveedor {provider}: {e}")
+            last_error = str(e)
+
+    # Si todos fallan o no hay agentes disponibles:
+    return "No pudimos procesar tu solicitud automáticamente debido a un inconveniente técnico con nuestra Inteligencia Artificial. Un agente se pondrá en contacto a la brevedad."
 

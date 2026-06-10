@@ -68,14 +68,42 @@ Router.register('settings', async (container) => {
                     <h2>🤖 Integraciones (Chatbot)</h2>
                 </div>
                 <form id="form-config" style="display:flex;flex-direction:column;gap:1.5rem;padding-top:.5rem;">
-                    <div class="form-group">
-                        <label style="font-weight:700; color:var(--primary-600);">🚀 Proveedor Activo</label>
-                        <select name="AI_PROVIDER" class="form-control" style="border: 2px solid var(--primary-200);">
-                            <option value="openai" ${getConfig('AI_PROVIDER') === 'openai' ? 'selected' : ''}>OpenAI</option>
-                            <option value="openrouter" ${getConfig('AI_PROVIDER') === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
-                            <option value="groq" ${getConfig('AI_PROVIDER') === 'groq' ? 'selected' : ''}>Groq</option>
-                        </select>
-                        <small>Elegí qué motor usará el bot para responder.</small>
+                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
+                        <h4 style="margin-bottom:.5rem;">Prioridades de Inteligencia Artificial (Fallback en cascada)</h4>
+                        <p style="font-size:0.85rem; color:var(--slate-500); margin-bottom:1rem;">
+                            El bot intentará responder usando el proveedor de la Prioridad 1. Si este falla (ej: error de red, límite de saldo o modelo incorrecto), pasará automáticamente a la Prioridad 2, y luego a la 3. Si todos fallan, enviará un mensaje de disculpas pidiendo contacto humano.
+                        </p>
+                        
+                        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                            <div class="form-group">
+                                <label style="font-weight:700; color:var(--primary-600);">🥇 Prioridad 1 (Principal)</label>
+                                <select name="AI_PROVIDER" class="form-control" style="border: 2px solid var(--primary-200);">
+                                    <option value="openai" ${getConfig('AI_PROVIDER') === 'openai' ? 'selected' : ''}>OpenAI</option>
+                                    <option value="openrouter" ${getConfig('AI_PROVIDER') === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+                                    <option value="groq" ${getConfig('AI_PROVIDER') === 'groq' ? 'selected' : ''}>Groq</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label style="font-weight:700; color:var(--slate-600);">🥈 Prioridad 2 (Respaldo)</label>
+                                <select name="AI_PROVIDER_2" class="form-control">
+                                    <option value="none" ${(!getConfig('AI_PROVIDER_2') || getConfig('AI_PROVIDER_2') === 'none') ? 'selected' : ''}>Ninguno</option>
+                                    <option value="openai" ${getConfig('AI_PROVIDER_2') === 'openai' ? 'selected' : ''}>OpenAI</option>
+                                    <option value="openrouter" ${getConfig('AI_PROVIDER_2') === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+                                    <option value="groq" ${getConfig('AI_PROVIDER_2') === 'groq' ? 'selected' : ''}>Groq</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label style="font-weight:700; color:var(--slate-600);">🥉 Prioridad 3 (Emergencia)</label>
+                                <select name="AI_PROVIDER_3" class="form-control">
+                                    <option value="none" ${(!getConfig('AI_PROVIDER_3') || getConfig('AI_PROVIDER_3') === 'none') ? 'selected' : ''}>Ninguno</option>
+                                    <option value="openai" ${getConfig('AI_PROVIDER_3') === 'openai' ? 'selected' : ''}>OpenAI</option>
+                                    <option value="openrouter" ${getConfig('AI_PROVIDER_3') === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
+                                    <option value="groq" ${getConfig('AI_PROVIDER_3') === 'groq' ? 'selected' : ''}>Groq</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
 
                     <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
