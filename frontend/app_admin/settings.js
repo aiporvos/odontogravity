@@ -176,11 +176,11 @@ Router.register('settings', async (container) => {
 window.SettingsPage = {
     async saveConfigs() {
         const form = document.getElementById('form-config');
-        const inputs = form.querySelectorAll('input');
+        const elements = form.querySelectorAll('input, select');
         const tasks = [];
         
-        inputs.forEach(input => {
-            tasks.push(API.setConfig(input.name, input.value));
+        elements.forEach(el => {
+            tasks.push(API.setConfig(el.name, el.value));
         });
 
         try {
