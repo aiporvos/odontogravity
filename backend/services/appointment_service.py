@@ -97,7 +97,7 @@ def create_appointment_logic(
         "datetime": str(appt.start_time),
     }
 
-def get_available_slots(db: Session, target_date: str, location: str, obra_social: str = "Particular", recursive_depth=0):
+def get_available_slots(db: Session, target_date: str, location: str, reason: str, obra_social: str = "Particular", recursive_depth=0):
     """Calculate free slots for a given date and location based on clinic schedule."""
     clinic_now = get_clinic_now()
     try:
@@ -117,7 +117,7 @@ def get_available_slots(db: Session, target_date: str, location: str, obra_socia
     
     if obra_social and obra_social.upper() == "PAMI" and weekday != 4:
         if recursive_depth < 14:
-            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, obra_social, recursive_depth + 1)
+            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
         return {"date": str(day), "location": location, "available_slots": [], "message": "PAMI solo se atiende los viernes."}
 
     if weekday < 5: # Mon-Fri
@@ -128,20 +128,27 @@ def get_available_slots(db: Session, target_date: str, location: str, obra_socia
     if not shifts:
         # If it's a weekend, try next Monday if we are auto-searching
         if recursive_depth < 14: # Search up to two weeks
-            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, obra_social, recursive_depth + 1)
+            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
         return {"date": str(day), "location": location, "available_slots": [], "message": "Cerrado los fines de semana o fuera de horario."}
+
+    prof = route_professional(reason, db)
+    prof_name = prof.full_name if prof else "Cualquier profesional disponible"
 
     # Existing appointments for that day and location
     start_of_day = datetime.combine(day, py_time(0, 0))
     end_of_day = datetime.combine(day, py_time(23, 59))
     
-    existing = db.query(Appointment).filter(
+    query = db.query(Appointment).filter(
         Appointment.location == location,
         Appointment.is_deleted == False,
         Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
         Appointment.start_time >= start_of_day,
         Appointment.start_time <= end_of_day
-    ).all()
+    )
+    if prof:
+        query = query.filter(Appointment.professional_id == prof.id)
+        
+    existing = query.all()
     
     occupied_ranges = []
     for a in existing:
@@ -167,10 +174,11 @@ def get_available_slots(db: Session, target_date: str, location: str, obra_socia
     
     # If no slots found for today, auto-search next available day
     if not available_slots and recursive_depth < 14:
-        return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, obra_social, recursive_depth + 1)
+        return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
         
     return {
         "date": str(day),
         "location": location,
+        "professional": prof_name,
         "available_slots": available_slots[:15]
     }

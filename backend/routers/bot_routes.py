@@ -107,25 +107,30 @@ def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)
 
     # Notificar a los admins
     from backend.models.config import AppConfig
+    import os
     try:
-        admin_numbers = db.query(AppConfig).filter(AppConfig.key == "ADMIN_NOTIFY_NUMBERS").first()
-        if admin_numbers and admin_numbers.value:
+        def get_val(key):
+            conf = db.query(AppConfig).filter(AppConfig.key == key).first()
+            return conf.value if conf and conf.value else os.getenv(key, "")
+            
+        admin_numbers = get_val("ADMIN_NOTIFY_NUMBERS")
+        if admin_numbers:
             import httpx
             
             # Fetch Evolution API details
-            evo_url = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_URL").first()
-            evo_key = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_KEY").first()
-            evo_instance = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_INSTANCE").first()
+            evo_url = get_val("EVOLUTION_API_URL").rstrip("/")
+            evo_key = get_val("EVOLUTION_API_KEY")
+            evo_instance = get_val("EVOLUTION_INSTANCE_ID")
             
             if evo_url and evo_key and evo_instance:
-                numbers = [n.strip() for n in admin_numbers.value.split(",") if n.strip()]
+                numbers = [n.strip() for n in admin_numbers.split(",") if n.strip()]
                 for number in numbers:
                     payload = {
                         "number": number,
                         "textMessage": {"text": f"⚠️ Turno Cancelado por Bot:\nPaciente: {patient.first_name} {patient.last_name} ({patient.dni})\nFecha original: {appt.start_time.strftime('%Y-%m-%d %H:%M')}\nSede: {appt.location}"}
                     }
-                    headers = {"apikey": evo_key.value}
-                    httpx.post(f"{evo_url.value}/message/sendText/{evo_instance.value}", json=payload, headers=headers, timeout=5)
+                    headers = {"apikey": evo_key}
+                    httpx.post(f"{evo_url}/message/sendText/{evo_instance}", json=payload, headers=headers, timeout=5)
     except Exception as e:
         print(f"Error notifying admins of cancellation: {e}")
 
@@ -186,4 +191,4 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
 def bot_get_availability(data: BotAvailabilityRequest, db: Session = Depends(get_db)):
     # Use the provided date or current time if empty
     target_date = data.date if data.date else datetime.utcnow().isoformat()
-    return get_available_slots(db, target_date, data.location, data.obra_social)
+    return get_available_slots(db, target_date, data.location, data.reason, data.obra_social)

@@ -154,17 +154,23 @@ def update_appointment(appt_id: UUID, data: AppointmentUpdate, db: Session = Dep
     if was_cancelled and a.patient and a.patient.phone:
         try:
             import httpx
+            import os
             from backend.models.config import AppConfig
-            evo_url = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_URL").first()
-            evo_key = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_KEY").first()
-            evo_instance = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_INSTANCE").first()
+            def get_val(key):
+                conf = db.query(AppConfig).filter(AppConfig.key == key).first()
+                return conf.value if conf and conf.value else os.getenv(key, "")
+            
+            evo_url = get_val("EVOLUTION_API_URL").rstrip("/")
+            evo_key = get_val("EVOLUTION_API_KEY")
+            evo_instance = get_val("EVOLUTION_INSTANCE_ID")
+            
             if evo_url and evo_key and evo_instance:
                 payload = {
                     "number": a.patient.phone,
                     "textMessage": {"text": f"Hola {a.patient.first_name}, te informamos que tu turno del {a.start_time.strftime('%Y-%m-%d %H:%M')} en la sede {a.location} ha sido cancelado desde la clínica. Por favor, contactate con nosotros si deseas reprogramarlo."}
                 }
-                headers = {"apikey": evo_key.value}
-                httpx.post(f"{evo_url.value}/message/sendText/{evo_instance.value}", json=payload, headers=headers, timeout=5)
+                headers = {"apikey": evo_key}
+                httpx.post(f"{evo_url}/message/sendText/{evo_instance}", json=payload, headers=headers, timeout=5)
         except Exception as e:
             print(f"Error notifying patient of cancellation: {e}")
 
@@ -183,17 +189,23 @@ def soft_delete_appointment(appt_id: UUID, db: Session = Depends(get_db)):
     if a.patient and a.patient.phone:
         try:
             import httpx
+            import os
             from backend.models.config import AppConfig
-            evo_url = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_URL").first()
-            evo_key = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_API_KEY").first()
-            evo_instance = db.query(AppConfig).filter(AppConfig.key == "EVOLUTION_INSTANCE").first()
+            def get_val(key):
+                conf = db.query(AppConfig).filter(AppConfig.key == key).first()
+                return conf.value if conf and conf.value else os.getenv(key, "")
+            
+            evo_url = get_val("EVOLUTION_API_URL").rstrip("/")
+            evo_key = get_val("EVOLUTION_API_KEY")
+            evo_instance = get_val("EVOLUTION_INSTANCE_ID")
+            
             if evo_url and evo_key and evo_instance:
                 payload = {
                     "number": a.patient.phone,
                     "textMessage": {"text": f"Hola {a.patient.first_name}, te informamos que tu turno del {a.start_time.strftime('%Y-%m-%d %H:%M')} en la sede {a.location} ha sido cancelado desde la clínica. Por favor, contactate con nosotros si deseas reprogramarlo."}
                 }
-                headers = {"apikey": evo_key.value}
-                httpx.post(f"{evo_url.value}/message/sendText/{evo_instance.value}", json=payload, headers=headers, timeout=5)
+                headers = {"apikey": evo_key}
+                httpx.post(f"{evo_url}/message/sendText/{evo_instance}", json=payload, headers=headers, timeout=5)
         except Exception as e:
             print(f"Error notifying patient of cancellation: {e}")
 

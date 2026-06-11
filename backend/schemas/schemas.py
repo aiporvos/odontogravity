@@ -286,6 +286,7 @@ class BotQueryRequest(BaseModel):
 
 class BotAvailabilityRequest(BaseModel):
     location: str  # "San Rafael" | "Alvear"
+    reason: str
     dni: Optional[str] = "ignore"
     date: Optional[str] = "" # YYYY-MM-DD or empty for today
     obra_social: Optional[str] = "Particular"

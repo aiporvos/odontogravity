@@ -47,7 +47,8 @@ def agendar_turno(
         r = httpx.post(f"{API_BASE}/api/bot/appointments", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
         data = r.json()
-        return f"✅ {data['message']}. Fecha: {data['datetime']}. ID: {data['appointment_id']}. Aclarale al paciente que si en algún momento desea cancelar el turno, solo debe escribir 'quiero cancelar mi turno'."
+        cancel_url = f"{API_BASE}/api/public/cancel/{data['appointment_id']}"
+        return f"✅ {data['message']}. Fecha: {data['datetime']}. ID: {data['appointment_id']}. Aclarale al paciente que si desea cancelar el turno, puede escribir 'quiero cancelar mi turno' o ingresar a este link: {cancel_url}"
     except Exception as e:
         return f"❌ Error al agendar: {str(e)}"
 
@@ -113,15 +114,16 @@ def consultar_mis_turnos(dni: str) -> str:
         return f"❌ Error: {str(e)}"
 
 @tool
-def consultar_disponibilidad(location: str, date: str = "", obra_social: str = "Particular") -> str:
-    """Consulta los horarios disponibles para una sede y fecha.
+def consultar_disponibilidad(location: str, reason: str, date: str = "", obra_social: str = "Particular") -> str:
+    """Consulta los horarios disponibles para una sede, especialidad y fecha.
     Args:
         location: Sede (San Rafael o Alvear)
+        reason: Motivo de la consulta (ej: Extracción, Limpieza, Ortodoncia). ES OBLIGATORIO PREGUNTARLO ANTES.
         date: Fecha opcional (YYYY-MM-DD). Si se omite, busca para hoy.
         obra_social: Obra social del paciente (ej: Particular, PAMI, OSDE, etc.)
     """
     try:
-        payload = {"location": location, "date": date, "obra_social": obra_social}
+        payload = {"location": location, "reason": reason, "date": date, "obra_social": obra_social}
         r = httpx.post(f"{API_BASE}/api/bot/availability", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
         data = r.json()
