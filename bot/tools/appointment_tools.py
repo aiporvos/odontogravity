@@ -47,7 +47,7 @@ def agendar_turno(
         r = httpx.post(f"{API_BASE}/api/bot/appointments", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
         data = r.json()
-        cancel_url = f"{API_BASE}/api/public/cancel/{data['appointment_id']}"
+        cancel_url = f"https://odobot.aiporvos.com/api/public/cancel/{data['appointment_id']}"
         return f"✅ {data['message']}. Fecha: {data['datetime']}. ID: {data['appointment_id']}. Aclarale al paciente que si desea cancelar el turno, puede escribir 'quiero cancelar mi turno' o ingresar a este link: {cancel_url}"
     except Exception as e:
         return f"❌ Error al agendar: {str(e)}"
