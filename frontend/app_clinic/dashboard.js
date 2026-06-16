@@ -29,7 +29,7 @@ Router.register('dashboard', async (container) => {
         <div class="page-header">
             <h1>Dashboard</h1>
             <div class="page-header-actions">
-                <span style="color:var(--slate-500);font-size:.85rem;">📍 Dental Studio Pro</span>
+                <span style="color:var(--slate-500);font-size:.85rem;">📍 Silprodent</span>
             </div>
         </div>
 

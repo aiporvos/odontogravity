@@ -22,7 +22,7 @@ logging.basicConfig(
     format="%(levelname)s: %(name)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
-logger.info("🚀 Dental Studio Pro Backend Starting...")
+logger.info("🚀 Silprodent Backend Starting...")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Dental Studio Pro",
+    title="Silprodent",
     description="Sistema de gestión integral para consultorios odontológicos",
     version="1.0.0",
     lifespan=lifespan,
@@ -82,7 +82,7 @@ app.include_router(public_router)
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "service": "Dental Studio Pro"}
+    return {"status": "ok", "service": "Silprodent"}
 
 # ── Serve Frontend (SPA) ───────────────────────────────
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")

@@ -93,7 +93,7 @@ async def check_reminders():
                 time_str = local_time.strftime("%d/%m/%Y a las %H:%M")
                 cancel_link = f"{public_url}/api/public/cancel/{appt.id}"
                 
-                msg = f"Hola {patient.first_name}, te recordamos tu turno en Dental Studio Pro el {time_str} en nuestra sede de {appt.location}.\n\nSi no podés asistir, por favor cancelalo en el siguiente link:\n{cancel_link}"
+                msg = f"Hola {patient.first_name}, te recordamos tu turno en Silprodent el {time_str} en nuestra sede de {appt.location}.\n\nSi no podés asistir, por favor cancelalo en el siguiente link:\n{cancel_link}"
                 await send_whatsapp_message(patient.phone, msg)
                 
         except Exception as e:

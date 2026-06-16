@@ -1,5 +1,5 @@
 /**
- * Dental Studio Pro - SPA Main App Controller
+ * Silprodent - SPA Main App Controller
  */
 (function () {
     'use strict';

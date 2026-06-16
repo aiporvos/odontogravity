@@ -1,4 +1,4 @@
-# 🦷 Dental Studio Pro
+# 🦷 Silprodent
 
 > Sistema de gestión integral para consultorios odontológicos con DentiBot (IA autónoma para gestión de turnos vía Telegram).
 

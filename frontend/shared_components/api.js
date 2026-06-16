@@ -1,5 +1,5 @@
 /**
- * API Service - HTTP client for Dental Studio Pro Backend
+ * API Service - HTTP client for Silprodent Backend
  */
 const API = {
     BASE_URL: '/api',
