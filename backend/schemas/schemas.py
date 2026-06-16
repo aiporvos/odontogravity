@@ -265,7 +265,7 @@ class BotAppointmentRequest(BaseModel):
     phone: str
     insurance_name: Optional[str] = None
     reason: str
-    location: str  # "San Rafael" | "Alvear"
+    location: Optional[str] = "San Rafael"
     preferred_date: Optional[str] = None
     duration_minutes: int = 30
 
@@ -285,8 +285,8 @@ class BotQueryRequest(BaseModel):
     dni: str
 
 class BotAvailabilityRequest(BaseModel):
-    location: str  # "San Rafael" | "Alvear"
     reason: str
+    location: Optional[str] = "San Rafael"
     dni: Optional[str] = "ignore"
     date: Optional[str] = "" # YYYY-MM-DD or empty for today
     obra_social: Optional[str] = "Particular"

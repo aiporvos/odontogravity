@@ -15,7 +15,7 @@ def agendar_turno(
     dni: str,
     phone: str,
     reason: str,
-    location: str,
+    location: str = "San Rafael",
     insurance_name: str = "Particular",
     preferred_date: str = "",
     duration_minutes: int = 30
@@ -27,7 +27,7 @@ def agendar_turno(
         dni: DNI del paciente (solo números)
         phone: Teléfono de contacto
         reason: Motivo de la consulta (ej: Limpieza, Extracción)
-        location: Sede (San Rafael o Alvear)
+        location: Sede (Por defecto "San Rafael")
         insurance_name: Obra Social (usar 'Particular' si no tiene)
         preferred_date: Fecha/Hora sugerida (ej: 2024-03-25 10:00)
         duration_minutes: Duración en minutos (Extracción: 30, Endodoncia: 60, Consulta/Limpieza: 15, Ortodoncia: 30)
@@ -114,11 +114,11 @@ def consultar_mis_turnos(dni: str) -> str:
         return f"❌ Error: {str(e)}"
 
 @tool
-def consultar_disponibilidad(location: str, reason: str, date: str = "", obra_social: str = "Particular") -> str:
+def consultar_disponibilidad(reason: str, location: str = "San Rafael", date: str = "", obra_social: str = "Particular") -> str:
     """Consulta los horarios disponibles para una sede, especialidad y fecha.
     Args:
-        location: Sede (San Rafael o Alvear)
         reason: Motivo de la consulta (ej: Extracción, Limpieza, Ortodoncia). ES OBLIGATORIO PREGUNTARLO ANTES.
+        location: Sede (Por defecto "San Rafael")
         date: Fecha opcional (YYYY-MM-DD). Si se omite, busca para hoy.
         obra_social: Obra social del paciente (ej: Particular, PAMI, OSDE, etc.)
     """
