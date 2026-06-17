@@ -22,8 +22,8 @@ async def cancel_appointment_page(appointment_id: UUID, db: Session = Depends(ge
         return "<h1>Turno Cancelado</h1><p>Este turno ya había sido cancelado anteriormente.</p>"
 
     patient = appt.patient
-    # Convert UTC to local for display
-    local_time = appt.start_time - timedelta(hours=3)
+    # Times are already stored in local time, no need to convert
+    local_time = appt.start_time
     time_str = local_time.strftime("%d/%m/%Y a las %H:%M")
     
     html_content = f"""
@@ -67,7 +67,7 @@ async def confirm_cancel_appointment(appointment_id: UUID, db: Session = Depends
     
     # Notify admin
     patient = appt.patient
-    local_time = appt.start_time - timedelta(hours=3)
+    local_time = appt.start_time
     time_str = local_time.strftime("%d/%m/%Y a las %H:%M")
     admin_msg = f"⚠️ *TURNO CANCELADO*\nEl paciente {patient.first_name} {patient.last_name} canceló su turno para el {time_str} en {appt.location}."
     

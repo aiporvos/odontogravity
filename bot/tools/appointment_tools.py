@@ -114,16 +114,16 @@ def consultar_mis_turnos(dni: str) -> str:
         return f"❌ Error: {str(e)}"
 
 @tool
-def consultar_disponibilidad(reason: str, location: str = "San Rafael", date: str = "", obra_social: str = "Particular") -> str:
+def consultar_disponibilidad(motivo_confirmado_por_paciente: str, location: str = "San Rafael", date: str = "", obra_social: str = "Particular") -> str:
     """Consulta los horarios disponibles para una sede, especialidad y fecha.
     Args:
-        reason: Motivo de la consulta (ej: Extracción, Limpieza, Ortodoncia). ES OBLIGATORIO PREGUNTARLO ANTES.
+        motivo_confirmado_por_paciente: Motivo de la consulta dicho por el paciente (ej: Extracción, Limpieza). ¡PROHIBIDO ADIVINAR O INVENTAR! Si el paciente no te ha dicho el motivo de la consulta, TIENES QUE PREGUNTÁRSELO y esperar su respuesta antes de usar esta herramienta.
         location: Sede (Por defecto "San Rafael")
         date: Fecha opcional (YYYY-MM-DD). Si se omite, busca para hoy.
         obra_social: Obra social del paciente (ej: Particular, PAMI, OSDE, etc.)
     """
     try:
-        payload = {"location": location, "reason": reason, "date": date, "obra_social": obra_social}
+        payload = {"location": location, "reason": motivo_confirmado_por_paciente, "date": date, "obra_social": obra_social}
         r = httpx.post(f"{API_BASE}/api/bot/availability", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
         data = r.json()

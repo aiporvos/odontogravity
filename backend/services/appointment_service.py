@@ -19,10 +19,31 @@ ROUTING_MAP = {
     "endodoncia": "Helena Murad",
 }
 
+import httpx
+
 CLINIC_TZ_OFFSET = -3 # UTC-3 for Argentina
+_time_cache = {"time": None, "fetched_at": None}
 
 def get_clinic_now():
-    """Returns the current time in the clinic's timezone."""
+    """Returns the current time in the clinic's timezone, guaranteed by external API."""
+    global _time_cache
+    now_sys = datetime.utcnow()
+    
+    if _time_cache["time"] and _time_cache["fetched_at"] and (now_sys - _time_cache["fetched_at"]).total_seconds() < 600:
+        return _time_cache["time"] + (now_sys - _time_cache["fetched_at"])
+        
+    try:
+        r = httpx.get("http://worldtimeapi.org/api/timezone/America/Argentina/Buenos_Aires", timeout=3.0)
+        if r.status_code == 200:
+            dt_str = r.json()["datetime"]
+            real_time = datetime.fromisoformat(dt_str).replace(tzinfo=None)
+            _time_cache["time"] = real_time
+            _time_cache["fetched_at"] = now_sys
+            return real_time
+    except Exception:
+        pass
+        
+    # Fallback
     return datetime.utcnow() + timedelta(hours=CLINIC_TZ_OFFSET)
 
 def route_professional(reason: str, db: Session) -> Professional | None:
@@ -154,13 +175,21 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     for a in existing:
         occupied_ranges.append((a.start_time, a.start_time + timedelta(minutes=a.duration_minutes)))
     
+    # Determine duration based on reason
+    duration_minutes = 15
+    reason_lower = reason.lower()
+    if any(x in reason_lower for x in ["extracc", "ortodoncia", "implante", "prótesis", "protesis"]):
+        duration_minutes = 30
+    elif any(x in reason_lower for x in ["conducto", "endodoncia"]):
+        duration_minutes = 60
+
     available_slots = []
     for shift_start_time, shift_end_time in shifts:
         current = datetime.combine(day, shift_start_time)
         shift_end = datetime.combine(day, shift_end_time)
         
-        while current + timedelta(minutes=15) <= shift_end:
-            slot_end = current + timedelta(minutes=15)
+        while current + timedelta(minutes=duration_minutes) <= shift_end:
+            slot_end = current + timedelta(minutes=duration_minutes)
             is_occupied = False
             for occ_start, occ_end in occupied_ranges:
                 if current < occ_end and occ_start < slot_end:
@@ -170,7 +199,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             if not is_occupied and current > clinic_now:
                 available_slots.append(current.strftime("%H:%M"))
             
-            current += timedelta(minutes=15)
+            current += timedelta(minutes=duration_minutes)
     
     # If no slots found for today, auto-search next available day
     if not available_slots and recursive_depth < 14:
@@ -180,5 +209,5 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         "date": str(day),
         "location": location,
         "professional": prof_name,
-        "available_slots": available_slots[:15]
+        "available_slots": available_slots[:4]
     }
