@@ -6,17 +6,26 @@ from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
 
+# Maps reason keywords to professional LAST NAMES as stored in DB
+# DB has: 'Dr. Silvestro' and 'Dra. Murad'
 ROUTING_MAP = {
-    "extracciones": "Martin Silvestro",
-    "extracción": "Martin Silvestro",
-    "implantes": "Martin Silvestro",
-    "implante": "Martin Silvestro",
-    "prótesis": "Martin Silvestro",
-    "protesis": "Martin Silvestro",
-    "ortodoncia": "Helena Murad",
-    "conductos": "Helena Murad",
-    "conducto": "Helena Murad",
-    "endodoncia": "Helena Murad",
+    "extracciones": "Silvestro",
+    "extracción": "Silvestro",
+    "extraccion": "Silvestro",
+    "implantes": "Silvestro",
+    "implante": "Silvestro",
+    "prótesis": "Silvestro",
+    "protesis": "Silvestro",
+    "cirugía": "Silvestro",
+    "cirugia": "Silvestro",
+    "ortodoncia": "Murad",
+    "conductos": "Murad",
+    "conducto": "Murad",
+    "endodoncia": "Murad",
+    "limpieza": "Murad",
+    "consulta": "Murad",
+    "revisión": "Murad",
+    "revision": "Murad",
 }
 
 import httpx
@@ -47,15 +56,17 @@ def get_clinic_now():
     return datetime.utcnow() + timedelta(hours=CLINIC_TZ_OFFSET)
 
 def route_professional(reason: str, db: Session) -> Professional | None:
+    """Route to the correct professional based on the reason keyword. Uses last-name search."""
     reason_lower = reason.lower()
-    for keyword, prof_name in ROUTING_MAP.items():
+    for keyword, last_name in ROUTING_MAP.items():
         if keyword in reason_lower:
             prof = db.query(Professional).filter(
-                Professional.full_name.ilike(f"%{prof_name.split('.')[-1].strip()}%"),
+                Professional.full_name.ilike(f"%{last_name}%"),
                 Professional.is_deleted == False,
             ).first()
             if prof:
                 return prof
+    # Fallback: return first active professional
     return db.query(Professional).filter(Professional.is_deleted == False, Professional.is_active == True).first()
 
 def create_appointment_logic(

@@ -7,7 +7,7 @@ from sqlalchemy import or_
 import os
 
 from backend.database import get_db
-from backend.services.appointment_service import create_appointment_logic, get_available_slots
+from backend.services.appointment_service import create_appointment_logic, get_available_slots, route_professional
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
@@ -25,34 +25,6 @@ def verify_bot_key(x_bot_key: str = Header(...)):
     if x_bot_key != BOT_API_KEY:
         raise HTTPException(403, "Bot API key inválida")
 
-
-# ── Routing Logic ──────────────────────────────────────
-ROUTING_MAP = {
-    "extracciones": "Dr. Silvestro",
-    "extracción": "Dr. Silvestro",
-    "implantes": "Dr. Silvestro",
-    "implante": "Dr. Silvestro",
-    "prótesis": "Dr. Silvestro",
-    "protesis": "Dr. Silvestro",
-    "ortodoncia": "Dra. Murad",
-    "conductos": "Dra. Murad",
-    "conducto": "Dra. Murad",
-    "endodoncia": "Dra. Murad",
-}
-
-
-def route_professional(reason: str, db: Session) -> Professional | None:
-    reason_lower = reason.lower()
-    for keyword, prof_name in ROUTING_MAP.items():
-        if keyword in reason_lower:
-            prof = db.query(Professional).filter(
-                Professional.full_name.ilike(f"%{prof_name.split('.')[-1].strip()}%"),
-                Professional.is_deleted == False,
-            ).first()
-            if prof:
-                return prof
-    # Default: return first available professional
-    return db.query(Professional).filter(Professional.is_deleted == False, Professional.is_active == True).first()
 
 
 # ── Agendar Turno ──────────────────────────────────────
