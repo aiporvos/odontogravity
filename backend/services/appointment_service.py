@@ -90,11 +90,13 @@ def create_appointment_logic(
     if not prof:
         return {"error": "No hay profesionales disponibles"}
 
-    # Parse date
+    # Parse date - preferred_date is required, never default to now
+    if not preferred_date or not preferred_date.strip():
+        return {"error": "Se requiere la fecha y hora del turno (preferred_date). El bot debe pasar la fecha exacta que eligió el paciente."}
     try:
-        start = datetime.fromisoformat(preferred_date) if preferred_date else get_clinic_now()
+        start = datetime.fromisoformat(preferred_date.strip())
     except Exception:
-        start = get_clinic_now()
+        return {"error": f"Formato de fecha inválido: '{preferred_date}'. Usar formato YYYY-MM-DD HH:MM."}
 
     appt = Appointment(
         patient_id=patient.id,

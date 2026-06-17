@@ -15,9 +15,9 @@ def agendar_turno(
     dni: str,
     phone: str,
     reason: str,
+    preferred_date: str,
     location: str = "San Rafael",
     insurance_name: str = "Particular",
-    preferred_date: str = "",
     duration_minutes: int = 30
 ) -> str:
     """Agenda un nuevo turno en el sistema.
@@ -27,9 +27,9 @@ def agendar_turno(
         dni: DNI del paciente (solo números)
         phone: Teléfono de contacto
         reason: Motivo de la consulta (ej: Limpieza, Extracción)
+        preferred_date: OBLIGATORIO. Fecha y hora EXACTA que el paciente eligió, en formato 'YYYY-MM-DD HH:MM'. Ejemplo: '2026-06-18 09:30'. NUNCA dejes este campo vacío.
         location: Sede (Por defecto "San Rafael")
         insurance_name: Obra Social (usar 'Particular' si no tiene)
-        preferred_date: Fecha/Hora sugerida (ej: 2024-03-25 10:00)
         duration_minutes: Duración en minutos (Extracción: 30, Endodoncia: 60, Consulta/Limpieza: 15, Ortodoncia: 30)
     """
     payload = {
@@ -128,9 +128,14 @@ def consultar_disponibilidad(motivo_confirmado_por_paciente: str, location: str 
         r.raise_for_status()
         data = r.json()
         slots = data.get("available_slots", [])
+        date_iso = data.get("date", "")  # YYYY-MM-DD format
         if not slots:
             return f"No hay turnos disponibles en {location} para esa fecha."
-        return f"Turnos en {location} ({data.get('date')}): " + ", ".join(slots)
+        # Return both human-readable AND the ISO date so the LLM can build preferred_date
+        return (
+            f"Turnos disponibles en {location} para el {date_iso} "
+            f"(usá esta fecha en formato YYYY-MM-DD al agendar): {', '.join(slots)}"
+        )
     except Exception as e:
         return f"Error consultando disponibilidad: {e}"
 
