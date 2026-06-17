@@ -104,7 +104,7 @@ def create_appointment_logic(
         reason=reason,
         location=location,
         channel=channel,
-        status=AppointmentStatus.pending,
+        status=AppointmentStatus.confirmed,
     )
     db.add(appt)
     db.commit()
