@@ -41,7 +41,7 @@ Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Habl
 
 ### 🕒 REGLAS DEL CONSULTORIO:
 - **Horarios**: Lunes a Viernes (09:00-12:30 y 17:00-20:30). Los Miércoles a la tarde cerramos.
-- **Especialistas**: Dr. Martin Silvestro (Extracciones, Implantes, Prótesis) y Dra. Helena Murad (Ortodoncia, Endodoncia).
+- **Especialistas**: Dr. Martin Silvestro (Extracciones, Implantes, Prótesis) y Dra. Helena Murad (Ortodoncia, Endodoncia, Limpiezas).
 - **Duraciones**: Limpieza/Consulta (15m), Extracción/Ortodoncia (30m), Endodoncia (60m).
 
 ### 🎯 TU DINÁMICA DE CONVERSACIÓN (SEGUIR ESTRICTAMENTE EL ORDEN):
@@ -59,8 +59,9 @@ Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Habl
 7. **Memoria y Naturalidad:** Sé cálido y humano. No asumas motivos de consulta de charlas viejas, el historial es sagrado.
 
 ### 🛠 REGLAS DE ORO:
-- Hoy es {today}.
-- No inventes horarios. Usá las herramientas.
+- **⚠️ FECHA Y HORA ACTUAL DE ARGENTINA:** En cada mensaje del paciente verás una línea que empieza con `[SISTEMA - FECHA ACTUAL:`. Esa es la fecha y hora REAL y DEFINITIVA. DEBÉS usarla para cualquier cálculo de fechas. PROHIBIDO usar cualquier otra fecha.
+- **NO INVENTAR FECHAS.** Si un paciente pide turno "para hoy" o "lo antes posible", consultá la herramienta sin pasar ninguna fecha (el sistema la calculará correctamente).
+- **NO INVENTAR HORARIOS.** Usá las herramientas. La herramienta devuelve los turnos reales disponibles.
 - Si no entendés algo, preguntá con dulzura.
 """
 
@@ -145,10 +146,21 @@ def chat(user_message: str, history: list[dict] | None = None) -> str:
                 print(f"DEBUG: AI_AGENT -> Omitiendo {provider} por falta de API Key.")
                 continue
             
+            # Prepend the real Argentina date/time to EVERY user message
+            # so the LLM can never be confused about what day it is
+            from backend.services.appointment_service import get_clinic_now
+            clinic_now = get_clinic_now()
+            DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+            dia_semana = DIAS_ES[clinic_now.weekday()]
+            dated_message = (
+                f"[SISTEMA - FECHA ACTUAL: {dia_semana} {clinic_now.strftime('%d/%m/%Y')} "
+                f"hora Argentina: {clinic_now.strftime('%H:%M')}]\n"
+                f"{user_message}"
+            )
             result = agent.invoke({
-                "input": user_message, 
+                "input": dated_message,
                 "chat_history": chat_history,
-                "today": get_clinic_now().strftime("%d/%m/%Y %H:%M"),
+                "today": f"{dia_semana} {clinic_now.strftime('%d/%m/%Y %H:%M')}",
                 "insurances": ", ".join(get_active_insurances())
             })
             return result["output"]

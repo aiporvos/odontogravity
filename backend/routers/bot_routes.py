@@ -1,6 +1,6 @@
 """Bot-facing API routes - used by DentiBot tools to manage appointments."""
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -189,6 +189,8 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
 
 @router.post("/availability", dependencies=[Depends(verify_bot_key)])
 def bot_get_availability(data: BotAvailabilityRequest, db: Session = Depends(get_db)):
-    # Use the provided date or current time if empty
-    target_date = data.date if data.date else datetime.utcnow().isoformat()
+    # Always use Argentina timezone (UTC-3) as the reference date, never UTC
+    from backend.services.appointment_service import get_clinic_now
+    argentina_now = get_clinic_now()
+    target_date = data.date if data.date else argentina_now.date().isoformat()
     return get_available_slots(db, target_date, data.location, data.reason, data.obra_social)
