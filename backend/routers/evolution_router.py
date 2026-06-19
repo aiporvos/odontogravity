@@ -200,6 +200,13 @@ async def handle_text_message(remote_jid: str, text: str):
         db = SessionLocal()
         try:
             session = get_or_create_session(db, remote_jid)
+
+            if text.strip().lower() == "reset":
+                db.query(ChatMessage).filter(ChatMessage.session_id == session.id).delete()
+                db.commit()
+                await send_whatsapp_message(remote_jid, "✅ Historial borrado. Empecemos de cero.")
+                return
+
             history = load_history(db, session.id)
             
             save_message(db, session.id, MessageRole.user, text)
