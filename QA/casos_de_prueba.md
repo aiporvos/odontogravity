@@ -120,3 +120,16 @@ Este documento detalla los casos de prueba (Test Cases) para validar el correcto
 *(El usuario deja el celular y no responde por 3 horas)*
 > **Paciente:** Perdón, estaba ocupado. Es para un tratamiento de conducto.
 > **Bot:** ¡No hay problema! Entendido, tenés OSDE y es para un tratamiento de conducto. Para esto te va a atender la Dra. Helena Murad. Te ofrezco los siguientes horarios disponibles...
+
+---
+
+## 9. Envío de Datos Todos Juntos (Mensaje All-in-One)
+**Objetivo:** Verificar que el bot detecte toda la información entregada de golpe y solo pida los datos faltantes para completar el flujo.
+
+**Diálogo de Prueba:**
+> **Paciente:** Hola quiero un turno para Roberto Ayala pami 5421786, 2604875956
+> **Bot:** ¡Hola Roberto! Soy DentiBot 🦷, el asistente virtual de Silprodent. Tomo nota de que tu obra social es PAMI y ya tengo tu número de DNI y teléfono guardados. Para poder continuar, ¿me podrías indicar para qué es la consulta? (ej: extracción, limpieza, etc.)
+> **Paciente:** Es para una extracción
+> **Bot:** Perfecto, para extracciones te va a atender el Dr. Martin Silvestro. Recordá que por PAMI atendemos exclusivamente los días viernes. Tengo disponibilidad para el **viernes 26 de junio** a las **09:00** o **09:30**. ¿Te sirve alguna de estas opciones?
+> **Paciente:** 9:30
+> **Bot:** ¡Excelente! Como ya me habías pasado todos tus datos al principio, acabo de confirmar tu turno directamente. Quedó agendado para el **viernes 26 de junio** a las **09:30** con el Dr. Martin Silvestro. ¡Te esperamos!
