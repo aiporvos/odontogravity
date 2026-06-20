@@ -131,10 +131,14 @@ def consultar_disponibilidad(motivo_confirmado_por_paciente: str, location: str 
         date_iso = data.get("date", "")  # YYYY-MM-DD format
         if not slots:
             return f"No hay turnos disponibles en {location} para esa fecha."
-        # Return both human-readable AND the ISO date so the LLM can build preferred_date
+        # IMPORTANTE: la fecha devuelta es SIEMPRE futura (el backend lo garantiza).
+        # Al presentar los horarios al paciente, guardá esta fecha ISO para usarla en agendar_turno.
+        # NO volver a llamar a consultar_disponibilidad cuando el paciente elija un horario.
         return (
-            f"Turnos disponibles en {location} para el {date_iso} "
-            f"(usá esta fecha en formato YYYY-MM-DD al agendar): {', '.join(slots)}"
+            f"[FECHA GARANTIZADA FUTURA: {date_iso}] "
+            f"Turnos disponibles en {location} para el {date_iso}: {', '.join(slots)}. "
+            f"Cuando el paciente elija uno, combiná esta fecha ({date_iso}) con el horario elegido "
+            f"para formar preferred_date en formato YYYY-MM-DD HH:MM. NO llames a esta herramienta de nuevo."
         )
     except Exception as e:
         return f"Error consultando disponibilidad: {e}"
