@@ -168,10 +168,9 @@ def set_config(data: ConfigCreate, db: Session = Depends(get_db)):
 async def trigger_reminders_now(hours_override: float = 24, db: Session = Depends(get_db)):
     """
     Dispara el chequeo de recordatorios ahora mismo, sin esperar el loop de 15 minutos.
-    Util para probar que los mensajes llegan a los pacientes.
 
     - **hours_override**: ventana de horas a revisar (default 24 = turno de maniana).
-      Para probar un turno que empieza en 1 hora, pasa hours_override=1.
+      Para probar un turno especifico, usa el valor 'hours_override_sugerido' de 'proximos_turnos'.
     """
     from backend.services.reminders_loop import send_whatsapp_message, get_config as get_cfg
     from backend.models.appointment import Appointment, AppointmentStatus
@@ -209,9 +208,28 @@ async def trigger_reminders_now(hours_override: float = 24, db: Session = Depend
             "appointment": time_str,
         })
 
+    # Show next upcoming confirmed appointments to help calibrate hours_override
+    upcoming = db.query(Appointment).join(Patient).filter(
+        Appointment.status == AppointmentStatus.confirmed,
+        Appointment.is_deleted == False,
+        Appointment.start_time > now,
+    ).order_by(Appointment.start_time).limit(10).all()
+
+    proximos = []
+    for appt in upcoming:
+        diff_hours = (appt.start_time - now).total_seconds() / 3600
+        proximos.append({
+            "patient": f"{appt.patient.first_name} {appt.patient.last_name}",
+            "phone": appt.patient.phone,
+            "appointment": appt.start_time.strftime("%d/%m/%Y %H:%M"),
+            "hours_override_sugerido": round(diff_hours, 1),
+        })
+
     return {
         "now_argentina": now.strftime("%Y-%m-%d %H:%M"),
-        "window": f"{start_window.strftime('%H:%M')} - {end_window.strftime('%H:%M')} del {start_window.strftime('%Y-%m-%d')}",
+        "window_buscada": f"{start_window.strftime('%H:%M')} - {end_window.strftime('%H:%M')} del {start_window.strftime('%Y-%m-%d')}",
         "reminders_sent": len(sent),
         "detail": sent,
+        "proximos_turnos_confirmados": proximos,
     }
+
