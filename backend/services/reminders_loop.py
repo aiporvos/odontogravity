@@ -70,11 +70,13 @@ async def check_reminders():
             hours_val = get_config(db, "REMINDER_HOURS_BEFORE", "24")
             hours_before = int(hours_val) if hours_val else 24
             public_url = get_config(db, "PUBLIC_APP_URL", "http://localhost:8000")
-            
-            now = datetime.utcnow()
-            # If hours_before is 24, we want to remind for appointments 24 hours from now
+
+            # Appointments are stored in Argentina time (UTC-3), so compare in Argentina time
+            from backend.services.appointment_service import get_clinic_now
+            now = get_clinic_now()
             target_time = now + timedelta(hours=hours_before)
-            
+
+            # 15-minute window to avoid missing appointments between runs
             start_window = target_time
             end_window = target_time + timedelta(minutes=15)
             
@@ -88,13 +90,17 @@ async def check_reminders():
             
             for appt in appointments:
                 patient = appt.patient
-                # UTC-3 conversion for display
-                local_time = appt.start_time - timedelta(hours=3)
-                time_str = local_time.strftime("%d/%m/%Y a las %H:%M")
+                # Appointments stored in Argentina time, display as-is
+                time_str = appt.start_time.strftime("%d/%m/%Y a las %H:%M")
                 cancel_link = f"{public_url}/api/public/cancel/{appt.id}"
-                
-                msg = f"Hola {patient.first_name}, te recordamos tu turno en Silprodent el {time_str} en nuestra sede de {appt.location}.\n\nSi no podés asistir, por favor cancelalo en el siguiente link:\n{cancel_link}"
+
+                msg = (
+                    f"Hola {patient.first_name}, te recordamos tu turno en Silprodent "
+                    f"el {time_str} en nuestra sede de {appt.location}.\n\n"
+                    f"Si no podés asistir, por favor cancelálo en el siguiente link:\n{cancel_link}"
+                )
                 await send_whatsapp_message(patient.phone, msg)
+                logger.info(f"Recordatorio enviado a {patient.phone} para turno {appt.id}")
                 
         except Exception as e:
             logger.error(f"Reminder loop error: {e}")

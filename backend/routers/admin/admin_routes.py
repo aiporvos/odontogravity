@@ -161,3 +161,57 @@ def set_config(data: ConfigCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(config)
     return config
+
+
+# ── Test: Disparar recordatorios manualmente ────────────
+@router.post("/test-reminders")
+async def trigger_reminders_now(hours_override: float = 24, db: Session = Depends(get_db)):
+    """
+    Dispara el chequeo de recordatorios ahora mismo, sin esperar el loop de 15 minutos.
+    Util para probar que los mensajes llegan a los pacientes.
+
+    - **hours_override**: ventana de horas a revisar (default 24 = turno de maniana).
+      Para probar un turno que empieza en 1 hora, pasa hours_override=1.
+    """
+    from backend.services.reminders_loop import send_whatsapp_message, get_config as get_cfg
+    from backend.models.appointment import Appointment, AppointmentStatus
+    from backend.models.patient import Patient
+    from backend.services.appointment_service import get_clinic_now
+    from datetime import timedelta
+
+    public_url = get_cfg(db, "PUBLIC_APP_URL", "http://localhost:8000")
+    now = get_clinic_now()
+    target_time = now + timedelta(hours=hours_override)
+    start_window = target_time
+    end_window = target_time + timedelta(minutes=60)  # ventana amplia para test
+
+    appointments = db.query(Appointment).join(Patient).filter(
+        Appointment.status == AppointmentStatus.confirmed,
+        Appointment.is_deleted == False,
+        Appointment.start_time >= start_window,
+        Appointment.start_time < end_window,
+    ).all()
+
+    sent = []
+    for appt in appointments:
+        patient = appt.patient
+        time_str = appt.start_time.strftime("%d/%m/%Y a las %H:%M")
+        cancel_link = f"{public_url}/api/public/cancel/{appt.id}"
+        msg = (
+            f"[TEST RECORDATORIO] Hola {patient.first_name}, te recordamos tu turno "
+            f"en Silprodent el {time_str} en nuestra sede de {appt.location}.\n\n"
+            f"Si no podés asistir, por favor cancelálo en:\n{cancel_link}"
+        )
+        await send_whatsapp_message(patient.phone, msg)
+        sent.append({
+            "patient": f"{patient.first_name} {patient.last_name}",
+            "phone": patient.phone,
+            "appointment": time_str,
+        })
+
+    return {
+        "now_argentina": now.strftime("%Y-%m-%d %H:%M"),
+        "window": f"{start_window.strftime('%H:%M')} - {end_window.strftime('%H:%M')} del {start_window.strftime('%Y-%m-%d')}",
+        "reminders_sent": len(sent),
+        "detail": sent,
+    }
