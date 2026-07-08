@@ -5,7 +5,7 @@ Router.register('agenda', async (container) => {
     const today = UI.todayISO();
     let professionals = [];
     let state = {
-        view: 'day', // 'day', 'week', 'month'
+        view: 'week', // 'day', 'week', 'month'
         currentDate: today
     };
 
@@ -18,8 +18,8 @@ Router.register('agenda', async (container) => {
             <h1>Agenda de Turnos</h1>
             <div class="page-header-actions">
                 <div class="btn-group" style="margin-right:1rem">
-                    <button class="btn btn-ghost btn-sm active" data-view="day">Día</button>
-                    <button class="btn btn-ghost btn-sm" data-view="week">Semana</button>
+                    <button class="btn btn-ghost btn-sm" data-view="day">Día</button>
+                    <button class="btn btn-ghost btn-sm active" data-view="week">Semana</button>
                     <button class="btn btn-ghost btn-sm" data-view="month">Mes</button>
                 </div>
                 <button class="btn btn-primary" id="btn-new-appointment">+ Nuevo Turno</button>
@@ -259,32 +259,68 @@ Router.register('agenda', async (container) => {
             } else if (state.view === 'week') {
                 const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
                 const startDate = new Date(dateFrom.split('T')[0] + 'T12:00:00');
-                let html = '<div class="calendar-grid-week">';
+                const START_HOUR = 8, END_HOUR = 21;
+                const SLOT_H = 28;
+
+                // Header row
+                let hdrHtml = '<div class="wk-time-gutter wk-header-cell"></div>';
+                const dayDates = [];
                 for (let i = 0; i < 7; i++) {
-                    const current = new Date(startDate);
-                    current.setDate(startDate.getDate() + i);
-                    const iso = current.toISOString().split('T')[0];
-                    const dayAppts = appointments.filter(a => a.start_time.startsWith(iso));
-                    html += `
-                        <div class="calendar-day-cell">
-                            <div class="calendar-day-header ${iso === today ? 'current-day' : ''}">${days[i]} ${current.getDate()}</div>
-                            ${dayAppts.map(a => {
-                                const icons = { pending:'⏳', confirmed:'✅', completed:'🏁', cancelled:'❌', no_show:'🚫' };
-                                const hasConflict = conflictIds.has(a.id);
-                                return `
-                                    <div class="mini-appt status-${a.status}" 
-                                         onclick="AgendaPage.showAppointment('${a.id}')"
-                                         style="${hasConflict ? 'border-left: 3px solid var(--danger) !important; font-weight:700;' : ''}">
-                                        <span>${hasConflict ? '⚠️' : (icons[a.status] || '')}</span>
-                                        ${UI.formatTime(a.start_time)} ${a.patient ? a.patient.last_name : ''}
-                                    </div>
-                                `;
-                            }).join('')}
-                        </div>
-                    `;
+                    const cur = new Date(startDate); cur.setDate(startDate.getDate() + i);
+                    const iso = cur.toISOString().split('T')[0];
+                    dayDates.push(iso);
+                    hdrHtml += `<div class="wk-header-cell ${iso === today ? 'current-day' : ''}">
+                        <div class="wk-day-name">${days[i]}</div>
+                        <div class="wk-day-num">${cur.getDate()}</div>
+                    </div>`;
                 }
-                html += '</div>';
-                content.innerHTML = html;
+
+                // Time column + day columns
+                let bodyHtml = '<div class="wk-time-gutter">';
+                for (let h = START_HOUR; h < END_HOUR; h++) {
+                    bodyHtml += `<div class="wk-time-label" style="height:${SLOT_H * 2}px">${String(h).padStart(2,'0')}:00</div>`;
+                }
+                bodyHtml += '</div>';
+
+                // Each day column
+                dayDates.forEach(iso => {
+                    const dayAppts = appointments.filter(a => a.start_time.startsWith(iso));
+                    let slotsHtml = '';
+                    for (let h = START_HOUR; h < END_HOUR; h++) {
+                        for (let m = 0; m < 60; m += 30) {
+                            const t = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+                            slotsHtml += `<div class="wk-slot ${m === 0 ? 'wk-slot-hour' : ''}" data-date="${iso}" data-time="${t}" ondblclick="AgendaPage.quickNew('${iso}','${t}')"></div>`;
+                        }
+                    }
+
+                    // Position events
+                    let eventsHtml = '';
+                    dayAppts.forEach(a => {
+                        const dt = new Date(a.start_time);
+                        const mins = (dt.getHours() - START_HOUR) * 60 + dt.getMinutes();
+                        if (mins < 0) return;
+                        const top = mins * SLOT_H / 30;
+                        const dur = a.duration_minutes || 30;
+                        const height = Math.max(dur * SLOT_H / 30, SLOT_H);
+                        const hasConflict = conflictIds.has(a.id);
+                        const pri = a.treatment_priority || '';
+                        eventsHtml += `<div class="wk-event status-${a.status} ${hasConflict ? 'wk-conflict' : ''}" style="top:${top}px;height:${height}px" onclick="AgendaPage.showAppointment('${a.id}')">
+                            <strong>${UI.formatTime(a.start_time)}</strong> ${a.patient ? a.patient.last_name : ''}
+                            ${hasConflict ? '<span class="wk-conflict-icon">⚠️</span>' : ''}
+                            ${pri ? `<span class="wk-pri wk-pri-${pri.toLowerCase()}">${pri}</span>` : ''}
+                        </div>`;
+                    });
+
+                    bodyHtml += `<div class="wk-day-col" data-date="${iso}">${slotsHtml}<div class="wk-events-layer">${eventsHtml}</div></div>`;
+                });
+
+                // Conflict banner
+                let bannerHtml = '';
+                if (conflictIds.size > 0) {
+                    bannerHtml = `<div style="background:var(--danger-light);border:1px solid var(--danger);border-radius:var(--radius);padding:.6rem 1rem;margin-bottom:.75rem;font-size:.85rem;color:var(--danger);font-weight:600;">⚠️ Turnos superpuestos detectados</div>`;
+                }
+
+                content.innerHTML = bannerHtml + `<div class="wk-calendar"><div class="wk-header">${hdrHtml}</div><div class="wk-body">${bodyHtml}</div></div>`;
             } else {
                 const startDate = new Date(dateFrom.split('T')[0] + 'T12:00:00');
                 const endDate = new Date(dateTo.split('T')[0] + 'T12:00:00');
@@ -370,10 +406,21 @@ Router.register('agenda', async (container) => {
     // Exponer la función para recargar desde fuera
     AgendaPage.loadAgenda = loadAgenda;
 
+    // Auto-refresh every 30 seconds
+    let agendaInterval = setInterval(() => {
+        if (document.getElementById('agenda-content')) {
+            loadAgenda();
+        } else {
+            clearInterval(agendaInterval);
+        }
+    }, 30000);
+
     loadAgenda();
 });
 
 const AgendaPage = {
+    _pendingAppts: [],
+
     async showAppointment(id) {
         try {
             const a = await API.getAppointment(id);
@@ -411,10 +458,31 @@ const AgendaPage = {
         } catch (err) { UI.toast(err.message, 'error'); }
     },
 
+    async quickNew(date, time) {
+        const dt = `${date}T${time}`;
+        let professionals = [];
+        try { professionals = await API.getProfessionals(); } catch(e) {}
+        this._showMultiModal(professionals, dt);
+    },
+
     async showNewAppointment(professionals = []) {
+        this._showMultiModal(professionals, UI.nowISO());
+    },
+
+    _showMultiModal(professionals, defaultDateTime) {
+        this._pendingAppts = [];
         let patients = [];
-        try { patients = await API.getPatients(); } catch (e) {}
+        API.getPatients().then(p => { patients = p; this._renderMultiModal(professionals, patients, defaultDateTime); });
+    },
+
+    _renderMultiModal(professionals, patients, defaultDateTime) {
+        const listHtml = () => this._pendingAppts.map((a, i) => {
+            const pat = patients.find(p => p.id === a.patient_id);
+            return `<div class="pending-appt-item"><span>🕐 ${a.start_time.replace('T',' ')} — ${pat ? pat.last_name + ', ' + pat.first_name : '?'} — ${a.reason || 'Sin motivo'}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${i})" style="color:var(--danger)">✕</button></div>`;
+        }).join('');
+
         UI.showModal('Nuevo Turno', `
+            <div id="multi-appt-list" style="margin-bottom:1rem;">${listHtml()}</div>
             <form id="form-new-appointment" class="form-grid">
                 <div class="form-group">
                     <label>Paciente *</label>
@@ -431,7 +499,11 @@ const AgendaPage = {
                 </div>
                 <div class="form-group">
                     <label>Fecha y Hora *</label>
-                    <input type="datetime-local" name="start_time" required value="${UI.nowISO()}">
+                    <input type="datetime-local" name="start_time" required value="${defaultDateTime}">
+                </div>
+                <div class="form-group">
+                    <label>Duración (min)</label>
+                    <input type="number" name="duration_minutes" value="30" min="15" step="15">
                 </div>
                 <div class="form-group form-group-full">
                     <label>Motivo</label>
@@ -440,8 +512,54 @@ const AgendaPage = {
             </form>
         `, `
             <button class="btn btn-secondary" onclick="UI.closeModal()">Cancelar</button>
-            <button class="btn btn-primary" onclick="AgendaPage.saveNewAppointment()">Guardar</button>
+            <button class="btn btn-ghost" onclick="AgendaPage._addToList()" style="border-color:var(--primary);color:var(--primary)">+ Agregar a Lista</button>
+            <button class="btn btn-primary" onclick="AgendaPage._saveAll()">Guardar${this._pendingAppts.length > 0 ? ` (${this._pendingAppts.length + 1})` : ''}</button>
         `);
+    },
+
+    _addToList() {
+        const data = UI.getFormData('form-new-appointment');
+        if (!data.patient_id || !data.start_time) return UI.toast('Completá paciente y fecha', 'error');
+        this._pendingAppts.push({...data, duration_minutes: parseInt(data.duration_minutes) || 30});
+        const listEl = document.getElementById('multi-appt-list');
+        if (listEl) {
+            const pat = document.querySelector('[name="patient_id"] option:checked');
+            listEl.innerHTML += `<div class="pending-appt-item"><span>🕐 ${data.start_time.replace('T',' ')} — ${pat ? pat.textContent : '?'} — ${data.reason || 'Sin motivo'}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${this._pendingAppts.length - 1})" style="color:var(--danger)">✕</button></div>`;
+        }
+        // Reset form time +30min
+        const timeInput = document.querySelector('[name="start_time"]');
+        if (timeInput) {
+            const d = new Date(data.start_time); d.setMinutes(d.getMinutes() + 30);
+            timeInput.value = d.toISOString().slice(0,16);
+        }
+        UI.toast(`Turno agregado a lista (${this._pendingAppts.length})`, 'info');
+    },
+
+    _removePending(idx) {
+        this._pendingAppts.splice(idx, 1);
+        const items = document.querySelectorAll('.pending-appt-item');
+        if (items[idx]) items[idx].remove();
+    },
+
+    async _saveAll() {
+        const formData = UI.getFormData('form-new-appointment');
+        const allAppts = [...this._pendingAppts];
+        if (formData.patient_id && formData.start_time) {
+            allAppts.push({...formData, duration_minutes: parseInt(formData.duration_minutes) || 30});
+        }
+        if (allAppts.length === 0) return UI.toast('Agregá al menos un turno', 'error');
+
+        let ok = 0, fail = 0;
+        for (const appt of allAppts) {
+            try {
+                await API.createAppointment(appt);
+                ok++;
+            } catch (err) { fail++; }
+        }
+        this._pendingAppts = [];
+        UI.closeModal();
+        UI.toast(`${ok} turno(s) creado(s)${fail ? `, ${fail} con error` : ''}`, ok > 0 ? 'success' : 'error');
+        if (AgendaPage.loadAgenda) AgendaPage.loadAgenda();
     },
 
     async saveNewAppointment() {
@@ -454,3 +572,4 @@ const AgendaPage = {
         } catch (err) { UI.toast(err.message, 'error'); }
     }
 };
+

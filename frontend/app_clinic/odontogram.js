@@ -530,20 +530,45 @@ const OdontogramPage = {
         const allTeeth = [...TEETH.upper_permanent, ...TEETH.upper_deciduous, ...TEETH.lower_deciduous, ...TEETH.lower_permanent];
         const body = `
             <form id="form-odo-entry" class="form-grid">
-                <div class="form-group">
-                    <label>Diente</label>
-                    <select name="tooth_number">${allTeeth.map(t => `<option value="${t}">${t}</option>`).join('')}</select>
+                <div class="form-group form-group-full">
+                    <label>Dientes (seleccionar uno o más)</label>
+                    <div class="teeth-selector">
+                        ${allTeeth.map(t => `
+                            <label class="tooth-check">
+                                <input type="checkbox" name="teeth" value="${t}">
+                                <span>${t}</span>
+                            </label>
+                        `).join('')}
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>Cara</label>
-                     <select name="face">
-                        <option value="full">Diente completo</option>
-                        <option value="oclusal">Oclusal (O)</option>
-                        <option value="vestibular">Vestibular (V)</option>
-                        <option value="palatina">Palatina/Lingual (P/L)</option>
-                        <option value="mesial">Mesial (M)</option>
-                        <option value="distal">Distal (D)</option>
-                    </select>
+                <div class="form-group form-group-full">
+                    <label>Caras (seleccionar una o más)</label>
+                    <div class="face-checkboxes">
+                        <label class="face-check">
+                            <input type="checkbox" name="faces" value="full" checked>
+                            <span>Diente completo</span>
+                        </label>
+                        <label class="face-check">
+                            <input type="checkbox" name="faces" value="oclusal">
+                            <span>Oclusal (O)</span>
+                        </label>
+                        <label class="face-check">
+                            <input type="checkbox" name="faces" value="vestibular">
+                            <span>Vestibular (V)</span>
+                        </label>
+                        <label class="face-check">
+                            <input type="checkbox" name="faces" value="palatina">
+                            <span>Palatina/Lingual (P/L)</span>
+                        </label>
+                        <label class="face-check">
+                            <input type="checkbox" name="faces" value="mesial">
+                            <span>Mesial (M)</span>
+                        </label>
+                        <label class="face-check">
+                            <input type="checkbox" name="faces" value="distal">
+                            <span>Distal (D)</span>
+                        </label>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Símbolo</label>
@@ -573,24 +598,56 @@ const OdontogramPage = {
                     <input type="text" name="description">
                 </div>
             </form>
+            <div id="entry-preview" style="margin-top:.75rem;font-size:.8rem;color:var(--slate-500);"></div>
         `;
         UI.showModal('Registro Manual', body, `
             <button class="btn btn-secondary" onclick="UI.closeModal()">Cancelar</button>
             <button class="btn btn-primary" onclick="OdontogramPage.saveEntry()">Guardar</button>
         `);
+
+        // Live preview of how many entries will be created
+        const updatePreview = () => {
+            const teeth = document.querySelectorAll('#form-odo-entry input[name="teeth"]:checked').length;
+            const faces = document.querySelectorAll('#form-odo-entry input[name="faces"]:checked').length;
+            const total = teeth * faces;
+            const preview = document.getElementById('entry-preview');
+            if (preview) preview.textContent = total > 0 ? `Se crearán ${total} registro(s) (${teeth} diente(s) × ${faces} cara(s))` : 'Seleccioná al menos un diente y una cara';
+        };
+        document.querySelectorAll('#form-odo-entry input[type="checkbox"]').forEach(cb => cb.addEventListener('change', updatePreview));
+        updatePreview();
     },
 
     async saveEntry() {
-        const data = UI.getFormData('form-odo-entry');
-        data.patient_id = odontogramState.patientId;
-        data.tooth_number = parseInt(data.tooth_number);
-        if (data.category === 'preexisting') {
-            data.priority = null;
+        const form = document.getElementById('form-odo-entry');
+        const selectedTeeth = [...form.querySelectorAll('input[name="teeth"]:checked')].map(cb => parseInt(cb.value));
+        const selectedFaces = [...form.querySelectorAll('input[name="faces"]:checked')].map(cb => cb.value);
+        
+        if (selectedTeeth.length === 0) return UI.toast('Seleccioná al menos un diente', 'error');
+        if (selectedFaces.length === 0) return UI.toast('Seleccioná al menos una cara', 'error');
+
+        const category = form.querySelector('[name="category"]').value;
+        const baseData = {
+            patient_id: odontogramState.patientId,
+            symbol: form.querySelector('[name="symbol"]').value,
+            category: category,
+            procedure_code: form.querySelector('[name="procedure_code"]').value || null,
+            description: form.querySelector('[name="description"]').value || null,
+            priority: category === 'treatment' ? form.querySelector('[name="priority"]').value : null,
+        };
+
+        // Build bulk payload: one entry per tooth × face combination
+        const payload = [];
+        for (const tooth of selectedTeeth) {
+            for (const face of selectedFaces) {
+                payload.push({ ...baseData, tooth_number: tooth, face: face });
+            }
         }
+
         try {
-            await API.createOdontogramEntry(data);
+            await API.createOdontogramEntriesBulk(payload);
             UI.closeModal();
             this.loadEntries();
+            UI.toast(`${payload.length} registro(s) guardado(s)`, 'success');
         } catch (err) { UI.toast(err.message, 'error'); }
     }
 };
