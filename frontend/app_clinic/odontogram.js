@@ -522,10 +522,85 @@ const OdontogramPage = {
         `;
     },
 
+    renderPendingTreatments(entries) {
+        const container = document.getElementById('odo-pending-treatments');
+        if (!container) return;
+
+        // Filter for pending treatments only
+        const treatments = entries.filter(e => e.category === 'treatment');
+
+        const high = treatments.filter(e => e.priority === 'Alta');
+        const medium = treatments.filter(e => e.priority === 'Media' || (!e.priority && e.priority !== 'Baja'));
+        const low = treatments.filter(e => e.priority === 'Baja');
+
+        const renderColItems = (items) => {
+            if (items.length === 0) {
+                return `<div style="color: var(--slate-400); font-size: 0.85rem; font-style: italic; text-align: center; padding: 1rem 0;">No hay trabajos pendientes</div>`;
+            }
+            return items.map(e => {
+                const faceStr = e.face === 'full' ? 'Completa' : e.face.toUpperCase();
+                const symbolLabel = SYMBOLS.find(s => s.id === e.symbol)?.label || e.symbol;
+                return `
+                    <div style="background: white; border: 1px solid rgba(0,0,0,0.05); border-radius: var(--radius-sm); padding: 0.75rem; margin-bottom: 0.5rem; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 0.25rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                            <strong style="font-size: 0.9rem; color: var(--slate-800);">Diente ${e.tooth_number} (${faceStr})</strong>
+                            <span style="font-size: 0.75rem; color: var(--slate-500);">${new Date(e.created_at || Date.now()).toLocaleDateString('es-AR')}</span>
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--slate-600); display: flex; align-items: center; gap: 0.25rem;">
+                            <span>${symbolLabel}</span>
+                        </div>
+                        ${e.description ? `<div style="font-size: 0.8rem; color: var(--slate-500); border-top: 1px dashed var(--slate-100); padding-top: 0.25rem; margin-top: 0.25rem;">${e.description}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        };
+
+        container.innerHTML = `
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; padding: 0.5rem;">
+                <!-- Column Alta -->
+                <div style="background: #fef2f2; border: 1px solid #fee2e2; border-radius: var(--radius-md); padding: 1rem; display: flex; flex-direction: column;">
+                    <h3 style="color: #991b1b; font-size: 0.95rem; margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #fca5a5; padding-bottom: 0.5rem; font-weight: 700;">
+                        <span>🔴 Prioridad Alta</span>
+                        <span style="background: #ef4444; color: white; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: bold;">${high.length}</span>
+                    </h3>
+                    <div style="flex-grow: 1; overflow-y: auto; max-height: 350px;">
+                        ${renderColItems(high)}
+                    </div>
+                </div>
+
+                <!-- Column Media -->
+                <div style="background: #fffbeb; border: 1px solid #fef3c7; border-radius: var(--radius-md); padding: 1rem; display: flex; flex-direction: column;">
+                    <h3 style="color: #92400e; font-size: 0.95rem; margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #fcd34d; padding-bottom: 0.5rem; font-weight: 700;">
+                        <span>🟡 Prioridad Media</span>
+                        <span style="background: #f59e0b; color: white; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: bold;">${medium.length}</span>
+                    </h3>
+                    <div style="flex-grow: 1; overflow-y: auto; max-height: 350px;">
+                        ${renderColItems(medium)}
+                    </div>
+                </div>
+
+                <!-- Column Baja -->
+                <div style="background: #eff6ff; border: 1px solid #dbeafe; border-radius: var(--radius-md); padding: 1rem; display: flex; flex-direction: column;">
+                    <h3 style="color: #1e40af; font-size: 0.95rem; margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #93c5fd; padding-bottom: 0.5rem; font-weight: 700;">
+                        <span>🔵 Prioridad Baja</span>
+                        <span style="background: #3b82f6; color: white; padding: 2px 8px; border-radius: 9999px; font-size: 0.75rem; font-weight: bold;">${low.length}</span>
+                    </h3>
+                    <div style="flex-grow: 1; overflow-y: auto; max-height: 350px;">
+                        ${renderColItems(low)}
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
     clearChart() {
         document.querySelectorAll('.tooth-face').forEach(f => f.classList.remove('preexisting', 'treatment'));
         document.querySelectorAll('.tooth-overlay').forEach(o => o.textContent = '');
         document.getElementById('odo-entries-table').innerHTML = `<div class="empty-state"><div class="empty-state-text">Seleccioná un paciente</div></div>`;
+        const pendingContainer = document.getElementById('odo-pending-treatments');
+        if (pendingContainer) {
+            pendingContainer.innerHTML = `<div class="empty-state"><div class="empty-state-text">Seleccioná un paciente para ver sus trabajos pendientes</div></div>`;
+        }
     },
 
     async deleteEntry(id) {
