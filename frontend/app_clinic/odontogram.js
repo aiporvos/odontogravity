@@ -183,6 +183,19 @@ Router.register('odontogram', async (container) => {
                     </div>
                 </div>
             </div>
+
+            <!-- Pending Treatments Card (RF-003) -->
+            <div class="card" id="odo-pending-card" style="margin-top: 1.5rem;">
+                <div class="card-header">
+                    <h2>Trabajos Pendientes por Prioridad</h2>
+                </div>
+                <div id="odo-pending-treatments" class="table-container">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📋</div>
+                        <div class="empty-state-text">Seleccioná un paciente para ver sus trabajos pendientes</div>
+                    </div>
+                </div>
+            </div>
         </div>
     `;
 
@@ -378,6 +391,7 @@ const OdontogramPage = {
             odontogramState.entries = entries;
             this.renderChart(entries);
             this.renderEntriesTable(entries);
+            this.renderPendingTreatments(entries);
         } catch (err) {
             UI.toast(err.message, 'error');
         }
