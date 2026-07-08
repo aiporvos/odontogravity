@@ -50,6 +50,10 @@ Router.register('agenda', async (container) => {
                     <option value="completed">Realizado</option>
                     <option value="cancelled">Cancelado</option>
                 </select>
+                <select id="agenda-grouping">
+                    <option value="chronological">Orden Cronológico</option>
+                    <option value="priority">Agrupado por Prioridad</option>
+                </select>
             </div>
             <div id="agenda-header-info" style="margin-bottom: 1.5rem; font-weight: 700; color: var(--slate-700); text-transform: capitalize; font-size: 1.1rem;"></div>
             <div id="agenda-content" class="agenda-timeline"></div>
@@ -109,36 +113,149 @@ Router.register('agenda', async (container) => {
                 status: status,
             });
 
+            // Conflict Detection (same professional, overlapping times, active status)
+            const conflictIds = new Set();
+            const activeAppts = appointments.filter(a => a.status !== 'cancelled');
+            for (let i = 0; i < activeAppts.length; i++) {
+                const a = activeAppts[i];
+                const aStart = new Date(a.start_time).getTime();
+                const aEnd = aStart + (a.duration_minutes || 30) * 60 * 1000;
+                for (let j = i + 1; j < activeAppts.length; j++) {
+                    const b = activeAppts[j];
+                    if (a.professional_id === b.professional_id) {
+                        const bStart = new Date(b.start_time).getTime();
+                        const bEnd = bStart + (b.duration_minutes || 30) * 60 * 1000;
+                        if (aStart < bEnd && bStart < aEnd) {
+                            conflictIds.add(a.id);
+                            conflictIds.add(b.id);
+                        }
+                    }
+                }
+            }
+
+            const grouping = document.getElementById('agenda-grouping')?.value || 'chronological';
+
             if (state.view === 'day') {
                 if (appointments.length === 0) {
                     content.innerHTML = `<div class="empty-state"><div class="empty-state-text">No hay turnos hoy</div></div>`;
                     return;
                 }
-                const byHour = {};
-                appointments.sort((a,b) => new Date(a.start_time) - new Date(b.start_time)).forEach(a => {
-                    const hour = UI.formatTime(a.start_time);
-                    if (!byHour[hour]) byHour[hour] = [];
-                    byHour[hour].push(a);
-                });
-                content.innerHTML = Object.entries(byHour).map(([hour, appts]) => `
-                    <div class="agenda-slot">
-                        <div class="slot-time">${hour}</div>
-                        <div class="slot-cards">
-                            ${appts.map(a => {
-                                const icons = { pending:'⏳', confirmed:'✅', completed:'🏁', cancelled:'❌', no_show:'🚫' };
-                                return `
-                                    <div class="appointment-card status-${a.status}" onclick="AgendaPage.showAppointment('${a.id}')">
-                                        <div class="appt-name">
-                                            <span>${icons[a.status] || ''}</span>
-                                            ${a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : 'Paciente'}
-                                        </div>
-                                        <div class="appt-detail">${a.professional ? a.professional.full_name : ''} · ${a.reason || ''}</div>
-                                    </div>
-                                `;
-                            }).join('')}
+
+                // Show conflict banner if there are conflicts
+                let bannerHtml = '';
+                if (conflictIds.size > 0) {
+                    bannerHtml = `
+                        <div class="card" style="background:var(--danger-light); border-color:var(--danger); margin-bottom:1.5rem; padding: 1rem;">
+                            <div style="display:flex; gap:1rem; align-items:center;">
+                                <div style="font-size:1.5rem;">⚠️</div>
+                                <div style="font-size:.9rem; color:var(--danger-dark); font-weight: 600;">
+                                    Conflicto de Agenda: Se han detectado turnos superpuestos para el mismo profesional.
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                `).join('');
+                    `;
+                }
+
+                // Render card function helper
+                const renderCard = (a) => {
+                    const icons = { pending:'⏳', confirmed:'✅', completed:'🏁', cancelled:'❌', no_show:'🚫' };
+                    const hasConflict = conflictIds.has(a.id);
+                    const pri = a.treatment_priority || 'Baja';
+                    const priorityClass = pri === 'Alta' ? 'badge-cancelled' : (pri === 'Media' ? 'badge-pending' : 'badge-confirmed');
+                    
+                    const conflictBadge = hasConflict ? `
+                        <span class="badge badge-cancelled" style="font-weight:700; display:inline-flex; align-items:center; gap:0.25rem;">
+                            ⚠️ ¡Superposición!
+                        </span>
+                    ` : '';
+
+                    return `
+                        <div class="appointment-card status-${a.status}" 
+                             onclick="AgendaPage.showAppointment('${a.id}')"
+                             style="${hasConflict ? 'border-left-color: var(--danger); outline: 2px solid var(--danger);' : ''}">
+                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem;">
+                                <div class="appt-name" style="display:flex; align-items:center; gap:.5rem;">
+                                    <span>${icons[a.status] || ''}</span>
+                                    ${a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : 'Paciente'}
+                                </div>
+                                <div style="display:flex; gap:.35rem; align-items:center;">
+                                    ${conflictBadge}
+                                    <span class="badge ${priorityClass}" style="font-size:.7rem; font-weight:700;">
+                                        Prioridad: ${pri}
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="appt-detail" style="margin-top:.25rem;">
+                                <strong>${UI.formatTime(a.start_time)}</strong> · 
+                                ${a.professional ? a.professional.full_name : ''} · 
+                                ${a.reason || ''}
+                            </div>
+                        </div>
+                    `;
+                };
+
+                if (grouping === 'priority') {
+                    // Group by priority
+                    const groups = {
+                        'Alta': [],
+                        'Media': [],
+                        'Baja': []
+                    };
+                    appointments.forEach(a => {
+                        const pri = a.treatment_priority || 'Baja';
+                        const key = pri === 'Alta' ? 'Alta' : (pri === 'Media' ? 'Media' : 'Baja');
+                        groups[key].push(a);
+                    });
+
+                    // Sort each group chronologically
+                    Object.values(groups).forEach(g => {
+                        g.sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+                    });
+
+                    const groupConfig = [
+                        { name: 'Alta Prioridad', key: 'Alta', color: 'var(--danger)', bg: 'var(--danger-light)', text: 'var(--danger-dark)', icon: '🔴' },
+                        { name: 'Media Prioridad', key: 'Media', color: 'var(--warning)', bg: 'var(--warning-light)', text: 'var(--warning-dark)', icon: '🟡' },
+                        { name: 'Baja Prioridad', key: 'Baja', color: 'var(--primary)', bg: 'var(--primary-light)', text: 'var(--primary-dark)', icon: '🔵' }
+                    ];
+
+                    const groupsHtml = groupConfig.map(c => {
+                        const appts = groups[c.key];
+                        if (appts.length === 0) return '';
+                        return `
+                            <div style="margin-bottom: 2rem;">
+                                <div style="display:flex; align-items:center; gap:.5rem; padding:.5rem 1rem; background:${c.bg}; border-left:4px solid ${c.color}; border-radius:var(--radius); margin-bottom:1rem;">
+                                    <span style="font-size:1.2rem;">${c.icon}</span>
+                                    <h3 style="margin:0; font-size:1rem; color:${c.text}; font-weight:700;">${c.name} (${appts.length})</h3>
+                                </div>
+                                <div style="display:grid; grid-template-columns: 1fr; gap: .75rem; padding-left:.5rem;">
+                                    ${appts.map(a => renderCard(a)).join('')}
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+
+                    content.innerHTML = bannerHtml + groupsHtml;
+
+                } else {
+                    // Chronological view
+                    const byHour = {};
+                    appointments.sort((a,b) => new Date(a.start_time) - new Date(b.start_time)).forEach(a => {
+                        const hour = UI.formatTime(a.start_time);
+                        if (!byHour[hour]) byHour[hour] = [];
+                        byHour[hour].push(a);
+                    });
+
+                    const slotsHtml = Object.entries(byHour).map(([hour, appts]) => `
+                        <div class="agenda-slot">
+                            <div class="slot-time">${hour}</div>
+                            <div class="slot-cards">
+                                ${appts.map(a => renderCard(a)).join('')}
+                            </div>
+                        </div>
+                    `).join('');
+
+                    content.innerHTML = bannerHtml + slotsHtml;
+                }
             } else if (state.view === 'week') {
                 const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
                 const startDate = new Date(dateFrom.split('T')[0] + 'T12:00:00');
@@ -153,9 +270,12 @@ Router.register('agenda', async (container) => {
                             <div class="calendar-day-header ${iso === today ? 'current-day' : ''}">${days[i]} ${current.getDate()}</div>
                             ${dayAppts.map(a => {
                                 const icons = { pending:'⏳', confirmed:'✅', completed:'🏁', cancelled:'❌', no_show:'🚫' };
+                                const hasConflict = conflictIds.has(a.id);
                                 return `
-                                    <div class="mini-appt status-${a.status}" onclick="AgendaPage.showAppointment('${a.id}')">
-                                        <span>${icons[a.status] || ''}</span>
+                                    <div class="mini-appt status-${a.status}" 
+                                         onclick="AgendaPage.showAppointment('${a.id}')"
+                                         style="${hasConflict ? 'border-left: 3px solid var(--danger) !important; font-weight:700;' : ''}">
+                                        <span>${hasConflict ? '⚠️' : (icons[a.status] || '')}</span>
                                         ${UI.formatTime(a.start_time)} ${a.patient ? a.patient.last_name : ''}
                                     </div>
                                 `;
@@ -180,9 +300,12 @@ Router.register('agenda', async (container) => {
                             <div class="calendar-day-header ${iso === today ? 'current-day' : ''}">${d}</div>
                             ${dayAppts.slice(0, 4).map(a => {
                                 const icons = { pending:'⏳', confirmed:'✅', completed:'🏁', cancelled:'❌', no_show:'🚫' };
+                                const hasConflict = conflictIds.has(a.id);
                                 return `
-                                    <div class="mini-appt status-${a.status}" onclick="AgendaPage.showAppointment('${a.id}')">
-                                        <span>${icons[a.status] || ''}</span>
+                                    <div class="mini-appt status-${a.status}" 
+                                         onclick="AgendaPage.showAppointment('${a.id}')"
+                                         style="${hasConflict ? 'border-left: 3px solid var(--danger) !important; font-weight:700;' : ''}">
+                                        <span>${hasConflict ? '⚠️' : (icons[a.status] || '')}</span>
                                         ${a.patient ? a.patient.last_name : '...'}
                                     </div>
                                 `;
@@ -234,7 +357,7 @@ Router.register('agenda', async (container) => {
         loadAgenda();
     };
 
-    ['agenda-date', 'agenda-prof', 'agenda-location', 'agenda-status'].forEach(id => {
+    ['agenda-date', 'agenda-prof', 'agenda-location', 'agenda-status', 'agenda-grouping'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', (e) => {
             if (id === 'agenda-date') state.currentDate = e.target.value;
             loadAgenda();

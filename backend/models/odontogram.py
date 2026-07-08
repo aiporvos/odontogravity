@@ -47,6 +47,7 @@ class OdontogramEntry(Base):
     category: Mapped[EntryCategory] = mapped_column(SAEnum(EntryCategory), nullable=False)
     procedure_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    priority: Mapped[str | None] = mapped_column(String(20), nullable=True)
     professional_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("professionals.id"), nullable=True)
     patient_consent: Mapped[bool] = mapped_column(Boolean, default=False, comment="Conformidad del paciente")
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)

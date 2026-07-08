@@ -232,6 +232,19 @@ def create_odontogram_entry(data: OdontogramEntryCreate, db: Session = Depends(g
     return entry
 
 
+@router.post("/odontogram/bulk", response_model=list[OdontogramEntryRead], status_code=201)
+def create_odontogram_entries_bulk(data: list[OdontogramEntryCreate], db: Session = Depends(get_db)):
+    entries = []
+    for item in data:
+        entry = OdontogramEntry(**item.model_dump())
+        db.add(entry)
+        entries.append(entry)
+    db.commit()
+    for entry in entries:
+        db.refresh(entry)
+    return entries
+
+
 @router.delete("/odontogram/{entry_id}")
 def soft_delete_odontogram_entry(entry_id: UUID, db: Session = Depends(get_db)):
     e = db.query(OdontogramEntry).filter(OdontogramEntry.id == entry_id).first()

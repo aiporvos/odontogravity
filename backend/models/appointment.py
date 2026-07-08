@@ -46,3 +46,24 @@ class Appointment(Base):
     # Relationships
     patient = relationship("Patient", back_populates="appointments", lazy="selectin")
     professional = relationship("Professional", back_populates="appointments", lazy="selectin")
+
+    @property
+    def treatment_priority(self) -> str | None:
+        if not self.patient:
+            return None
+        # get all active treatment entries
+        treatments = [e for e in self.patient.odontogram_entries if e.category == "treatment" and not e.is_deleted]
+        if not treatments:
+            return None
+        # prioritize: alta > media > baja
+        priority_map = {"alta": 3, "media": 2, "baja": 1}
+        max_val = 0
+        max_pri = None
+        for t in treatments:
+            pri = t.priority
+            if pri:
+                val = priority_map.get(pri.lower(), 0)
+                if val > max_val:
+                    max_val = val
+                    max_pri = pri
+        return max_pri

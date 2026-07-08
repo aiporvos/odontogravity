@@ -162,6 +162,7 @@ class AppointmentRead(BaseModel):
     created_at: datetime
     patient: Optional[PatientRead] = None
     professional: Optional[ProfessionalRead] = None
+    treatment_priority: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -187,6 +188,7 @@ class OdontogramEntryCreate(BaseModel):
     category: EntryCategory
     procedure_code: Optional[str] = None
     description: Optional[str] = None
+    priority: Optional[str] = None
     professional_id: Optional[UUID] = None
     patient_consent: bool = False
 
@@ -200,6 +202,7 @@ class OdontogramEntryRead(BaseModel):
     category: EntryCategory
     procedure_code: Optional[str] = None
     description: Optional[str] = None
+    priority: Optional[str] = None
     professional_id: Optional[UUID] = None
     patient_consent: bool
     created_at: datetime

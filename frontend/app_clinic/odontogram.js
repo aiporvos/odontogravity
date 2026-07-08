@@ -36,6 +36,7 @@ let odontogramState = {
     selectedCategory: 'preexisting',
     entries: [],
     patients: [],
+    selectedFaces: [],
 };
 
 Router.register('odontogram', async (container) => {
@@ -77,13 +78,13 @@ Router.register('odontogram', async (container) => {
             </div>
 
             <!-- Toolbar -->
-            <div class="odontogram-toolbar">
+            <div class="odontogram-toolbar" style="flex-wrap: wrap; gap: 1rem; row-gap: 1.5rem; align-items: center;">
                 <div class="tool-group">
                     <span class="tool-group-label">Categoría:</span>
                     <button class="tool-btn tool-red active" data-category="preexisting" onclick="OdontogramPage.setCategory('preexisting', this)">🔴 Preexistente</button>
                     <button class="tool-btn tool-blue" data-category="treatment" onclick="OdontogramPage.setCategory('treatment', this)">🔵 Prestación</button>
                 </div>
-                <div class="tool-group" style="border-left:1px solid var(--slate-300);padding-left:1rem;margin-left:1rem;">
+                <div class="tool-group" style="border-left:1px solid var(--slate-300);padding-left:1rem;">
                     <span class="tool-group-label">Símbolo:</span>
                     <div style="display:flex;gap:.25rem;flex-wrap:wrap;">
                         ${SYMBOLS.map((s, i) => `
@@ -93,6 +94,32 @@ Router.register('odontogram', async (container) => {
                             </button>
                         `).join('')}
                     </div>
+                </div>
+                <div class="tool-group odo-priority-group" style="border-left:1px solid var(--slate-300);padding-left:1rem;display:none;">
+                    <span class="tool-group-label">Prioridad:</span>
+                    <select id="odo-priority" style="padding:.35rem .5rem;border:1px solid var(--slate-300);border-radius:var(--radius);font-size:.85rem;background:white;color:var(--slate-700);font-weight:600;">
+                        <option value="Baja">Baja</option>
+                        <option value="Media" selected>Media</option>
+                        <option value="Alta">Alta</option>
+                    </select>
+                </div>
+                <div class="tool-group" style="border-left:1px solid var(--slate-300);padding-left:1rem;display:flex;gap:.5rem;align-items:center;">
+                    <div style="display:flex;flex-direction:column;gap:.25rem;">
+                        <label style="font-size:.7rem;font-weight:600;color:var(--slate-500);text-transform:uppercase;">Código OS:</label>
+                        <input type="text" id="odo-code" placeholder="Código" style="width:70px;padding:.35rem;border:1px solid var(--slate-300);border-radius:var(--radius);font-size:.85rem;">
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:.25rem;">
+                        <label style="font-size:.7rem;font-weight:600;color:var(--slate-500);text-transform:uppercase;">Descripción:</label>
+                        <input type="text" id="odo-desc" placeholder="Descripción" style="width:120px;padding:.35rem;border:1px solid var(--slate-300);border-radius:var(--radius);font-size:.85rem;">
+                    </div>
+                </div>
+                <div class="tool-group" style="border-left:1px solid var(--slate-300);padding-left:1rem;display:flex;align-items:center;gap:.5rem;margin-left:auto;">
+                    <button id="odo-bulk-save" class="btn btn-primary" style="padding:.5rem 1rem;font-size:.85rem;" onclick="OdontogramPage.saveBulk()" disabled>
+                        Guardar Selección (0)
+                    </button>
+                    <button id="odo-bulk-clear" class="btn btn-secondary" style="padding:.5rem 1rem;font-size:.85rem;" onclick="OdontogramPage.clearSelection()" disabled>
+                        Limpiar
+                    </button>
                 </div>
             </div>
 
@@ -162,6 +189,7 @@ Router.register('odontogram', async (container) => {
     // Listen for patient change
     document.getElementById('odo-patient').addEventListener('change', (e) => {
         odontogramState.patientId = e.target.value || null;
+        odontogramState.selectedFaces = [];
         if (odontogramState.patientId) {
             const p = patients.find(p => p.id === odontogramState.patientId);
             document.getElementById('odo-insurance').textContent = p ? `Obra Social: ${p.insurance_name || 'Particular'}` : '';
@@ -169,6 +197,7 @@ Router.register('odontogram', async (container) => {
         } else {
             document.getElementById('odo-insurance').textContent = '';
             OdontogramPage.clearChart();
+            OdontogramPage.updateSelectionUI();
         }
     });
 
@@ -210,6 +239,79 @@ const OdontogramPage = {
         odontogramState.selectedCategory = category;
         btn.closest('.tool-group').querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        
+        const priorityGroup = document.querySelector('.odo-priority-group');
+        if (priorityGroup) {
+            priorityGroup.style.display = category === 'treatment' ? 'block' : 'none';
+        }
+    },
+
+    updateSelectionUI() {
+        document.querySelectorAll('.tooth-face').forEach(f => f.classList.remove('selected-face'));
+        document.querySelectorAll('.tooth').forEach(t => t.classList.remove('selected-tooth'));
+
+        odontogramState.selectedFaces.forEach(sf => {
+            if (sf.face === 'full') {
+                const toothEl = document.getElementById(`tooth-${sf.tooth_number}`);
+                if (toothEl) toothEl.classList.add('selected-tooth');
+            } else {
+                const faceEl = document.querySelector(`[data-tooth="${sf.tooth_number}"][data-face="${sf.face}"]`);
+                if (faceEl) faceEl.classList.add('selected-face');
+            }
+        });
+
+        const count = odontogramState.selectedFaces.length;
+        const saveBtn = document.getElementById('odo-bulk-save');
+        const clearBtn = document.getElementById('odo-bulk-clear');
+        
+        if (saveBtn) {
+            saveBtn.disabled = count === 0;
+            saveBtn.textContent = `Guardar Selección (${count})`;
+        }
+        if (clearBtn) {
+            clearBtn.disabled = count === 0;
+        }
+    },
+
+    clearSelection() {
+        odontogramState.selectedFaces = [];
+        this.updateSelectionUI();
+    },
+
+    async saveBulk() {
+        if (!odontogramState.patientId) return UI.toast('Seleccioná un paciente primero', 'error');
+        if (odontogramState.selectedFaces.length === 0) return;
+
+        const codeVal = document.getElementById('odo-code')?.value || '';
+        const descVal = document.getElementById('odo-desc')?.value || '';
+        const priorityVal = document.getElementById('odo-priority')?.value || null;
+
+        const payload = odontogramState.selectedFaces.map(sf => ({
+            patient_id: sf.patient_id,
+            tooth_number: sf.tooth_number,
+            face: sf.face,
+            symbol: sf.symbol,
+            category: sf.category,
+            procedure_code: codeVal || null,
+            description: descVal || null,
+            priority: sf.category === 'treatment' ? priorityVal : null,
+        }));
+
+        try {
+            await API.createOdontogramEntriesBulk(payload);
+            odontogramState.selectedFaces = [];
+            
+            const codeInput = document.getElementById('odo-code');
+            const descInput = document.getElementById('odo-desc');
+            if (codeInput) codeInput.value = '';
+            if (descInput) descInput.value = '';
+            
+            this.updateSelectionUI();
+            this.loadEntries();
+            UI.toast('Registros guardados con éxito', 'success');
+        } catch (err) {
+            UI.toast(err.message, 'error');
+        }
     },
 
     _clickTimer: null,
@@ -228,18 +330,24 @@ const OdontogramPage = {
         const fullToothSymbols = ['extraction', 'missing', 'crown', 'root_canal', 'bridge', 'fixed_prosthesis', 'implant', 'removable_prosthesis', 'removible', 'fracture', 'sff'];
         const effectiveFace = (fullToothSymbols.includes(tool) || face === 'full') ? 'full' : face;
 
-        this._clickTimer = setTimeout(async () => {
+        this._clickTimer = setTimeout(() => {
             this._clickTimer = null;
-            try {
-                await API.createOdontogramEntry({
+            
+            // Toggle selection
+            const index = odontogramState.selectedFaces.findIndex(sf => sf.tooth_number === toothNumber && sf.face === effectiveFace);
+            if (index > -1) {
+                odontogramState.selectedFaces.splice(index, 1);
+            } else {
+                odontogramState.selectedFaces.push({
                     patient_id: odontogramState.patientId,
                     tooth_number: toothNumber,
                     face: effectiveFace,
                     symbol: tool,
-                    category: category,
+                    category: category
                 });
-                this.loadEntries();
-            } catch (err) { UI.toast(err.message, 'error'); }
+            }
+            
+            this.updateSelectionUI();
         }, 250);
     },
 
@@ -345,6 +453,7 @@ const OdontogramPage = {
                 }
             }
         });
+        this.updateSelectionUI();
     },
 
     renderEntriesTable(entries) {
@@ -364,6 +473,7 @@ const OdontogramPage = {
                         <th>Diente</th>
                         <th>Cara</th>
                         <th>Prestación</th>
+                        <th>Prioridad</th>
                         <th>Código</th>
                         <th>Mat. Prof.</th>
                         <th></th>
@@ -379,6 +489,13 @@ const OdontogramPage = {
                             <td><strong>${e.tooth_number}</strong></td>
                             <td>${faceLabels[e.face] || e.face}</td>
                             <td>${SYMBOLS.find(s => s.id === e.symbol)?.label || e.symbol}</td>
+                            <td>
+                                ${e.category === 'treatment' ? `
+                                    <span class="badge ${e.priority === 'Alta' ? 'badge-cancelled' : (e.priority === 'Media' ? 'badge-pending' : 'badge-confirmed')}">
+                                        ${e.priority || 'Baja'}
+                                    </span>
+                                ` : '-'}
+                            </td>
                             <td>${e.procedure_code || '-'}</td>
                             <td>${e.description || '-'}</td>
                             <td style="text-align:right">
@@ -434,9 +551,17 @@ const OdontogramPage = {
                 </div>
                 <div class="form-group">
                     <label>Categoría</label>
-                    <select name="category">
+                    <select name="category" onchange="document.querySelector('.odo-manual-priority').style.display = this.value === 'treatment' ? 'block' : 'none';">
                         <option value="preexisting">🔴 Preexistente</option>
                         <option value="treatment">🔵 Prestación nueva</option>
+                    </select>
+                </div>
+                <div class="form-group odo-manual-priority" style="display:none;">
+                    <label>Prioridad</label>
+                    <select name="priority">
+                        <option value="Baja">Baja</option>
+                        <option value="Media" selected>Media</option>
+                        <option value="Alta">Alta</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -459,6 +584,9 @@ const OdontogramPage = {
         const data = UI.getFormData('form-odo-entry');
         data.patient_id = odontogramState.patientId;
         data.tooth_number = parseInt(data.tooth_number);
+        if (data.category === 'preexisting') {
+            data.priority = null;
+        }
         try {
             await API.createOdontogramEntry(data);
             UI.closeModal();

@@ -1085,6 +1085,8 @@ tbody tr:hover { background: var(--slate-50); }
 }
 .tooth:hover { background: var(--slate-100); }
 .tooth.selected { background: var(--primary-light); outline: 2px solid var(--primary); }
+.tooth.selected-tooth { background: #fff9db !important; outline: 2px solid #f59f00 !important; }
+.tooth-face.selected-face { background: #ffe066 !important; border-color: #f59f00 !important; z-index: 3; }
 
 .tooth-number {
     font-size: .7rem;
