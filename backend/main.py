@@ -26,6 +26,17 @@ logger.info("🚀 Silprodent Backend Starting...")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Run Alembic migrations programmatically
+    try:
+        from alembic.config import Config
+        from alembic import command
+        logger.info("Running database migrations (Alembic upgrade head)...")
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
+        logger.info("✅ Database migrations applied successfully.")
+    except Exception as e:
+        logger.error(f"❌ Failed to run database migrations: {e}")
+
     # Create tables on startup (in dev; Alembic for production)
     Base.metadata.create_all(bind=engine)
     
