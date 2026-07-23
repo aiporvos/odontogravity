@@ -1,4 +1,4 @@
-"""Evolution API Router - WhatsApp integration."""
+"""YCloud WhatsApp Router - WhatsApp integration."""
 import os
 import json
 import logging
@@ -12,6 +12,7 @@ from bot.ai_agent import chat
 from backend.database import get_db, SessionLocal
 from backend.models.chat_session import ChatSession, ChatMessage, ChatPlatform, MessageRole
 from backend.models.config import AppConfig
+from backend.services.whatsapp import send_whatsapp_message, normalize_to_e164
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/whatsapp", tags=["WhatsApp"])
@@ -30,8 +31,6 @@ def get_config(key: str, default: str = ""):
     finally:
         db.close()
     return os.getenv(key, default)
-
-# Config will be read at runtime in the send function
 
 def get_or_create_session(db: Session, platform_user_id: str):
     session = db.query(ChatSession).filter(
@@ -58,7 +57,7 @@ def load_history(db: Session, session_id) -> list[dict]:
     # Reverse them to be in chronological order
     subquery.reverse()
     
-    print(f"DEBUG: History for {session_id}: {len(subquery)} msgs (NEWEST FIRST FIXED)")
+    print(f"DEBUG: History for {session_id}: {len(subquery)} msgs")
     for m in subquery:
         print(f"  - {m.role.value}: {m.content[:50]}... ({m.created_at})")
         
@@ -71,48 +70,30 @@ def save_message(db: Session, session_id, role: MessageRole, content: str):
     db.commit()
     time.sleep(0.02) # Ensure next message has a different timestamp
 
-async def send_whatsapp_message(number: str, text: str):
-    """Send message back through Evolution API."""
-    url_base = get_config("EVOLUTION_API_URL", "").rstrip("/")
-    api_key = get_config("EVOLUTION_API_KEY", "")
-    instance = get_config("EVOLUTION_INSTANCE_ID", "")
-    
-    api_key_str = str(api_key or "")
-    logger.info(f"🔍 Audit Config -> URL: {url_base}, KEY: {api_key_str[:5] if api_key_str else 'EMPTY'}, INST: {instance}")
-
-    if not url_base or not api_key or not instance:
-        logger.warning(f"❌ Evolution API config missing! URL={bool(url_base)}, KEY={bool(api_key)}, INST={bool(instance)}")
-        return
-
-    url = f"{url_base}/message/sendText/{instance}"
-    headers = {
-        "apikey": api_key,
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "number": number,
-        "text": text
-    }
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            logger.info(f"📤 Enviando mensaje a WA ({number}). URL: {url}")
-            r = await client.post(url, json=payload, headers=headers)
-            logger.info(f"📥 Respuesta de Evolution API: {r.status_code} - {r.text}")
-            r.raise_for_status()
-        except Exception as e:
-            logger.error(f"❌ Error al enviar mensaje de WhatsApp: {e}")
-
 async def transcribe_audio_url(url: str) -> str:
     """Transcribe audio from URL using OpenAI Whisper."""
     openai_key = get_config("OPENAI_API_KEY")
     if not openai_key:
+        logger.warning("⚠️ OpenAI API Key missing! Cannot transcribe audio.")
         return ""
     
     async with httpx.AsyncClient() as client:
+        # Check if URL is from YCloud, requiring API key authorization
+        headers = {}
+        if "ycloud.com" in url:
+            api_key = get_config("YCLOUD_API_KEY")
+            if api_key:
+                headers["X-API-Key"] = api_key
+        
         # Download file
-        audio_resp = await client.get(url)
-        if audio_resp.status_code != 200:
+        try:
+            logger.info(f"📥 Downloading audio from {url}...")
+            audio_resp = await client.get(url, headers=headers)
+            if audio_resp.status_code != 200:
+                logger.error(f"❌ Failed to download audio: status {audio_resp.status_code}")
+                return ""
+        except Exception as e:
+            logger.error(f"❌ Exception downloading audio: {e}")
             return ""
         
         file_path = f"/tmp/wa_audio_{datetime.now().timestamp()}.ogg"
@@ -121,15 +102,18 @@ async def transcribe_audio_url(url: str) -> str:
             
         try:
             # Transcribe
-            headers = {"Authorization": f"Bearer {openai_key}"}
+            logger.info("🎙️ Sending audio file to Whisper for transcription...")
+            openai_headers = {"Authorization": f"Bearer {openai_key}"}
             with open(file_path, "rb") as f:
                 trans_files = {"file": ("audio.ogg", f, "audio/ogg"), "model": (None, "whisper-1")}
                 trans_url = "https://api.openai.com/v1/audio/transcriptions"
-                r = await client.post(trans_url, headers=headers, files=trans_files, timeout=60)
+                r = await client.post(trans_url, headers=openai_headers, files=trans_files, timeout=60)
                 r.raise_for_status()
-                return r.json()["text"]
+                transcribed_text = r.json()["text"]
+                logger.info(f"✅ Whisper transcription success: {transcribed_text[:100]}...")
+                return transcribed_text
         except Exception as e:
-            logger.error(f"WhatsApp transcription error: {e}")
+            logger.error(f"❌ WhatsApp transcription error: {e}")
             return ""
         finally:
             if os.path.exists(file_path):
@@ -137,59 +121,70 @@ async def transcribe_audio_url(url: str) -> str:
     return ""
 
 @router.post("/webhook")
-async def evolution_webhook(request: Request, background_tasks: BackgroundTasks):
-    """Evolution API Webhook handler."""
+async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
+    """YCloud WhatsApp Webhook handler."""
     try:
         payload = await request.json()
-        logger.info(f"📩 Webhook de Evolution recibido: {json.dumps(payload, indent=2)}")
-        print(f"DEBUG: Webhook WA recibido: {payload.get('event')}")
+        logger.info(f"📩 Webhook de YCloud recibido: {json.dumps(payload, indent=2)}")
     except Exception:
         logger.error("❌ Error al parsear JSON del webhook")
-        print("DEBUG: Error al parsear JSON")
         return {"status": "error", "message": "Invalid JSON"}
 
-    event = payload.get("event")
-    if event != "messages.upsert":
-        logger.info(f"⏭️ Evento ignorado: {event}")
+    event_type = payload.get("type")
+    if event_type != "whatsapp.inbound_message.received":
+        logger.info(f"⏭️ Evento ignorado (no es inbound message): {event_type}")
         return {"status": "ignored"}
 
-    data = payload.get("data", {})
-    message = data.get("message", {})
-    key = data.get("key", {})
+    msg_data = payload.get("whatsappInboundMessage", {})
+    if not msg_data:
+        logger.warning("⚠️ No se encontró whatsappInboundMessage en el payload")
+        return {"status": "ignored_no_message_data"}
+
+    from_number = msg_data.get("from")
+    to_number = msg_data.get("to")
     
-    if key.get("fromMe"):
-        logger.info("⏭️ Mensaje propio (ignorado)")
+    if not from_number:
+        logger.warning("⚠️ Mensaje sin número de origen ('from')")
+        return {"status": "ignored_no_sender"}
+
+    # Evitar bucles: Ignorar si el mensaje proviene de nuestro propio número
+    from_phone_norm = normalize_to_e164(get_config("YCLOUD_FROM_PHONE"))
+    if from_phone_norm and normalize_to_e164(from_number) == from_phone_norm:
+        logger.info("⏭️ Mensaje enviado por nosotros mismos (ignorado)")
         return {"status": "ignored_self"}
 
-    remote_jid = key.get("remoteJid")
-    if not remote_jid or ("@s.whatsapp.net" not in remote_jid and "@lid" not in remote_jid):
-        logger.info(f"⏭️ JID ignorado (no es chat privado): {remote_jid}")
-        print(f"DEBUG: JID ignorado: {remote_jid}")
-        return {"status": "ignored_non_private"}
+    # Formato JID para compatibilidad hacia atrás en la base de datos (ej: 549341xxxxxxx@s.whatsapp.net)
+    clean_from = "".join(filter(str.isdigit, from_number))
+    remote_jid = f"{clean_from}@s.whatsapp.net"
 
     text = ""
-    message_type = data.get("messageType")
-    
+    message_type = msg_data.get("type")
     logger.info(f"📝 Tipo de mensaje: {message_type} de {remote_jid}")
 
-    if message_type == "conversation":
-        text = message.get("conversation")
-    elif message_type == "extendedTextMessage":
-        text = message.get("extendedTextMessage", {}).get("text")
-    elif message_type == "audioMessage":
-        audio_url = message.get("audioMessage", {}).get("url")
+    if message_type == "text":
+        text = msg_data.get("text", {}).get("body", "")
+    elif message_type == "audio":
+        audio_url = msg_data.get("audio", {}).get("link")
         if audio_url:
             logger.info("🎙️ Procesando mensaje de audio...")
             background_tasks.add_task(handle_audio_message, remote_jid, audio_url)
             return {"status": "processing_audio"}
-    
+    elif message_type == "interactive":
+        # Manejar respuestas interactivas de botones o listas
+        interactive = msg_data.get("interactive", {})
+        interactive_type = interactive.get("type")
+        if interactive_type == "button_reply":
+            text = interactive.get("button_reply", {}).get("title", "")
+        elif interactive_type == "list_reply":
+            text = interactive.get("list_reply", {}).get("title", "")
+
     if text:
         logger.info(f"🤖 Procesando texto: {text}")
         background_tasks.add_task(handle_text_message, remote_jid, text)
         return {"status": "processing_text"}
 
-    logger.warning("⚠️ Mensaje sin contenido de texto o audio")
-    return {"status": "ignored_empty"}
+    logger.warning("⚠️ Mensaje sin contenido de texto, interactivo o audio soportado")
+    return {"status": "ignored_unsupported_type"}
 
 async def handle_text_message(remote_jid: str, text: str):
     # Acquire lock for this user

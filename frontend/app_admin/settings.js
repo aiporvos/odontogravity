@@ -153,6 +153,22 @@ Router.register('settings', async (container) => {
                     </div>
 
                     <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
+                        <h4 style="margin-bottom:.8rem;">📱 WhatsApp (YCloud API)</h4>
+                        <p style="font-size:0.85rem; color:var(--slate-500); margin-bottom:1rem;">
+                            Configuración para enviar y recibir mensajes de WhatsApp a través de YCloud. Obtené tu API Key desde el <a href="https://dashboard.ycloud.com" target="_blank">panel de YCloud</a>.
+                        </p>
+                        <div class="form-group">
+                            <label>YCloud API Key</label>
+                            <input type="password" name="YCLOUD_API_KEY" value="${getConfig('YCLOUD_API_KEY')}" placeholder="Tu API Key de YCloud">
+                        </div>
+                        <div class="form-group">
+                            <label>Número de WhatsApp (con código de país)</label>
+                            <input type="text" name="YCLOUD_FROM_PHONE" value="${getConfig('YCLOUD_FROM_PHONE')}" placeholder="Ej: 549341xxxxxxx">
+                            <small>El número registrado en YCloud, sin el +. Ejemplo: 549341xxxxxxx</small>
+                        </div>
+                    </div>
+
+                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
                         <h4 style="margin-bottom:.8rem;">Configuración de Recordatorios (WhatsApp)</h4>
                         <div class="form-group">
                             <label>Números para Notificar Cancelaciones</label>

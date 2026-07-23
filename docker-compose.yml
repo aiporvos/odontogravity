@@ -44,6 +44,8 @@ services:
       EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
       EVOLUTION_INSTANCE_ID: ${EVOLUTION_INSTANCE_ID:-}
+      YCLOUD_API_KEY: ${YCLOUD_API_KEY:-}
+      YCLOUD_FROM_PHONE: ${YCLOUD_FROM_PHONE:-}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"

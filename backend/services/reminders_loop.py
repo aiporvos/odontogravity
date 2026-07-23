@@ -17,42 +17,7 @@ def get_config(db: Session, key: str, default: str = ""):
         return conf.value
     return os.getenv(key, default)
 
-async def send_whatsapp_message(number: str, text: str):
-    db = SessionLocal()
-    try:
-        url_base = get_config(db, "EVOLUTION_API_URL", "").rstrip("/")
-        api_key = get_config(db, "EVOLUTION_API_KEY", "")
-        instance = get_config(db, "EVOLUTION_INSTANCE_ID", "")
-    finally:
-        db.close()
-
-    if not url_base or not api_key or not instance:
-        logger.warning("Missing Evolution API config for reminders.")
-        return
-
-    url = f"{url_base}/message/sendText/{instance}"
-    headers = {
-        "apikey": api_key,
-        "Content-Type": "application/json"
-    }
-    
-    # Just ensure it's a valid remoteJid for WA
-    if not number.endswith("@s.whatsapp.net"):
-        # Super basic Argentinian number normalization
-        clean_num = "".join(filter(str.isdigit, number))
-        if clean_num.startswith("0"):
-            clean_num = clean_num[1:]
-        if not clean_num.startswith("54"):
-            clean_num = "549" + clean_num
-        number = f"{clean_num}@s.whatsapp.net"
-        
-    payload = {"number": number, "text": text}
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            await client.post(url, json=payload, headers=headers)
-        except Exception as e:
-            logger.error(f"Error sending WA reminder: {e}")
+from backend.services.whatsapp import send_whatsapp_message
 
 async def notify_admins(db: Session, text: str):
     admin_numbers = get_config(db, "ADMIN_NOTIFY_NUMBERS", "")

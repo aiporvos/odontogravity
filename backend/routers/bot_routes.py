@@ -50,7 +50,7 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
 
 # ── Cancelar Turno ─────────────────────────────────────
 @router.post("/cancel", dependencies=[Depends(verify_bot_key)])
-def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)):
+async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)):
     patient = db.query(Patient).filter(Patient.dni == data.dni, Patient.is_deleted == False).first()
     if not patient:
         raise HTTPException(404, "Paciente no encontrado")
@@ -79,8 +79,8 @@ def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)
 
     # Notificar a los admins (cada número por separado para que un fallo no bloquee al resto)
     from backend.models.config import AppConfig
+    from backend.services.whatsapp import send_whatsapp_message
     import os
-    import httpx as _httpx
 
     def get_val(key):
         conf = db.query(AppConfig).filter(AppConfig.key == key).first()
@@ -88,31 +88,19 @@ def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)
 
     admin_numbers = get_val("ADMIN_NOTIFY_NUMBERS")
     if admin_numbers:
-        evo_url = get_val("EVOLUTION_API_URL").rstrip("/")
-        evo_key = get_val("EVOLUTION_API_KEY")
-        evo_instance = get_val("EVOLUTION_INSTANCE_ID")
-
-        if evo_url and evo_key and evo_instance:
-            numbers = [n.strip() for n in admin_numbers.split(",") if n.strip()]
-            msg_text = (
-                f"⚠️ Turno Cancelado por Bot:\n"
-                f"Paciente: {patient.first_name} {patient.last_name} ({patient.dni})\n"
-                f"Fecha original: {appt.start_time.strftime('%Y-%m-%d %H:%M')}\n"
-                f"Sede: {appt.location}"
-            )
-            for number in numbers:
-                try:
-                    payload = {"number": number, "text": msg_text}
-                    headers = {"apikey": evo_key, "Content-Type": "application/json"}
-                    _httpx.post(
-                        f"{evo_url}/message/sendText/{evo_instance}",
-                        json=payload,
-                        headers=headers,
-                        timeout=5,
-                    )
-                    print(f"Admin notificado de cancelación: {number}")
-                except Exception as e:
-                    print(f"Error notifying admin {number} of cancellation: {e}")
+        numbers = [n.strip() for n in admin_numbers.split(",") if n.strip()]
+        msg_text = (
+            f"⚠️ Turno Cancelado por Bot:\n"
+            f"Paciente: {patient.first_name} {patient.last_name} ({patient.dni})\n"
+            f"Fecha original: {appt.start_time.strftime('%Y-%m-%d %H:%M')}\n"
+            f"Sede: {appt.location}"
+        )
+        for number in numbers:
+            try:
+                await send_whatsapp_message(number, msg_text)
+                print(f"Admin notificado de cancelación: {number}")
+            except Exception as e:
+                print(f"Error notifying admin {number} of cancellation: {e}")
 
     return {"status": "ok", "message": "Turno cancelado exitosamente", "appointment_id": str(appt.id)}
 
