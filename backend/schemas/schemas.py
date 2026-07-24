@@ -158,6 +158,7 @@ class AppointmentRead(BaseModel):
     status: AppointmentStatus
     channel: AppointmentChannel
     location: Optional[str] = None
+    insurance_name: Optional[str] = None
     notes: Optional[str] = None
     created_at: datetime
     patient: Optional[PatientRead] = None

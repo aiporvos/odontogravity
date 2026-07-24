@@ -100,6 +100,22 @@ def create_appointment_logic(
         db.add(patient)
         db.commit()
         db.refresh(patient)
+    else:
+        # Paciente existente: refrescar con los datos obligatorios que tomó el
+        # bot. Teléfono y obra social se actualizan siempre (el último dato es
+        # el más vigente). Nombre/Apellido solo si están vacíos, para no pisar
+        # correcciones hechas desde el panel por recepción.
+        new_phone = requester_phone or phone
+        if new_phone:
+            patient.phone = new_phone
+        if insurance_name:
+            patient.insurance_name = insurance_name
+        if patient_name and not (patient.first_name or "").strip():
+            patient.first_name = patient_name
+        if patient_last_name and not (patient.last_name or "").strip():
+            patient.last_name = patient_last_name
+        db.commit()
+        db.refresh(patient)
 
     # Route professional
     prof = route_professional(reason, db)
@@ -121,6 +137,7 @@ def create_appointment_logic(
         duration_minutes=duration_minutes if duration_minutes else 30,
         reason=reason,
         location=location,
+        insurance_name=insurance_name,
         channel=channel,
         status=AppointmentStatus.confirmed,
     )

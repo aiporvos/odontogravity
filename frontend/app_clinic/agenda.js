@@ -427,6 +427,9 @@ const AgendaPage = {
             UI.showModal('Detalle del Turno', `
                 <div class="form-grid">
                     <div class="form-group"><label>Paciente</label><p><strong>${a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : '-'}</strong></p></div>
+                    <div class="form-group"><label>DNI</label><p>${a.patient && a.patient.dni ? a.patient.dni : '-'}</p></div>
+                    <div class="form-group"><label>Teléfono</label><p>${a.patient && a.patient.phone ? a.patient.phone : '-'}</p></div>
+                    <div class="form-group"><label>Obra Social</label><p>${a.insurance_name || (a.patient && a.patient.insurance_name) || 'Particular'}</p></div>
                     <div class="form-group"><label>Profesional</label><p>${a.professional ? a.professional.full_name : '-'}</p></div>
                     <div class="form-group"><label>Fecha/Hora</label><p>${UI.formatDateTime(a.start_time)}</p></div>
                     <div class="form-group"><label>Motivo</label><p>${a.reason || '-'}</p></div>

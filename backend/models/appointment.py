@@ -31,6 +31,10 @@ class Appointment(Base):
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=30)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Cobertura (obra social o "Particular") usada para ESTE turno. Es un
+    # snapshot: el paciente puede cambiar de obra social entre turnos, así que
+    # se guarda por turno además de en la ficha del paciente.
+    insurance_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     status: Mapped[AppointmentStatus] = mapped_column(
         SAEnum(AppointmentStatus), default=AppointmentStatus.pending, nullable=False
     )
