@@ -260,16 +260,17 @@ const OdontogramPage = {
     },
 
     updateSelectionUI() {
-        document.querySelectorAll('.tooth-face').forEach(f => f.classList.remove('selected-face'));
-        document.querySelectorAll('.tooth').forEach(t => t.classList.remove('selected-tooth'));
+        document.querySelectorAll('.tooth-face').forEach(f => f.classList.remove('selected-face', 'selected-face-preexisting', 'selected-face-treatment'));
+        document.querySelectorAll('.tooth').forEach(t => t.classList.remove('selected-tooth', 'selected-tooth-preexisting', 'selected-tooth-treatment'));
 
         odontogramState.selectedFaces.forEach(sf => {
+            const isPre = sf.category === 'preexisting';
             if (sf.face === 'full') {
                 const toothEl = document.getElementById(`tooth-${sf.tooth_number}`);
-                if (toothEl) toothEl.classList.add('selected-tooth');
+                if (toothEl) toothEl.classList.add(isPre ? 'selected-tooth-preexisting' : 'selected-tooth-treatment');
             } else {
                 const faceEl = document.querySelector(`[data-tooth="${sf.tooth_number}"][data-face="${sf.face}"]`);
-                if (faceEl) faceEl.classList.add('selected-face');
+                if (faceEl) faceEl.classList.add(isPre ? 'selected-face-preexisting' : 'selected-face-treatment');
             }
         });
 
