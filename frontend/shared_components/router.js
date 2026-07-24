@@ -45,6 +45,14 @@ const Router = {
         window.location.hash = page;
     },
 
+    async reload() {
+        if (this.currentPage) {
+            const page = this.currentPage;
+            this.currentPage = null;
+            await this.navigate(page);
+        }
+    },
+
     getPageFromHash() {
         const hash = window.location.hash.replace('#', '');
         return hash || 'dashboard';

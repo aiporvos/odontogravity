@@ -244,7 +244,7 @@ window.SettingsPage = {
                 await API.createLocation(data);
                 UI.toast('Sede creada');
                 UI.closeModal();
-                Router.load('settings');
+                Router.reload();
             } catch (err) { UI.toast(err.message, 'error'); }
         };
     },
@@ -253,7 +253,7 @@ window.SettingsPage = {
         if (await UI.confirm('¿Seguro quieres eliminar esta sede?')) {
             try {
                 await API.deleteLocation(id);
-                Router.load('settings');
+                Router.reload();
             } catch (err) { UI.toast(err.message, 'error'); }
         }
     },
@@ -301,7 +301,7 @@ window.SettingsPage = {
                     UI.toast('Obra social creada');
                 }
                 UI.closeModal();
-                Router.load('settings');
+                Router.reload();
             } catch (err) { UI.toast(err.message, 'error'); }
         };
     },
@@ -310,7 +310,7 @@ window.SettingsPage = {
         if (await UI.confirm('¿Eliminar esta obra social?')) {
             try {
                 await API.deleteInsurance(id);
-                Router.load('settings');
+                Router.reload();
             } catch (err) { UI.toast(err.message, 'error'); }
         }
     }
