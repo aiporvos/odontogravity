@@ -1,11 +1,27 @@
 """DentiBot tools - communicate with the backend API."""
 import os
+import contextvars
 import httpx
 from langchain_core.tools import tool
 
 API_BASE = os.getenv("API_BASE_URL", "http://backend:8000")
 BOT_KEY = os.getenv("BOT_API_KEY", "dev-bot-key-change-in-prod")
 HEADERS = {"x-bot-key": BOT_KEY, "Content-Type": "application/json"}
+
+# Identidad de la conversación actual (número de WhatsApp real del remitente).
+# Lo setea chat() antes de invocar al agente; las tools lo leen para que el
+# backend pueda verificar que el DNI pertenece a quien escribe. En Telegram
+# (que no tiene teléfono) queda None y no se aplica ninguna verificación.
+_requester_phone: contextvars.ContextVar = contextvars.ContextVar("requester_phone", default=None)
+
+
+def set_requester_phone(phone):
+    """Registra el teléfono de quien envía el mensaje para la conversación actual."""
+    _requester_phone.set(phone or None)
+
+
+def _current_requester_phone():
+    return _requester_phone.get()
 
 
 @tool
@@ -41,7 +57,8 @@ def agendar_turno(
         "location": location,
         "insurance_name": insurance_name,
         "preferred_date": preferred_date,
-        "duration_minutes": duration_minutes
+        "duration_minutes": duration_minutes,
+        "requester_phone": _current_requester_phone(),
     }
     try:
         r = httpx.post(f"{API_BASE}/api/bot/appointments", json=payload, headers=HEADERS, timeout=30)
@@ -60,7 +77,7 @@ def cancelar_turno(dni: str, appointment_id: str = "") -> str:
         dni: DNI del paciente.
         appointment_id: ID del turno a cancelar (opcional, cancela el próximo si no se indica).
     """
-    payload = {"dni": dni}
+    payload = {"dni": dni, "requester_phone": _current_requester_phone()}
     if appointment_id:
         payload["appointment_id"] = appointment_id
     try:
@@ -81,7 +98,12 @@ def reprogramar_turno(dni: str, appointment_id: str, new_datetime: str) -> str:
         appointment_id: ID del turno a reprogramar.
         new_datetime: Nueva fecha y hora en formato ISO (ej: 2024-03-25T10:00:00).
     """
-    payload = {"dni": dni, "appointment_id": appointment_id, "new_start_time": new_datetime}
+    payload = {
+        "dni": dni,
+        "appointment_id": appointment_id,
+        "new_start_time": new_datetime,
+        "requester_phone": _current_requester_phone(),
+    }
     try:
         r = httpx.post(f"{API_BASE}/api/bot/reschedule", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
@@ -99,7 +121,8 @@ def consultar_mis_turnos(dni: str) -> str:
         dni: DNI del paciente.
     """
     try:
-        r = httpx.post(f"{API_BASE}/api/bot/my-appointments", json={"dni": dni}, headers=HEADERS, timeout=30)
+        payload = {"dni": dni, "requester_phone": _current_requester_phone()}
+        r = httpx.post(f"{API_BASE}/api/bot/my-appointments", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
         data = r.json()
         if not data["appointments"]:

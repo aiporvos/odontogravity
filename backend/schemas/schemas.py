@@ -284,21 +284,27 @@ class BotAppointmentRequest(BaseModel):
     location: Optional[str] = "San Rafael"
     preferred_date: Optional[str] = None
     duration_minutes: int = 30
+    # Número de WhatsApp real de la conversación (lo agrega el bot, no el paciente).
+    # Se usa como identidad para verificar la propiedad de los turnos.
+    requester_phone: Optional[str] = None
 
 
 class BotCancelRequest(BaseModel):
     dni: str
     appointment_id: Optional[UUID] = None
+    requester_phone: Optional[str] = None
 
 
 class BotRescheduleRequest(BaseModel):
     dni: str
     appointment_id: UUID
     new_start_time: datetime
+    requester_phone: Optional[str] = None
 
 
 class BotQueryRequest(BaseModel):
     dni: str
+    requester_phone: Optional[str] = None
 
 class BotAvailabilityRequest(BaseModel):
     reason: str

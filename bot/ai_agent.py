@@ -146,9 +146,18 @@ def get_agent(provider: str) -> AgentExecutor | None:
     return build_agent(provider)
 
 
-def chat(user_message: str, history: list[dict] | None = None) -> str:
-    """Process a user message and return agent response."""
+def chat(user_message: str, history: list[dict] | None = None, requester_phone: str | None = None) -> str:
+    """Process a user message and return agent response.
+
+    requester_phone: número real del canal (ej. WhatsApp) de quien escribe.
+    Se registra para que las tools lo envíen al backend y este verifique que
+    el DNI pertenece a ese número. En Telegram queda None (sin verificación).
+    """
     print(f"DEBUG: AI_AGENT_IN -> Msg: '{user_message}', HistLen: {len(history) if history else 0}")
+
+    # Registrar la identidad de la conversación para las tools (mismo thread).
+    from bot.tools.appointment_tools import set_requester_phone
+    set_requester_phone(requester_phone)
 
     provider_1 = get_config("AI_PROVIDER", "openai").lower()
     provider_2 = get_config("AI_PROVIDER_2", "none").lower()

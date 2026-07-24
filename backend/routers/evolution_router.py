@@ -217,9 +217,12 @@ async def handle_text_message(remote_jid: str, text: str):
                 return
             
             logger.info(f"🧠 Consultando a la IA para {remote_jid}...")
+            # Identidad de la conversación: número real de WhatsApp del remitente.
+            # Sirve para que el backend verifique que el DNI pertenece a quien escribe.
+            requester_phone = normalize_to_e164(remote_jid)
             # chat is sync, run in executor to not block event loop
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, chat, text, history)
+            response = await loop.run_in_executor(None, chat, text, history, requester_phone)
             logger.info(f"🤖 IA respondió: {response[:50]}...")
             
             save_message(db, session.id, MessageRole.assistant, response)

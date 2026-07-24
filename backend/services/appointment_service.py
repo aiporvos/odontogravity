@@ -80,16 +80,21 @@ def create_appointment_logic(
     insurance_name: str = None,
     preferred_date: str = None,
     channel: AppointmentChannel = AppointmentChannel.bot_whatsapp,
-    duration_minutes: int = 30
+    duration_minutes: int = 30,
+    requester_phone: str = None,
 ):
     # Find or create patient
     patient = db.query(Patient).filter(Patient.dni == dni, Patient.is_deleted == False).first()
     if not patient:
+        # Para pacientes nuevos preferimos el número real del canal (WhatsApp)
+        # como teléfono: es la identidad verificada que luego usamos para
+        # comprobar la propiedad de los turnos. Si no lo hay (ej. Telegram),
+        # usamos el teléfono que declaró el paciente.
         patient = Patient(
             first_name=patient_name,
             last_name=patient_last_name,
             dni=dni,
-            phone=phone,
+            phone=requester_phone or phone,
             insurance_name=insurance_name,
         )
         db.add(patient)

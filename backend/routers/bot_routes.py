@@ -37,6 +37,41 @@ def verify_bot_key(x_bot_key: str = Header(...)):
         raise HTTPException(403, "Bot API key inválida")
 
 
+def _phones_match(stored: str | None, requester: str | None) -> bool:
+    """Compara dos teléfonos tolerando distintos formatos argentinos.
+
+    Devuelve True si coinciden por E.164 normalizado o por los últimos 8
+    dígitos (cubre variantes como 549341..., 0341..., 341..., +54...).
+    """
+    from backend.services.whatsapp import normalize_to_e164
+
+    if not stored or not requester:
+        return False
+    if normalize_to_e164(stored) == normalize_to_e164(requester):
+        return True
+    d_stored = "".join(filter(str.isdigit, stored))
+    d_req = "".join(filter(str.isdigit, requester))
+    return bool(d_stored) and bool(d_req) and d_stored[-8:] == d_req[-8:]
+
+
+# Mensaje uniforme cuando el DNI consultado no pertenece a quien escribe.
+# No revela si el DNI existe o no, para no filtrar datos.
+_OWNERSHIP_ERROR = (
+    "Por tu seguridad no puedo gestionar turnos de ese DNI desde este número. "
+    "Si es un error, comunicate con la clínica."
+)
+
+
+def _ensure_owns_dni(patient, requester_phone: str | None):
+    """Si hay una identidad de canal (WhatsApp), exige que el DNI le pertenezca.
+
+    Si no hay requester_phone (ej. Telegram, que no tiene teléfono), no se
+    aplica verificación y se mantiene el comportamiento anterior.
+    """
+    if requester_phone and not _phones_match(getattr(patient, "phone", None), requester_phone):
+        raise HTTPException(403, _OWNERSHIP_ERROR)
+
+
 
 # ── Agendar Turno ──────────────────────────────────────
 @router.post("/appointments", dependencies=[Depends(verify_bot_key)])
@@ -52,7 +87,8 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
         insurance_name=data.insurance_name,
         preferred_date=data.preferred_date,
         duration_minutes=data.duration_minutes,
-        channel=AppointmentChannel.bot_whatsapp
+        channel=AppointmentChannel.bot_whatsapp,
+        requester_phone=data.requester_phone,
     )
     if "error" in result:
         raise HTTPException(404, result["error"])
@@ -65,6 +101,8 @@ async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(g
     patient = db.query(Patient).filter(Patient.dni == data.dni, Patient.is_deleted == False).first()
     if not patient:
         raise HTTPException(404, "Paciente no encontrado")
+
+    _ensure_owns_dni(patient, data.requester_phone)
 
     query = db.query(Appointment).filter(
         Appointment.patient_id == patient.id,
@@ -123,6 +161,8 @@ def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends
     if not patient:
         raise HTTPException(404, "Paciente no encontrado")
 
+    _ensure_owns_dni(patient, data.requester_phone)
+
     appt = db.query(Appointment).filter(
         Appointment.id == data.appointment_id,
         Appointment.patient_id == patient.id,
@@ -143,6 +183,8 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
     patient = db.query(Patient).filter(Patient.dni == data.dni, Patient.is_deleted == False).first()
     if not patient:
         raise HTTPException(404, "Paciente no encontrado con ese DNI")
+
+    _ensure_owns_dni(patient, data.requester_phone)
 
     appts = db.query(Appointment).filter(
         Appointment.patient_id == patient.id,
