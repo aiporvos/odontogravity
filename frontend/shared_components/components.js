@@ -34,9 +34,12 @@ const UI = {
     },
 
     // ── Confirm ────────────────────────────────────────
-    confirm(title, message) {
+    confirm(title, message = '') {
         return new Promise((resolve) => {
-            const body = `<p style="color:var(--slate-600);font-size:.95rem;">${message}</p>`;
+            // Si no se pasa mensaje, no renderizamos el párrafo (evita mostrar "undefined").
+            const body = message
+                ? `<p style="color:var(--slate-600);font-size:.95rem;">${message}</p>`
+                : '';
             const footer = `
                 <button class="btn btn-secondary" onclick="UI.closeModal(); window._confirmResolve(false)">Cancelar</button>
                 <button class="btn btn-danger" onclick="UI.closeModal(); window._confirmResolve(true)">Confirmar</button>
