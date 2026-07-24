@@ -206,6 +206,10 @@ async def handle_text_message(remote_jid: str, text: str):
             
             save_message(db, session.id, MessageRole.user, text)
             
+            if get_config("BOT_IS_ACTIVE", "true") == "false":
+                logger.info(f"⏸️ Bot pausado. Mensaje de {remote_jid} guardado, pero no se responde.")
+                return
+            
             logger.info(f"🧠 Consultando a la IA para {remote_jid}...")
             # chat is sync, run in executor to not block event loop
             loop = asyncio.get_event_loop()

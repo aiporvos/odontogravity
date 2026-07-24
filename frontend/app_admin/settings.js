@@ -153,10 +153,19 @@ Router.register('settings', async (container) => {
                     </div>
 
                     <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
-                        <h4 style="margin-bottom:.8rem;">📱 WhatsApp (YCloud API)</h4>
+                        <h4 style="margin-bottom:.8rem;">📱 WhatsApp (YCloud API) & Bot</h4>
                         <p style="font-size:0.85rem; color:var(--slate-500); margin-bottom:1rem;">
                             Configuración para enviar y recibir mensajes de WhatsApp a través de YCloud. Obtené tu API Key desde el <a href="https://dashboard.ycloud.com" target="_blank">panel de YCloud</a>.
                         </p>
+                        
+                        <div class="form-group" style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem; padding: 1rem; background: var(--bg-surface); border: 2px solid var(--border-color); box-shadow: var(--shadow-sm); border-radius: var(--radius-md);">
+                            <label style="margin: 0; font-weight: 700;">🤖 Estado del Bot (IA)</label>
+                            <select name="BOT_IS_ACTIVE" class="form-control" style="width: auto; margin: 0; cursor: pointer; border: 2px solid var(--border-color);">
+                                <option value="true" ${getConfig('BOT_IS_ACTIVE') !== 'false' ? 'selected' : ''}>✅ Activo (Responde Automáticamente)</option>
+                                <option value="false" ${getConfig('BOT_IS_ACTIVE') === 'false' ? 'selected' : ''}>⏸️ Pausado (Apagado)</option>
+                            </select>
+                        </div>
+
                         <div class="form-group">
                             <label>YCloud API Key</label>
                             <input type="password" name="YCLOUD_API_KEY" value="${getConfig('YCLOUD_API_KEY')}" placeholder="Tu API Key de YCloud">
