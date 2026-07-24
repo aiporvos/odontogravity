@@ -56,8 +56,8 @@
     --info: var(--sky);
 
     /* Odontogram Colors */
-    --odo-preexisting: var(--crimson);
-    --odo-treatment: var(--sky);
+    --odo-preexisting: var(--sky);
+    --odo-treatment: var(--crimson);
 
     /* Layout */
     --sidebar-width: 260px;
@@ -1178,11 +1178,11 @@ tbody tr:hover { background: var(--bg-inset); }
 }
 .tooth:hover { background: var(--slate-100); }
 .tooth.selected { background: var(--primary-light); outline: 2px solid var(--primary); }
-.tooth.selected-tooth-treatment { background: #eff6ff !important; outline: 2px solid var(--primary) !important; }
-.tooth.selected-tooth-preexisting { background: #fef2f2 !important; outline: 2px solid var(--odo-preexisting) !important; }
+.tooth.selected-tooth-treatment { background: #fef2f2 !important; outline: 2px solid var(--odo-treatment) !important; }
+.tooth.selected-tooth-preexisting { background: #eff6ff !important; outline: 2px solid var(--odo-preexisting) !important; }
 
-.tooth-face.selected-face-treatment { background: #93c5fd !important; border-color: var(--primary) !important; z-index: 3; }
-.tooth-face.selected-face-preexisting { background: #fca5a5 !important; border-color: var(--odo-preexisting) !important; z-index: 3; }
+.tooth-face.selected-face-treatment { background: #fca5a5 !important; border-color: var(--odo-treatment) !important; z-index: 3; }
+.tooth-face.selected-face-preexisting { background: #93c5fd !important; border-color: var(--odo-preexisting) !important; z-index: 3; }
 
 .tooth-number {
     font-size: .7rem;
@@ -1270,8 +1270,8 @@ tbody tr:hover { background: var(--bg-inset); }
 .preexisting { color: var(--odo-preexisting) !important; }
 .treatment { color: var(--odo-treatment) !important; }
 
-.tooth-face.fill-red { background: var(--odo-preexisting) !important; border-color: var(--odo-preexisting); }
-.tooth-face.fill-blue { background: var(--odo-treatment) !important; border-color: var(--odo-treatment); }
+.tooth-face.fill-preexisting { background: var(--odo-preexisting) !important; border-color: var(--odo-preexisting); }
+.tooth-face.fill-treatment { background: var(--odo-treatment) !important; border-color: var(--odo-treatment); }
 
 /* Common Buttons */
 .btn:disabled { opacity: .5; cursor: not-allowed; }

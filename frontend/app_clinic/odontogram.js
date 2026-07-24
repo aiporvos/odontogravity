@@ -5,7 +5,7 @@
  * Layout:  Superior (Derecha: 18-11 | Izquierda: 21-28)
  *          Inferior (Derecha: 48-41 | Izquierda: 31-38)
  * 
- * Colores: ROJO = preexistente  |  AZUL = prestación nueva
+ * Colores: AZUL = preexistente  |  ROJO = prestación nueva
  * Símbolos: X = extracción, O = caries, Corona, Prótesis fija/removible
  */
 
@@ -17,8 +17,8 @@ const TEETH = {
 };
 
 const SYMBOLS = [
-    { id: 'cavity', label: 'Caries (O)', icon: '🔴' },
-    { id: 'filling', label: 'Obturación', icon: '🔵' },
+    { id: 'cavity', label: 'Caries (O)', icon: '🔴' }, // treatment (red)
+    { id: 'filling', label: 'Obturación', icon: '🔵' }, // preexisting (blue)
     { id: 'extraction', label: 'Extracción (X)', icon: '❌' },
     { id: 'missing', label: 'Ausente', icon: '🕳️' },
     { id: 'crown', label: 'Corona', icon: '⭕' },
@@ -81,8 +81,8 @@ Router.register('odontogram', async (container) => {
             <div class="odontogram-toolbar" style="flex-wrap: wrap; gap: 1rem; row-gap: 1.5rem; align-items: center;">
                 <div class="tool-group">
                     <span class="tool-group-label">Categoría:</span>
-                    <button class="tool-btn tool-red active" data-category="preexisting" onclick="OdontogramPage.setCategory('preexisting', this)">🔴 Preexistente</button>
-                    <button class="tool-btn tool-blue" data-category="treatment" onclick="OdontogramPage.setCategory('treatment', this)">🔵 Prestación</button>
+                    <button class="tool-btn tool-blue active" data-category="preexisting" onclick="OdontogramPage.setCategory('preexisting', this)">🔵 Preexistente</button>
+                    <button class="tool-btn tool-red" data-category="treatment" onclick="OdontogramPage.setCategory('treatment', this)">🔴 Prestación</button>
                 </div>
                 <div class="tool-group" style="border-left:1px solid var(--slate-300);padding-left:1rem;">
                     <span class="tool-group-label">Símbolo:</span>
@@ -154,12 +154,12 @@ Router.register('odontogram', async (container) => {
                     <div>
                         <div class="legend-item"><div class="legend-swatch" style="border:2px solid var(--odo-preexisting); border-radius:50%"></div> Corona Preexistente</div>
                         <div class="legend-item"><div class="legend-swatch" style="border:2px solid var(--odo-treatment); border-radius:50%"></div> Corona a realizar</div>
-                        <div class="legend-item"><div class="legend-swatch" style="background:var(--odo-preexisting);"></div> Caries / Obt. Roja</div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:var(--odo-treatment);"></div> Caries (Roja)</div>
                     </div>
                     <div>
-                        <div class="legend-item"><span style="color:var(--odo-preexisting);font-weight:800;">✕</span> Diente a extraer (Rojo)</div>
-                        <div class="legend-item"><span style="color:var(--odo-treatment);font-weight:800;">✕</span> Diente ausente (Azul)</div>
-                        <div class="legend-item"><div class="legend-swatch" style="background:var(--odo-treatment);"></div> Obturación Azul</div>
+                        <div class="legend-item"><span style="color:var(--odo-treatment);font-weight:800;">✕</span> Diente a extraer (Rojo)</div>
+                        <div class="legend-item"><span style="color:var(--odo-preexisting);font-weight:800;">✕</span> Diente ausente (Azul)</div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:var(--odo-preexisting);"></div> Obturación (Azul)</div>
                     </div>
                     <div>
                         <div class="legend-item"><strong>SFF</strong> Sellador de fosas</div>
@@ -401,7 +401,7 @@ const OdontogramPage = {
     renderChart(entries) {
         // Reset all teeth
         document.querySelectorAll('.tooth-face').forEach(f => {
-            f.classList.remove('preexisting', 'treatment', 'fill-red', 'fill-blue');
+            f.classList.remove('preexisting', 'treatment', 'fill-preexisting', 'fill-treatment');
         });
         document.querySelectorAll('.tooth-overlay').forEach(o => {
             o.textContent = '';
@@ -456,14 +456,14 @@ const OdontogramPage = {
 
                 if (e.symbol === 'cavity' || e.symbol === 'filling') {
                     const faces = document.querySelectorAll(`[data-tooth="${e.tooth_number}"].tooth-face`);
-                    faces.forEach(f => f.classList.add(isPre ? 'fill-red' : 'fill-blue'));
+                    faces.forEach(f => f.classList.add(isPre ? 'fill-preexisting' : 'fill-treatment'));
                 }
             } else {
                 // Individual faces
                 const faceEl = document.querySelector(`[data-tooth="${e.tooth_number}"][data-face="${e.face}"]`);
                 if (faceEl) {
                     if (e.symbol === 'cavity' || e.symbol === 'filling') {
-                        faceEl.classList.add(isPre ? 'fill-red' : 'fill-blue');
+                        faceEl.classList.add(isPre ? 'fill-preexisting' : 'fill-treatment');
                     }
                 }
             }
