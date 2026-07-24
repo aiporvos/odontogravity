@@ -95,7 +95,7 @@ Router.register('odontogram', async (container) => {
                         `).join('')}
                     </div>
                 </div>
-                <div class="tool-group odo-priority-group" style="border-left:1px solid var(--slate-300);padding-left:1rem;display:none;">
+                <div class="tool-group odo-priority-group" style="border-left:1px solid var(--slate-300);padding-left:1rem;">
                     <span class="tool-group-label">Prioridad:</span>
                     <select id="odo-priority" style="padding:.35rem .5rem;border:1px solid var(--slate-300);border-radius:var(--radius);font-size:.85rem;background:white;color:var(--slate-700);font-weight:600;">
                         <option value="Baja">Baja</option>
@@ -255,7 +255,7 @@ const OdontogramPage = {
         
         const priorityGroup = document.querySelector('.odo-priority-group');
         if (priorityGroup) {
-            priorityGroup.style.display = category === 'treatment' ? 'block' : 'none';
+            priorityGroup.style.display = 'block';
         }
     },
 
@@ -308,7 +308,7 @@ const OdontogramPage = {
             category: sf.category,
             procedure_code: codeVal || null,
             description: descVal || null,
-            priority: sf.category === 'treatment' ? priorityVal : null,
+            priority: priorityVal || 'Baja',
         }));
 
         try {
@@ -504,12 +504,10 @@ const OdontogramPage = {
                             <td><strong>${e.tooth_number}</strong></td>
                             <td>${faceLabels[e.face] || e.face}</td>
                             <td>${SYMBOLS.find(s => s.id === e.symbol)?.label || e.symbol}</td>
-                            <td>
-                                ${e.category === 'treatment' ? `
-                                    <span class="badge ${e.priority === 'Alta' ? 'badge-cancelled' : (e.priority === 'Media' ? 'badge-pending' : 'badge-confirmed')}">
-                                        ${e.priority || 'Baja'}
-                                    </span>
-                                ` : '-'}
+                            <td style="cursor:pointer;" onclick="OdontogramPage.updatePriority('${e.id}', '${e.priority || 'Baja'}')" title="Clic para cambiar prioridad">
+                                <span class="badge ${e.priority === 'Alta' ? 'badge-cancelled' : (e.priority === 'Media' ? 'badge-pending' : 'badge-confirmed')}">
+                                    ${e.priority || 'Baja'}
+                                </span>
                             </td>
                             <td>${e.procedure_code || '-'}</td>
                             <td>${e.description || '-'}</td>
@@ -614,6 +612,33 @@ const OdontogramPage = {
         }
     },
 
+    async updatePriority(id, currentPriority) {
+        const selectHTML = `
+            <select id="update-priority-select" style="width: 100%; padding: 0.5rem; margin-top: 1rem; border: 1px solid var(--slate-300); border-radius: var(--radius); font-size: 1rem;">
+                <option value="Baja" ${currentPriority === 'Baja' ? 'selected' : ''}>Baja</option>
+                <option value="Media" ${currentPriority === 'Media' ? 'selected' : ''}>Media</option>
+                <option value="Alta" ${currentPriority === 'Alta' ? 'selected' : ''}>Alta</option>
+            </select>
+        `;
+        
+        UI.showModal('Cambiar Prioridad', selectHTML, `
+            <button class="btn btn-secondary" onclick="UI.closeModal()">Cancelar</button>
+            <button class="btn btn-primary" onclick="OdontogramPage.saveUpdatedPriority('${id}')">Guardar</button>
+        `);
+    },
+
+    async saveUpdatedPriority(id) {
+        const newPriority = document.getElementById('update-priority-select').value;
+        try {
+            await API.updateOdontogramEntry(id, { priority: newPriority });
+            UI.closeModal();
+            this.loadEntries();
+            UI.toast('Prioridad actualizada', 'success');
+        } catch (err) {
+            UI.toast(err.message, 'error');
+        }
+    },
+
     showEntryForm() {
         if (!odontogramState.patientId) return UI.toast('Seleccioná un paciente', 'error');
         
@@ -666,12 +691,12 @@ const OdontogramPage = {
                 </div>
                 <div class="form-group">
                     <label>Categoría</label>
-                    <select name="category" onchange="document.querySelector('.odo-manual-priority').style.display = this.value === 'treatment' ? 'block' : 'none';">
+                    <select name="category">
                         <option value="preexisting">🔴 Preexistente</option>
                         <option value="treatment">🔵 Prestación nueva</option>
                     </select>
                 </div>
-                <div class="form-group odo-manual-priority" style="display:none;">
+                <div class="form-group odo-manual-priority">
                     <label>Prioridad</label>
                     <select name="priority">
                         <option value="Baja">Baja</option>
@@ -722,7 +747,7 @@ const OdontogramPage = {
             category: category,
             procedure_code: form.querySelector('[name="procedure_code"]').value || null,
             description: form.querySelector('[name="description"]').value || null,
-            priority: category === 'treatment' ? form.querySelector('[name="priority"]').value : null,
+            priority: form.querySelector('[name="priority"]').value || 'Baja',
         };
 
         // Build bulk payload: one entry per tooth × face combination

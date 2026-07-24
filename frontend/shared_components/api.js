@@ -105,6 +105,7 @@ const API = {
     getOdontogram(patientId) { return this.get(`/clinic/odontogram/${patientId}`); },
     createOdontogramEntry(data) { return this.post('/clinic/odontogram', data); },
     createOdontogramEntriesBulk(data) { return this.post('/clinic/odontogram/bulk', data); },
+    updateOdontogramEntry(id, data) { return this.put(`/clinic/odontogram/${id}`, data); },
     deleteOdontogramEntry(id) { return this.del(`/clinic/odontogram/${id}`); },
 
     getProfessionals() { return this.get('/clinic/professionals'); },

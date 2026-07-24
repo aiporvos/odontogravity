@@ -210,6 +210,14 @@ class OdontogramEntryRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class OdontogramEntryUpdate(BaseModel):
+    procedure_code: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[str] = None
+    patient_consent: Optional[bool] = None
+
+
+
 # ═══════════════════════════════════════════════════════
 # ADMIN CONFIG / LOCATIONS / INSURANCES
 # ═══════════════════════════════════════════════════════

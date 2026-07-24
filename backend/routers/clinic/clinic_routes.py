@@ -15,7 +15,7 @@ from backend.models.professional import Professional
 from backend.schemas.schemas import (
     PatientCreate, PatientRead, PatientUpdate,
     AppointmentCreate, AppointmentRead, AppointmentUpdate,
-    OdontogramEntryCreate, OdontogramEntryRead,
+    OdontogramEntryCreate, OdontogramEntryRead, OdontogramEntryUpdate,
     ProfessionalRead, SearchResult,
 )
 
@@ -213,6 +213,20 @@ def create_odontogram_entries_bulk(data: list[OdontogramEntryCreate], db: Sessio
     for entry in entries:
         db.refresh(entry)
     return entries
+
+
+@router.put("/odontogram/{entry_id}", response_model=OdontogramEntryRead)
+def update_odontogram_entry(entry_id: UUID, data: OdontogramEntryUpdate, db: Session = Depends(get_db)):
+    e = db.query(OdontogramEntry).filter(OdontogramEntry.id == entry_id, OdontogramEntry.is_deleted == False).first()
+    if not e:
+        raise HTTPException(404, "Entrada no encontrada")
+    
+    for key, val in data.model_dump(exclude_unset=True).items():
+        setattr(e, key, val)
+        
+    db.commit()
+    db.refresh(e)
+    return e
 
 
 @router.delete("/odontogram/{entry_id}")
