@@ -152,7 +152,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     if obra_social and obra_social.upper() == "PAMI" and weekday != 4:
         if recursive_depth < 14:
             return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
-        return {"date": str(day), "location": location, "available_slots": [], "message": "PAMI solo se atiende los viernes."}
+        return {"date": str(day), "location": location, "available_slots": [], "message": "No hay turnos disponibles para PAMI en las próximas semanas."}
 
     if weekday < 5: # Mon-Fri
         shifts.append((py_time(9, 0), py_time(12, 30)))
