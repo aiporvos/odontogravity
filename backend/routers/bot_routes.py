@@ -18,7 +18,18 @@ from backend.schemas.schemas import (
 
 router = APIRouter(prefix="/api/bot", tags=["Bot"])
 
-BOT_API_KEY = os.getenv("BOT_API_KEY", "dev-bot-key-change-in-prod")
+# BOT_API_KEY protege los endpoints que el bot usa para operar turnos.
+# Sin un valor propio, cualquiera con la key de ejemplo podría agendar,
+# cancelar o consultar datos de pacientes, así que la app no debe arrancar
+# con el default inseguro.
+_INSECURE_BOT_KEY_DEFAULT = "dev-bot-key-change-in-prod"
+BOT_API_KEY = os.getenv("BOT_API_KEY")
+if not BOT_API_KEY or BOT_API_KEY == _INSECURE_BOT_KEY_DEFAULT:
+    raise RuntimeError(
+        "BOT_API_KEY no está configurada (o usa el valor de ejemplo). "
+        "Definí una BOT_API_KEY propia en las variables de entorno "
+        "(debe coincidir en el servicio backend y en el bot)."
+    )
 
 
 def verify_bot_key(x_bot_key: str = Header(...)):

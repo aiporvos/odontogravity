@@ -20,7 +20,16 @@ from backend.database import get_db
 from backend.models.user import User, UserRole
 
 # ── Config ──────────────────────────────────────────────
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-in-production-please-2024")
+# SECRET_KEY firma los JWT de sesión. Si no está configurada (o quedó el
+# valor de ejemplo), cualquiera podría firmar tokens y hacerse pasar por
+# admin, así que la app NO debe arrancar sin un valor propio.
+_INSECURE_SECRET_DEFAULT = "dev-secret-change-in-production-please-2024"
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY or SECRET_KEY == _INSECURE_SECRET_DEFAULT:
+    raise RuntimeError(
+        "SECRET_KEY no está configurada (o usa el valor de ejemplo). "
+        "Definí una SECRET_KEY propia y secreta en las variables de entorno."
+    )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 
