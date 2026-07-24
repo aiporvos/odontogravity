@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from uuid import UUID
 from datetime import timedelta
+from html import escape
 import logging
 
 from backend.database import get_db, SessionLocal
@@ -25,7 +26,11 @@ async def cancel_appointment_page(appointment_id: UUID, db: Session = Depends(ge
     # Times are already stored in local time, no need to convert
     local_time = appt.start_time
     time_str = local_time.strftime("%d/%m/%Y a las %H:%M")
-    
+
+    # Escapar datos que provienen de la base para evitar inyección de HTML/JS
+    safe_first_name = escape(patient.first_name or "")
+    safe_location = escape(appt.location or "")
+
     html_content = f"""
     <html>
         <head>
@@ -42,8 +47,8 @@ async def cancel_appointment_page(appointment_id: UUID, db: Session = Depends(ge
         <body>
             <div class="container">
                 <h2>Cancelar Turno</h2>
-                <p>Hola <b>{patient.first_name}</b>,</p>
-                <p>¿Estás seguro que querés cancelar tu turno del <b>{time_str}</b> en <b>{appt.location}</b>?</p>
+                <p>Hola <b>{safe_first_name}</b>,</p>
+                <p>¿Estás seguro que querés cancelar tu turno del <b>{time_str}</b> en <b>{safe_location}</b>?</p>
                 <form method="POST" action="/api/public/cancel/{appointment_id}/confirm">
                     <button type="submit" class="btn">Sí, cancelar turno</button>
                 </form>

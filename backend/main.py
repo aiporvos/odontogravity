@@ -73,12 +73,20 @@ app = FastAPI(
 )
 
 # ── CORS ────────────────────────────────────────────────
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
+    if o.strip()
+]
+
+# "*" con allow_credentials=True es inválido según el spec de CORS y
+# expone la API a cualquier origen. Si se usa "*", desactivamos credenciales.
+allow_credentials = "*" not in ALLOWED_ORIGINS
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

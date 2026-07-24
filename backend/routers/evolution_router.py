@@ -48,11 +48,17 @@ def get_or_create_session(db: Session, platform_user_id: str):
         db.refresh(session)
     return session
 
+# Cantidad de mensajes previos que se le pasan al LLM como contexto.
+# Cada mensaje se reenvía en cada llamada, así que subirlo encarece tokens.
+# 12 alcanza para mantener el hilo de una conversación de agendado.
+HISTORY_LIMIT = 12
+
+
 def load_history(db: Session, session_id) -> list[dict]:
-    # Fetch LATEST 50 messages, ordered oldest-to-newest for the LLM
+    # Fetch LATEST N messages, ordered oldest-to-newest for the LLM
     subquery = db.query(ChatMessage).filter(
         ChatMessage.session_id == session_id
-    ).order_by(ChatMessage.created_at.desc()).limit(50).all()
+    ).order_by(ChatMessage.created_at.desc()).limit(HISTORY_LIMIT).all()
     
     # Reverse them to be in chronological order
     subquery.reverse()
