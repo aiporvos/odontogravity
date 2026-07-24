@@ -243,6 +243,7 @@ window.SettingsPage = {
             try {
                 await API.createLocation(data);
                 UI.toast('Sede creada');
+                UI.closeModal();
                 Router.load('settings');
             } catch (err) { UI.toast(err.message, 'error'); }
         };
@@ -299,6 +300,7 @@ window.SettingsPage = {
                     await API.createInsurance(data);
                     UI.toast('Obra social creada');
                 }
+                UI.closeModal();
                 Router.load('settings');
             } catch (err) { UI.toast(err.message, 'error'); }
         };

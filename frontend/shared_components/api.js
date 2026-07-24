@@ -38,7 +38,7 @@ const API = {
     },
 
     async request(method, path, body = null) {
-        const opts = { method, headers: this.headers() };
+        const opts = { method, headers: this.headers(), cache: 'no-store' };
         if (body && method !== 'GET') opts.body = JSON.stringify(body);
 
         const url = path.startsWith('/api') ? path : `${this.BASE_URL}${path}`;
