@@ -128,6 +128,7 @@ const API = {
 
     getInsurances() { return this.get('/admin/insurances'); },
     createInsurance(data) { return this.post('/admin/insurances', data); },
+    updateInsurance(id, data) { return this.put(`/admin/insurances/${id}`, data); },
     deleteInsurance(id) { return this.del(`/admin/insurances/${id}`); },
 
     getConfigs() { return this.get('/admin/configs'); },

@@ -55,6 +55,7 @@ Router.register('settings', async (container) => {
                             </div>
                             <div style="display:flex;gap:.5rem;align-items:center;">
                                 <span class="badge badge-${i.is_active ? 'confirmed' : 'cancelled'}">${i.is_active ? 'Activa' : 'Inactiva'}</span>
+                                <button class="btn btn-icon text-primary" onclick="SettingsPage.showInsuranceForm('${i.id}', '${(i.name||'').replace(/'/g, "\\'")}', '${(i.code||'').replace(/'/g, "\\'")}', ${i.is_active})">✏️</button>
                                 <button class="btn btn-icon text-red" onclick="SettingsPage.deleteInsurance('${i.id}')">🗑️</button>
                             </div>
                         </div>
@@ -256,28 +257,48 @@ window.SettingsPage = {
         }
     },
 
-    showInsuranceForm() {
+    showInsuranceForm(id = null, name = '', code = '', isActive = true) {
+        const title = id ? 'Editar Obra Social' : 'Nueva Obra Social';
+        const activeSelect = id ? `
+            <div class="form-group">
+                <label>Estado</label>
+                <select name="is_active">
+                    <option value="true" ${isActive ? 'selected' : ''}>Activa</option>
+                    <option value="false" ${!isActive ? 'selected' : ''}>Inactiva</option>
+                </select>
+            </div>
+        ` : '';
+
         UI.modal(`
-            <h3>Nueva Obra Social</h3>
+            <h3>${title}</h3>
             <form id="modal-form-insurance" style="display:flex;flex-direction:column;gap:1rem;">
                 <div class="form-group">
                     <label>Nombre de la Obra Social</label>
-                    <input type="text" name="name" required placeholder="Ej: OSEP">
+                    <input type="text" name="name" required placeholder="Ej: OSEP" value="${name}">
                 </div>
                 <div class="form-group">
                     <label>Código Interno</label>
-                    <input type="text" name="code" placeholder="Ej: 101">
+                    <input type="text" name="code" placeholder="Ej: 101" value="${code}">
                 </div>
-                <button type="submit" class="btn btn-primary">Crear Obra Social</button>
+                ${activeSelect}
+                <button type="submit" class="btn btn-primary">${id ? 'Guardar Cambios' : 'Crear Obra Social'}</button>
             </form>
         `);
 
         document.getElementById('modal-form-insurance').onsubmit = async (e) => {
             e.preventDefault();
             const data = Object.fromEntries(new FormData(e.target));
+            if (data.is_active !== undefined) {
+                data.is_active = data.is_active === 'true';
+            }
             try {
-                await API.createInsurance(data);
-                UI.toast('Obra social creada');
+                if (id) {
+                    await API.updateInsurance(id, data);
+                    UI.toast('Obra social actualizada');
+                } else {
+                    await API.createInsurance(data);
+                    UI.toast('Obra social creada');
+                }
                 Router.load('settings');
             } catch (err) { UI.toast(err.message, 'error'); }
         };

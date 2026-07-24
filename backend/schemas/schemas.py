@@ -249,6 +249,11 @@ class InsuranceCreate(BaseModel):
     name: str
     code: Optional[str] = None
 
+class InsuranceUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    is_active: Optional[bool] = None
+
 class InsuranceRead(BaseModel):
     id: UUID
     name: str

@@ -14,7 +14,7 @@ from backend.schemas.schemas import (
 # ... existing imports continue ...
     UserCreate, UserRead, UserUpdate,
     ProfessionalCreate, ProfessionalRead, ProfessionalUpdate,
-    LocationCreate, LocationRead, InsuranceCreate, InsuranceRead,
+    LocationCreate, LocationRead, InsuranceCreate, InsuranceRead, InsuranceUpdate,
     ConfigCreate, ConfigRead
 )
 
@@ -129,8 +129,40 @@ def list_insurances(db: Session = Depends(get_db)):
 
 @router.post("/insurances", response_model=InsuranceRead, status_code=201)
 def create_insurance(data: InsuranceCreate, db: Session = Depends(get_db)):
+    # Check if exists (including deleted)
+    existing = db.query(Insurance).filter(Insurance.name.ilike(data.name)).first()
+    if existing:
+        if existing.is_deleted:
+            # Restore
+            existing.is_deleted = False
+            existing.is_active = True
+            existing.code = data.code
+            db.commit()
+            db.refresh(existing)
+            return existing
+        else:
+            raise HTTPException(status_code=400, detail="Ya existe una obra social con ese nombre")
+            
     ins = Insurance(**data.model_dump())
     db.add(ins)
+    db.commit()
+    db.refresh(ins)
+    return ins
+
+@router.put("/insurances/{ins_id}", response_model=InsuranceRead)
+def update_insurance(ins_id: UUID, data: InsuranceUpdate, db: Session = Depends(get_db)):
+    ins = db.query(Insurance).filter(Insurance.id == ins_id, Insurance.is_deleted == False).first()
+    if not ins:
+        raise HTTPException(status_code=404, detail="Obra social no encontrada")
+    
+    if data.name is not None and data.name.lower() != ins.name.lower():
+        existing = db.query(Insurance).filter(Insurance.name.ilike(data.name)).first()
+        if existing and not existing.is_deleted:
+            raise HTTPException(status_code=400, detail="Ya existe una obra social con ese nombre")
+    
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(ins, key, value)
+        
     db.commit()
     db.refresh(ins)
     return ins
