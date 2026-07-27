@@ -47,3 +47,6 @@ node_modules/
 # Artifacts
 .gemini/
 artifacts/
+
+# Datos de pacientes (PII) - nunca subir al repo
+imagenes-turnos/
