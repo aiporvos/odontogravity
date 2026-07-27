@@ -424,30 +424,77 @@ const AgendaPage = {
     async showAppointment(id) {
         try {
             const a = await API.getAppointment(id);
+            let professionals = [];
+            try { professionals = await API.getProfessionals(); } catch (e) {}
+
+            const p = a.patient || {};
+            // Escapa un valor para usarlo dentro de un atributo HTML (value="...")
+            const attr = (v) => String(v == null ? '' : v)
+                .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+            const profOptions = professionals.map(pr =>
+                `<option value="${pr.id}" ${a.professional_id === pr.id ? 'selected' : ''}>${attr(pr.full_name)}</option>`
+            ).join('');
+            const startVal = (a.start_time || '').slice(0, 16); // YYYY-MM-DDTHH:MM para datetime-local
+            const obra = a.insurance_name || p.insurance_name || '';
+            const st = a.status;
+
             UI.showModal('Detalle del Turno', `
                 <div class="form-grid">
-                    <div class="form-group"><label>Paciente</label><p><strong>${a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : '-'}</strong></p></div>
-                    <div class="form-group"><label>DNI</label><p>${a.patient && a.patient.dni ? a.patient.dni : '-'}</p></div>
-                    <div class="form-group"><label>Teléfono</label><p>${a.patient && a.patient.phone ? a.patient.phone : '-'}</p></div>
-                    <div class="form-group"><label>Obra Social</label><p>${a.insurance_name || (a.patient && a.patient.insurance_name) || 'Particular'}</p></div>
-                    <div class="form-group"><label>Profesional</label><p>${a.professional ? a.professional.full_name : '-'}</p></div>
-                    <div class="form-group"><label>Fecha/Hora</label><p>${UI.formatDateTime(a.start_time)}</p></div>
-                    <div class="form-group"><label>Motivo</label><p>${a.reason || '-'}</p></div>
+                    <div class="form-group"><label>Apellido</label><input id="edit-last" class="form-control" value="${attr(p.last_name)}"></div>
+                    <div class="form-group"><label>Nombre</label><input id="edit-first" class="form-control" value="${attr(p.first_name)}"></div>
+                    <div class="form-group"><label>DNI</label><input id="edit-dni" class="form-control" value="${attr(p.dni)}"></div>
+                    <div class="form-group"><label>Teléfono</label><input id="edit-phone" class="form-control" value="${attr(p.phone)}"></div>
+                    <div class="form-group"><label>Obra Social</label><input id="edit-insurance" class="form-control" value="${attr(obra)}"></div>
+                    <div class="form-group"><label>Profesional</label><select id="edit-prof" class="form-control">${profOptions}</select></div>
+                    <div class="form-group"><label>Fecha/Hora</label><input id="edit-start" type="datetime-local" class="form-control" value="${startVal}"></div>
+                    <div class="form-group"><label>Motivo</label><input id="edit-reason" class="form-control" value="${attr(a.reason)}"></div>
                     <div class="form-group">
                         <label>Estado</label>
-                        <select id="update-appt-status" class="form-control" style="margin-top:.5rem;">
-                            <option value="pending" ${a.status==='pending'?'selected':''}>⏳ Pendiente</option>
-                            <option value="confirmed" ${a.status==='confirmed'?'selected':''}>✅ Confirmado</option>
-                            <option value="completed" ${a.status==='completed'?'selected':''}>🏁 Realizado</option>
-                            <option value="cancelled" ${a.status==='cancelled'?'selected':''}>❌ Cancelado</option>
-                            <option value="no_show" ${a.status==='no_show'?'selected':''}>🚫 No asistió</option>
+                        <select id="edit-status" class="form-control">
+                            <option value="pending" ${st==='pending'?'selected':''}>⏳ Pendiente</option>
+                            <option value="confirmed" ${st==='confirmed'?'selected':''}>✅ Confirmado</option>
+                            <option value="completed" ${st==='completed'?'selected':''}>🏁 Realizado</option>
+                            <option value="cancelled" ${st==='cancelled'?'selected':''}>❌ Cancelado</option>
+                            <option value="no_show" ${st==='no_show'?'selected':''}>🚫 No asistió</option>
                         </select>
                     </div>
                 </div>
             `, `
                 <button class="btn btn-secondary" onclick="UI.closeModal()">Cerrar</button>
-                <button class="btn btn-primary" onclick="AgendaPage.updateStatus('${a.id}')">Actualizar Estado</button>
+                <button class="btn btn-primary" onclick="AgendaPage.saveAppointment('${a.id}', '${p.id || ''}')">Guardar cambios</button>
             `);
+        } catch (err) { UI.toast(err.message, 'error'); }
+    },
+
+    async saveAppointment(apptId, patientId) {
+        const val = (id) => (document.getElementById(id)?.value || '').trim();
+        try {
+            // 1) Datos del paciente
+            if (patientId) {
+                const patientData = {
+                    first_name: val('edit-first'),
+                    last_name: val('edit-last'),
+                    phone: val('edit-phone'),
+                    insurance_name: val('edit-insurance'),
+                };
+                const dni = val('edit-dni');
+                if (dni) patientData.dni = dni; // no mandar DNI vacío
+                await API.updatePatient(patientId, patientData);
+            }
+            // 2) Datos del turno
+            const startVal = val('edit-start');
+            const apptData = {
+                reason: val('edit-reason') || null,
+                professional_id: val('edit-prof'),
+                insurance_name: val('edit-insurance'),
+                status: val('edit-status'),
+            };
+            if (startVal) apptData.start_time = startVal;
+            await API.updateAppointment(apptId, apptData);
+
+            UI.toast('Turno actualizado', 'success');
+            UI.closeModal();
+            if (AgendaPage.loadAgenda) AgendaPage.loadAgenda();
         } catch (err) { UI.toast(err.message, 'error'); }
     },
 

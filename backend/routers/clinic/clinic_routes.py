@@ -68,7 +68,26 @@ def update_patient(patient_id: UUID, data: PatientUpdate, db: Session = Depends(
     p = db.query(Patient).filter(Patient.id == patient_id, Patient.is_deleted == False).first()
     if not p:
         raise HTTPException(404, "Paciente no encontrado")
-    for key, val in data.model_dump(exclude_unset=True).items():
+
+    payload = data.model_dump(exclude_unset=True)
+
+    # El DNI es único: si viene y cambia, verificar que no lo tenga otro paciente
+    new_dni = payload.get("dni")
+    if new_dni is not None:
+        new_dni = new_dni.strip()
+        if not new_dni:
+            payload.pop("dni")  # no permitir dejar el DNI vacío
+        elif new_dni != p.dni:
+            existe = db.query(Patient).filter(
+                Patient.dni == new_dni,
+                Patient.id != patient_id,
+                Patient.is_deleted == False,
+            ).first()
+            if existe:
+                raise HTTPException(400, f"Ya existe otro paciente con el DNI {new_dni}")
+            payload["dni"] = new_dni
+
+    for key, val in payload.items():
         setattr(p, key, val)
     db.commit()
     db.refresh(p)

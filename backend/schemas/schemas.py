@@ -86,6 +86,7 @@ class PatientRead(BaseModel):
 class PatientUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
+    dni: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
     date_of_birth: Optional[date] = None
@@ -174,6 +175,7 @@ class AppointmentUpdate(BaseModel):
     reason: Optional[str] = None
     status: Optional[AppointmentStatus] = None
     location: Optional[str] = None
+    insurance_name: Optional[str] = None
     notes: Optional[str] = None
     professional_id: Optional[UUID] = None
 
