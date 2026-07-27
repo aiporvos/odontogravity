@@ -91,6 +91,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ── Evitar caché vieja del frontend ─────────────────────
+# El navegador cacheaba el JS/CSS/HTML y no tomaba los cambios tras cada deploy.
+# Con "no-cache" el navegador revalida siempre (y recibe 304 si no cambió, por
+# el ETag/Last-Modified de StaticFiles), así que el frontend se actualiza solo.
+@app.middleware("http")
+async def no_cache_frontend(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".js", ".css", ".html")):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
 # ── Routers ─────────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(admin_router)
