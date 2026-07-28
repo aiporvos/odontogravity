@@ -547,10 +547,11 @@ const AgendaPage = {
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
                             <input type="text" id="np-first" placeholder="Nombre *">
                             <input type="text" id="np-last" placeholder="Apellido *">
-                            <input type="text" id="np-dni" placeholder="DNI *">
-                            <input type="text" id="np-phone" placeholder="Teléfono *">
+                            <input type="text" id="np-dni" placeholder="DNI (opcional)">
+                            <input type="text" id="np-phone" placeholder="Teléfono (opcional)">
                         </div>
-                        <button type="button" class="btn btn-sm btn-primary" style="margin-top:.5rem;" onclick="AgendaPage._createPatientInline()">Crear y seleccionar</button>
+                        <small style="color:var(--slate-500);">Solo nombre y apellido son obligatorios. Sin DNI se asigna uno provisorio para completar después.</small>
+                        <button type="button" class="btn btn-sm btn-primary" style="margin-top:.5rem;display:block;" onclick="AgendaPage._createPatientInline()">Crear y seleccionar</button>
                     </div>
                 </div>
                 <div class="form-group">
@@ -622,10 +623,13 @@ const AgendaPage = {
 
     async _createPatientInline() {
         const g = id => (document.getElementById(id)?.value || '').trim();
-        const data = { first_name: g('np-first'), last_name: g('np-last'), dni: g('np-dni'), phone: g('np-phone') };
-        if (!data.first_name || !data.last_name || !data.dni || !data.phone) {
-            return UI.toast('Completá nombre, apellido, DNI y teléfono', 'error');
+        const first = g('np-first'), last = g('np-last');
+        if (!first || !last) {
+            return UI.toast('Completá al menos nombre y apellido', 'error');
         }
+        // DNI opcional: si no hay, se asigna uno provisorio (editable después).
+        const dni = g('np-dni') || ('TMP-' + Math.random().toString(36).slice(2, 12));
+        const data = { first_name: first, last_name: last, dni, phone: g('np-phone') };
         try {
             const p = await API.createPatient(data);
             this._modalPatients.push(p);
