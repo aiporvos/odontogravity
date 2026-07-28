@@ -526,6 +526,7 @@ const AgendaPage = {
     },
 
     _renderMultiModal(professionals, patients, defaultDateTime) {
+        this._modalPatients = patients;
         const listHtml = () => this._pendingAppts.map((a, i) => {
             const pat = patients.find(p => p.id === a.patient_id);
             return `<div class="pending-appt-item"><span>🕐 ${a.start_time.replace('T',' ')} — ${pat ? pat.last_name + ', ' + pat.first_name : '?'} — ${a.reason || 'Sin motivo'}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${i})" style="color:var(--danger)">✕</button></div>`;
@@ -536,10 +537,21 @@ const AgendaPage = {
             <form id="form-new-appointment" class="form-grid">
                 <div class="form-group">
                     <label>Paciente *</label>
-                    <select name="patient_id" required>
+                    <input type="text" id="appt-patient-search" placeholder="Buscar por nombre, apellido o DNI..." style="margin-bottom:.35rem;" oninput="AgendaPage._filterPatients(this.value)">
+                    <select name="patient_id" id="appt-patient-select" required>
                         <option value="">Seleccionar...</option>
                         ${patients.map(p => `<option value="${p.id}">${p.last_name}, ${p.first_name}</option>`).join('')}
                     </select>
+                    <button type="button" class="btn btn-sm btn-ghost" style="margin-top:.35rem;color:var(--primary);" onclick="AgendaPage._toggleNewPatient()">+ Nuevo paciente</button>
+                    <div id="appt-new-patient" style="display:none;margin-top:.5rem;padding:.75rem;background:var(--slate-50);border-radius:8px;border:1px solid var(--slate-200);">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
+                            <input type="text" id="np-first" placeholder="Nombre *">
+                            <input type="text" id="np-last" placeholder="Apellido *">
+                            <input type="text" id="np-dni" placeholder="DNI *">
+                            <input type="text" id="np-phone" placeholder="Teléfono *">
+                        </div>
+                        <button type="button" class="btn btn-sm btn-primary" style="margin-top:.5rem;" onclick="AgendaPage._createPatientInline()">Crear y seleccionar</button>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Profesional *</label>
@@ -589,6 +601,43 @@ const AgendaPage = {
         this._pendingAppts.splice(idx, 1);
         const items = document.querySelectorAll('.pending-appt-item');
         if (items[idx]) items[idx].remove();
+    },
+
+    // Buscador de paciente en el modal de Nuevo Turno
+    _filterPatients(q) {
+        q = (q || '').trim().toLowerCase();
+        const sel = document.getElementById('appt-patient-select');
+        if (!sel) return;
+        const current = sel.value;
+        const list = !q ? this._modalPatients : this._modalPatients.filter(p =>
+            `${p.last_name} ${p.first_name} ${p.dni}`.toLowerCase().includes(q));
+        sel.innerHTML = '<option value="">Seleccionar...</option>' +
+            list.map(p => `<option value="${p.id}" ${p.id === current ? 'selected' : ''}>${p.last_name}, ${p.first_name}</option>`).join('');
+    },
+
+    _toggleNewPatient() {
+        const el = document.getElementById('appt-new-patient');
+        if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    },
+
+    async _createPatientInline() {
+        const g = id => (document.getElementById(id)?.value || '').trim();
+        const data = { first_name: g('np-first'), last_name: g('np-last'), dni: g('np-dni'), phone: g('np-phone') };
+        if (!data.first_name || !data.last_name || !data.dni || !data.phone) {
+            return UI.toast('Completá nombre, apellido, DNI y teléfono', 'error');
+        }
+        try {
+            const p = await API.createPatient(data);
+            this._modalPatients.push(p);
+            const sel = document.getElementById('appt-patient-select');
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = `${p.last_name}, ${p.first_name}`;
+            opt.selected = true;
+            sel.appendChild(opt);
+            document.getElementById('appt-new-patient').style.display = 'none';
+            UI.toast('Paciente creado y seleccionado', 'success');
+        } catch (e) { UI.toast(e.message || 'Error al crear paciente', 'error'); }
     },
 
     async _saveAll() {
