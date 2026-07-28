@@ -4,6 +4,7 @@
 Router.register('dashboard', async (container) => {
     let stats = { patients: 0, appointments_today: 0, pending: 0, completed: 0 };
     let todayAppointments = [];
+    let toReschedule = [];
 
     try {
         const today = UI.todayISO();
@@ -11,10 +12,12 @@ Router.register('dashboard', async (container) => {
         tomorrow.setDate(tomorrow.getDate() + 1);
         const tomorrowISO = tomorrow.toISOString().split('T')[0];
 
-        const [patients, appointments] = await Promise.all([
+        const [patients, appointments, reschedule] = await Promise.all([
             API.getPatients(),
             API.getAppointments({ date_from: `${today}T00:00:00`, date_to: `${today}T23:59:59` }),
+            API.getRescheduleList().catch(() => []),
         ]);
+        toReschedule = reschedule || [];
 
         stats.patients = patients.length;
         stats.appointments_today = appointments.length;
@@ -63,6 +66,33 @@ Router.register('dashboard', async (container) => {
                 </div>
             </div>
         </div>
+
+        ${toReschedule.length === 0 ? '' : `
+        <div class="card" style="border:2px solid var(--danger);margin-bottom:1.5rem;">
+            <div class="card-header">
+                <h2 style="color:var(--danger);">⚠️ Turnos a reprogramar (${toReschedule.length})</h2>
+            </div>
+            <p style="font-size:.85rem;color:var(--slate-500);margin-bottom:.75rem;">
+                Estos turnos caen en un día en que el profesional está ausente. Reprogramalos.
+            </p>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>Fecha/Hora</th><th>Paciente</th><th>Profesional</th><th>Motivo</th><th></th></tr></thead>
+                    <tbody>
+                        ${toReschedule.map(a => `
+                            <tr>
+                                <td><strong>${UI.formatDateTime(a.start_time)}</strong></td>
+                                <td>${a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : '-'}</td>
+                                <td>${a.professional ? a.professional.full_name : '-'}</td>
+                                <td>${a.reason || '-'}</td>
+                                <td><button class="btn btn-sm btn-primary" onclick="AgendaPage.showAppointment('${a.id}')">Reprogramar</button></td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        `}
 
         <div class="card">
             <div class="card-header">

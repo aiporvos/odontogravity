@@ -5,6 +5,7 @@ from sqlalchemy import and_
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
+from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff
 
 # Maps reason keywords to professional LAST NAMES as stored in DB
 # DB has: 'Dr. Silvestro' and 'Dra. Murad'
@@ -165,30 +166,37 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         
     weekday = day.weekday() # 0=Mon, 2=Wed
         
-    # Clinic schedule:
-    # Mon-Fri: 09:00 - 12:30
-    # Mon-Fri (except Wed): 17:00 - 20:30
-    
-    shifts = []
-    
+    # Regla PAMI: solo viernes
     if obra_social and obra_social.upper() == "PAMI" and weekday != 4:
         if recursive_depth < 14:
             return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
         return {"date": str(day), "location": location, "available_slots": [], "message": "No hay turnos disponibles para PAMI en las próximas semanas."}
 
-    if weekday < 5: # Mon-Fri
-        shifts.append((py_time(9, 0), py_time(12, 30)))
-        if weekday != 2: # Not Wednesday
-            shifts.append((py_time(17, 0), py_time(20, 30)))
-    
-    if not shifts:
-        # If it's a weekend, try next Monday if we are auto-searching
-        if recursive_depth < 14: # Search up to two weeks
-            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
-        return {"date": str(day), "location": location, "available_slots": [], "message": "Cerrado los fines de semana o fuera de horario."}
-
+    # Profesional asignado por el motivo (necesario para chequear ausencias)
     prof = route_professional(reason, db)
     prof_name = prof.full_name if prof else "Cualquier profesional disponible"
+
+    # Horario de la clínica para ese día (configurable desde el panel)
+    schedule_rows = db.query(ClinicSchedule).filter(
+        ClinicSchedule.weekday == weekday,
+        ClinicSchedule.is_active == True,
+    ).order_by(ClinicSchedule.start_time).all()
+    shifts = [(r.start_time, r.end_time) for r in schedule_rows]
+
+    # Si el profesional está ausente ese día, no se ofrece
+    if prof:
+        absent = db.query(ProfessionalTimeOff).filter(
+            ProfessionalTimeOff.professional_id == prof.id,
+            ProfessionalTimeOff.date == day,
+        ).first()
+        if absent:
+            shifts = []
+
+    if not shifts:
+        # Día cerrado o profesional ausente: buscar el próximo día con disponibilidad
+        if recursive_depth < 14:
+            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
+        return {"date": str(day), "location": location, "available_slots": [], "message": "Sin disponibilidad en las próximas dos semanas."}
 
     # Existing appointments for that day and location
     start_of_day = datetime.combine(day, py_time(0, 0))

@@ -136,6 +136,14 @@ const API = {
     // Subconjunto no sensible editable por el personal de clínica (recepción)
     getBotSettings() { return this.get('/clinic/bot-settings'); },
     setBotSettings(data) { return this.post('/clinic/bot-settings', data); },
+
+    // Horarios y ausencias
+    getSchedule() { return this.get('/clinic/schedule'); },
+    saveSchedule(blocks) { return this.put('/clinic/schedule', blocks); },
+    getTimeOff() { return this.get('/clinic/time-off'); },
+    createTimeOff(data) { return this.post('/clinic/time-off', data); },
+    deleteTimeOff(id) { return this.del(`/clinic/time-off/${id}`); },
+    getRescheduleList() { return this.get('/clinic/reschedule-list'); },
 };
 
 API.init();

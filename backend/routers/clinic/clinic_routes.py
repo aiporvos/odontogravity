@@ -13,11 +13,14 @@ from backend.models.appointment import Appointment
 from backend.models.odontogram import OdontogramEntry
 from backend.models.professional import Professional
 from backend.models.config import AppConfig
+from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff
+from backend.models.appointment import AppointmentStatus
 from backend.schemas.schemas import (
     PatientCreate, PatientRead, PatientUpdate,
     AppointmentCreate, AppointmentRead, AppointmentUpdate,
     OdontogramEntryCreate, OdontogramEntryRead, OdontogramEntryUpdate,
     ProfessionalRead, SearchResult,
+    ScheduleBlock, ScheduleBlockRead, TimeOffCreate, TimeOffRead,
 )
 
 router = APIRouter(prefix="/api/clinic", tags=["Clínica"], dependencies=[Depends(require_clinic)])
@@ -295,6 +298,83 @@ def set_bot_settings(data: dict = Body(...), db: Session = Depends(get_db)):
             db.add(AppConfig(key=key, value=val))
     db.commit()
     return {"status": "ok"}
+
+
+# ═══════════════════════════════════════════════════════
+# HORARIOS (schedule) Y AUSENCIAS (time-off)
+# ═══════════════════════════════════════════════════════
+@router.get("/schedule", response_model=list[ScheduleBlockRead])
+def get_schedule(db: Session = Depends(get_db)):
+    return db.query(ClinicSchedule).filter(ClinicSchedule.is_active == True).order_by(
+        ClinicSchedule.weekday, ClinicSchedule.start_time
+    ).all()
+
+
+@router.put("/schedule", response_model=list[ScheduleBlockRead])
+def replace_schedule(blocks: list[ScheduleBlock], db: Session = Depends(get_db)):
+    """Reemplaza toda la grilla horaria por la lista recibida."""
+    for b in blocks:
+        if b.end_time <= b.start_time:
+            raise HTTPException(400, f"El horario de fin debe ser mayor al de inicio (día {b.weekday}).")
+    db.query(ClinicSchedule).delete()
+    for b in blocks:
+        db.add(ClinicSchedule(weekday=b.weekday, start_time=b.start_time, end_time=b.end_time))
+    db.commit()
+    return db.query(ClinicSchedule).order_by(ClinicSchedule.weekday, ClinicSchedule.start_time).all()
+
+
+@router.get("/time-off", response_model=list[TimeOffRead])
+def list_time_off(db: Session = Depends(get_db)):
+    from datetime import date as _date
+    return db.query(ProfessionalTimeOff).filter(
+        ProfessionalTimeOff.date >= _date.today()
+    ).order_by(ProfessionalTimeOff.date).all()
+
+
+@router.post("/time-off", response_model=TimeOffRead, status_code=201)
+def create_time_off(data: TimeOffCreate, db: Session = Depends(get_db)):
+    existing = db.query(ProfessionalTimeOff).filter(
+        ProfessionalTimeOff.professional_id == data.professional_id,
+        ProfessionalTimeOff.date == data.date,
+    ).first()
+    if existing:
+        return existing
+    off = ProfessionalTimeOff(professional_id=data.professional_id, date=data.date, reason=data.reason)
+    db.add(off)
+    db.commit()
+    db.refresh(off)
+    return off
+
+
+@router.delete("/time-off/{off_id}")
+def delete_time_off(off_id: UUID, db: Session = Depends(get_db)):
+    off = db.query(ProfessionalTimeOff).filter(ProfessionalTimeOff.id == off_id).first()
+    if not off:
+        raise HTTPException(404, "Ausencia no encontrada")
+    db.delete(off)
+    db.commit()
+    return {"detail": "Ausencia eliminada"}
+
+
+@router.get("/reschedule-list", response_model=list[AppointmentRead])
+def reschedule_list(db: Session = Depends(get_db)):
+    """Turnos afectados por ausencias: mismo profesional y fecha, aún activos."""
+    from datetime import date as _date, datetime as _dt, time as _time
+    offs = db.query(ProfessionalTimeOff).filter(ProfessionalTimeOff.date >= _date.today()).all()
+    result = []
+    for off in offs:
+        day_start = _dt.combine(off.date, _time(0, 0))
+        day_end = _dt.combine(off.date, _time(23, 59, 59))
+        appts = db.query(Appointment).filter(
+            Appointment.professional_id == off.professional_id,
+            Appointment.is_deleted == False,
+            Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
+            Appointment.start_time >= day_start,
+            Appointment.start_time <= day_end,
+        ).all()
+        result.extend(appts)
+    result.sort(key=lambda a: a.start_time)
+    return result
 
 
 # ═══════════════════════════════════════════════════════

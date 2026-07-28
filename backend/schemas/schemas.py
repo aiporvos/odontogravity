@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field
 from uuid import UUID
-from datetime import datetime, date
+from datetime import datetime, date, time
 from typing import Optional
 from backend.models.user import UserRole
 from backend.models.appointment import AppointmentStatus, AppointmentChannel
@@ -315,3 +315,32 @@ class BotAvailabilityRequest(BaseModel):
     dni: Optional[str] = "ignore"
     date: Optional[str] = "" # YYYY-MM-DD or empty for today
     obra_social: Optional[str] = "Particular"
+
+
+# ═══════════════════════════════════════════════════════
+# SCHEDULE & TIME-OFF
+# ═══════════════════════════════════════════════════════
+class ScheduleBlock(BaseModel):
+    weekday: int          # 0=Lunes ... 6=Domingo
+    start_time: time
+    end_time: time
+
+
+class ScheduleBlockRead(ScheduleBlock):
+    id: UUID
+    model_config = {"from_attributes": True}
+
+
+class TimeOffCreate(BaseModel):
+    professional_id: UUID
+    date: date
+    reason: Optional[str] = None
+
+
+class TimeOffRead(BaseModel):
+    id: UUID
+    professional_id: UUID
+    date: date
+    reason: Optional[str] = None
+    professional: Optional[ProfessionalRead] = None
+    model_config = {"from_attributes": True}
