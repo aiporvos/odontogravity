@@ -2,6 +2,45 @@
  * Settings Admin Page
  */
 Router.register('settings', async (container) => {
+    // ── Vista por rol ──────────────────────────────────────
+    // El personal de recepción (no admin) ve SOLO el encendido/apagado del bot
+    // y los números de notificación. Nada de API keys ni proveedores de IA.
+    const isAdmin = API.user?.role === 'admin';
+    if (!isAdmin) {
+        let s = {};
+        try { s = await API.getBotSettings(); } catch (e) {}
+        container.innerHTML = `
+            <div class="page-header"><h1>Configuración</h1></div>
+            <div class="card" style="max-width:640px;">
+                <div class="card-header"><h2>🤖 Bot de WhatsApp</h2></div>
+                <form id="form-bot" style="display:flex;flex-direction:column;gap:1.5rem;padding-top:.5rem;">
+                    <div class="form-group" style="margin-bottom:0; display:flex; align-items:center; gap:1rem; padding:1rem; background:var(--bg-surface); border:2px solid var(--border-color); box-shadow:var(--shadow-sm); border-radius:var(--radius-md);">
+                        <label style="margin:0; font-weight:700;">🤖 Estado del Bot (IA)</label>
+                        <select name="BOT_IS_ACTIVE" class="form-control" style="width:auto; margin:0; cursor:pointer; border:2px solid var(--border-color);">
+                            <option value="true" ${s.BOT_IS_ACTIVE !== 'false' ? 'selected' : ''}>✅ Activo (Responde Automáticamente)</option>
+                            <option value="false" ${s.BOT_IS_ACTIVE === 'false' ? 'selected' : ''}>⏸️ Pausado (Apagado)</option>
+                        </select>
+                    </div>
+                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
+                        <h4 style="margin-bottom:.8rem;">Notificaciones de WhatsApp</h4>
+                        <div class="form-group">
+                            <label>Números para Notificar Cancelaciones</label>
+                            <input type="text" name="ADMIN_NOTIFY_NUMBERS" value="${s.ADMIN_NOTIFY_NUMBERS || ''}" placeholder="Ej: 549112345678,549112345679">
+                            <small>Separados por coma. Ejemplo: 5492604123456</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Horas previas para Recordatorio</label>
+                            <input type="number" name="REMINDER_HOURS_BEFORE" value="${s.REMINDER_HOURS_BEFORE || '24'}" placeholder="24">
+                            <small>Cuántas horas antes del turno se envía el recordatorio.</small>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="SettingsPage.saveBotSettings()">Guardar</button>
+                </form>
+            </div>
+        `;
+        return;
+    }
+
     let locations = [];
     let insurances = [];
     let configs = [];
@@ -200,6 +239,20 @@ Router.register('settings', async (container) => {
 });
 
 window.SettingsPage = {
+    async saveBotSettings() {
+        const form = document.getElementById('form-bot');
+        const data = {};
+        form.querySelectorAll('input, select').forEach(el => {
+            if (el.name) data[el.name] = el.value;
+        });
+        try {
+            await API.setBotSettings(data);
+            UI.toast('Configuración guardada', 'success');
+        } catch (e) {
+            UI.toast(e.message || 'Error al guardar', 'error');
+        }
+    },
+
     async saveConfigs() {
         const form = document.getElementById('form-config');
         const elements = form.querySelectorAll('input, select');

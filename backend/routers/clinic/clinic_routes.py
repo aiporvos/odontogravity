@@ -2,7 +2,7 @@
 from uuid import UUID
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
@@ -12,6 +12,7 @@ from backend.models.patient import Patient
 from backend.models.appointment import Appointment
 from backend.models.odontogram import OdontogramEntry
 from backend.models.professional import Professional
+from backend.models.config import AppConfig
 from backend.schemas.schemas import (
     PatientCreate, PatientRead, PatientUpdate,
     AppointmentCreate, AppointmentRead, AppointmentUpdate,
@@ -264,6 +265,36 @@ def soft_delete_odontogram_entry(entry_id: UUID, db: Session = Depends(get_db)):
 @router.get("/professionals", response_model=list[ProfessionalRead])
 def list_professionals_clinic(db: Session = Depends(get_db)):
     return db.query(Professional).filter(Professional.is_deleted == False, Professional.is_active == True).all()
+
+
+# ═══════════════════════════════════════════════════════
+# BOT SETTINGS (subconjunto de configs editable por el personal de clínica)
+# Solo estas claves NO sensibles. Las API keys y demás quedan en /admin.
+# ═══════════════════════════════════════════════════════
+CLINIC_EDITABLE_CONFIGS = ["BOT_IS_ACTIVE", "ADMIN_NOTIFY_NUMBERS", "REMINDER_HOURS_BEFORE"]
+
+
+@router.get("/bot-settings")
+def get_bot_settings(db: Session = Depends(get_db)):
+    rows = db.query(AppConfig).filter(AppConfig.key.in_(CLINIC_EDITABLE_CONFIGS)).all()
+    values = {r.key: r.value for r in rows}
+    return {k: values.get(k, "") for k in CLINIC_EDITABLE_CONFIGS}
+
+
+@router.post("/bot-settings")
+def set_bot_settings(data: dict = Body(...), db: Session = Depends(get_db)):
+    # Solo se aceptan las claves de la lista blanca; el resto se ignora.
+    for key in CLINIC_EDITABLE_CONFIGS:
+        if key not in data:
+            continue
+        val = str(data[key])
+        conf = db.query(AppConfig).filter(AppConfig.key == key).first()
+        if conf:
+            conf.value = val
+        else:
+            db.add(AppConfig(key=key, value=val))
+    db.commit()
+    return {"status": "ok"}
 
 
 # ═══════════════════════════════════════════════════════

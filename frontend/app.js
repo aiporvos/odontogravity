@@ -58,9 +58,15 @@
             document.getElementById('user-role').textContent = user.role;
             document.getElementById('user-avatar').textContent = user.full_name.charAt(0).toUpperCase();
 
-            // Show admin nav for admins
-            if (user.role === 'admin') {
+            // Admin ve todo el menú de Administración.
+            // Recepción ve solo "Configuración" (para encender/apagar el bot y los
+            // números de notificación); Usuarios y Profesionales quedan ocultos.
+            const isAdmin = user.role === 'admin';
+            const isReception = user.role === 'receptionist';
+            if (isAdmin || isReception) {
                 document.getElementById('admin-nav').style.display = 'block';
+                document.getElementById('nav-users').style.display = isAdmin ? '' : 'none';
+                document.getElementById('nav-professionals').style.display = isAdmin ? '' : 'none';
             }
         }
 

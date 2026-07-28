@@ -133,6 +133,9 @@ const API = {
 
     getConfigs() { return this.get('/admin/configs'); },
     setConfig(key, value, description = '') { return this.post('/admin/configs', { key, value, description }); },
+    // Subconjunto no sensible editable por el personal de clínica (recepción)
+    getBotSettings() { return this.get('/clinic/bot-settings'); },
+    setBotSettings(data) { return this.post('/clinic/bot-settings', data); },
 };
 
 API.init();
