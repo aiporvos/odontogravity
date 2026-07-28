@@ -5,7 +5,7 @@
  * Layout:  Superior (Derecha: 18-11 | Izquierda: 21-28)
  *          Inferior (Derecha: 48-41 | Izquierda: 31-38)
  * 
- * Colores: AZUL = preexistente  |  ROJO = prestación nueva
+ * Colores: ROJO = preexistente  |  AZUL = prestación nueva
  * Símbolos: X = extracción, O = caries, Corona, Prótesis fija/removible
  */
 
@@ -67,8 +67,9 @@ Router.register('odontogram', async (container) => {
 
             <!-- Patient Selector -->
             <div class="card">
-                <div class="odontogram-patient-select">
+                <div class="odontogram-patient-select" style="flex-wrap:wrap;">
                     <label style="font-weight:600;color:var(--slate-700);">Paciente:</label>
+                    <input type="text" id="odo-patient-search" placeholder="Buscar por nombre, apellido o DNI..." style="padding:.5rem .85rem;border:1px solid var(--slate-300);border-radius:var(--radius);min-width:260px;font-size:.9rem;">
                     <select id="odo-patient" style="padding:.5rem .85rem;border:1px solid var(--slate-300);border-radius:var(--radius);min-width:300px;font-size:.9rem;">
                         <option value="">Seleccionar paciente...</option>
                         ${patients.map(p => `<option value="${p.id}" ${p.id === storedPatientId ? 'selected' : ''}>${p.last_name}, ${p.first_name} — DNI: ${p.dni}</option>`).join('')}
@@ -81,8 +82,8 @@ Router.register('odontogram', async (container) => {
             <div class="odontogram-toolbar" style="flex-wrap: wrap; gap: 1rem; row-gap: 1.5rem; align-items: center;">
                 <div class="tool-group">
                     <span class="tool-group-label">Categoría:</span>
-                    <button class="tool-btn tool-blue active" data-category="preexisting" onclick="OdontogramPage.setCategory('preexisting', this)">🔵 Preexistente</button>
-                    <button class="tool-btn tool-red" data-category="treatment" onclick="OdontogramPage.setCategory('treatment', this)">🔴 Prestación</button>
+                    <button class="tool-btn tool-red active" data-category="preexisting" onclick="OdontogramPage.setCategory('preexisting', this)">🔴 Preexistente</button>
+                    <button class="tool-btn tool-blue" data-category="treatment" onclick="OdontogramPage.setCategory('treatment', this)">🔵 Prestación</button>
                 </div>
                 <div class="tool-group" style="border-left:1px solid var(--slate-300);padding-left:1rem;">
                     <span class="tool-group-label">Símbolo:</span>
@@ -154,12 +155,12 @@ Router.register('odontogram', async (container) => {
                     <div>
                         <div class="legend-item"><div class="legend-swatch" style="border:2px solid var(--odo-preexisting); border-radius:50%"></div> Corona Preexistente</div>
                         <div class="legend-item"><div class="legend-swatch" style="border:2px solid var(--odo-treatment); border-radius:50%"></div> Corona a realizar</div>
-                        <div class="legend-item"><div class="legend-swatch" style="background:var(--odo-treatment);"></div> Caries (Roja)</div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:var(--odo-treatment);"></div> Caries (Azul)</div>
                     </div>
                     <div>
-                        <div class="legend-item"><span style="color:var(--odo-treatment);font-weight:800;">✕</span> Diente a extraer (Rojo)</div>
-                        <div class="legend-item"><span style="color:var(--odo-preexisting);font-weight:800;">✕</span> Diente ausente (Azul)</div>
-                        <div class="legend-item"><div class="legend-swatch" style="background:var(--odo-preexisting);"></div> Obturación (Azul)</div>
+                        <div class="legend-item"><span style="color:var(--odo-treatment);font-weight:800;">✕</span> Diente a extraer (Azul)</div>
+                        <div class="legend-item"><span style="color:var(--odo-preexisting);font-weight:800;">✕</span> Diente ausente (Rojo)</div>
+                        <div class="legend-item"><div class="legend-swatch" style="background:var(--odo-preexisting);"></div> Obturación (Roja)</div>
                     </div>
                     <div>
                         <div class="legend-item"><strong>SFF</strong> Sellador de fosas</div>
@@ -198,6 +199,20 @@ Router.register('odontogram', async (container) => {
             </div>
         </div>
     `;
+
+    // Buscador: filtra las opciones del selector a medida que se tipea
+    const odoSearch = document.getElementById('odo-patient-search');
+    if (odoSearch) {
+        odoSearch.addEventListener('input', (e) => {
+            const q = e.target.value.trim().toLowerCase();
+            const sel = document.getElementById('odo-patient');
+            const current = sel.value;
+            const list = !q ? odontogramState.patients : odontogramState.patients.filter(p =>
+                `${p.last_name} ${p.first_name} ${p.dni}`.toLowerCase().includes(q));
+            sel.innerHTML = '<option value="">Seleccionar paciente...</option>' +
+                list.map(p => `<option value="${p.id}" ${p.id === current ? 'selected' : ''}>${p.last_name}, ${p.first_name} — DNI: ${p.dni}</option>`).join('');
+        });
+    }
 
     // Listen for patient change
     document.getElementById('odo-patient').addEventListener('change', (e) => {
