@@ -126,10 +126,10 @@ const API = {
     createLocation(data) { return this.post('/admin/locations', data); },
     deleteLocation(id) { return this.del(`/admin/locations/${id}`); },
 
-    getInsurances() { return this.get('/admin/insurances'); },
-    createInsurance(data) { return this.post('/admin/insurances', data); },
-    updateInsurance(id, data) { return this.put(`/admin/insurances/${id}`, data); },
-    deleteInsurance(id) { return this.del(`/admin/insurances/${id}`); },
+    getInsurances() { return this.get('/clinic/insurances'); },
+    createInsurance(data) { return this.post('/clinic/insurances', data); },
+    updateInsurance(id, data) { return this.put(`/clinic/insurances/${id}`, data); },
+    deleteInsurance(id) { return this.del(`/clinic/insurances/${id}`); },
 
     getConfigs() { return this.get('/admin/configs'); },
     setConfig(key, value, description = '') { return this.post('/admin/configs', { key, value, description }); },

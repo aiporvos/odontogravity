@@ -7,11 +7,12 @@ Router.register('settings', async (container) => {
     // y los números de notificación. Nada de API keys ni proveedores de IA.
     const isAdmin = API.user?.role === 'admin';
     if (!isAdmin) {
-        let s = {};
-        try { s = await API.getBotSettings(); } catch (e) {}
+        let s = {}, recInsurances = [];
+        try { [s, recInsurances] = await Promise.all([API.getBotSettings(), API.getInsurances()]); } catch (e) {}
         container.innerHTML = `
             <div class="page-header"><h1>Configuración</h1></div>
-            <div class="card" style="max-width:640px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;align-items:start;">
+            <div class="card">
                 <div class="card-header"><h2>🤖 Bot de WhatsApp</h2></div>
                 <form id="form-bot" style="display:flex;flex-direction:column;gap:1.5rem;padding-top:.5rem;">
                     <div class="form-group" style="margin-bottom:0; display:flex; align-items:center; gap:1rem; padding:1rem; background:var(--bg-surface); border:2px solid var(--border-color); box-shadow:var(--shadow-sm); border-radius:var(--radius-md);">
@@ -36,6 +37,27 @@ Router.register('settings', async (container) => {
                     </div>
                     <button type="button" class="btn btn-primary" onclick="SettingsPage.saveBotSettings()">Guardar</button>
                 </form>
+            </div>
+
+            <div class="card">
+                <div class="card-header" style="justify-content:space-between;display:flex;align-items:center;">
+                    <h2>🏥 Obras Sociales</h2>
+                    <button class="btn btn-sm btn-primary" onclick="SettingsPage.showInsuranceForm()">+ Nueva</button>
+                </div>
+                ${recInsurances.map(i => `
+                    <div style="padding:.5rem 0;border-bottom:1px solid var(--slate-100);display:flex;justify-content:space-between;align-items:center;">
+                        <div>
+                            <strong>${i.name}</strong>
+                            <div style="font-size:.8rem;color:var(--slate-500);">Código: ${i.code || '-'}</div>
+                        </div>
+                        <div style="display:flex;gap:.5rem;align-items:center;">
+                            <span class="badge badge-${i.is_active ? 'confirmed' : 'cancelled'}">${i.is_active ? 'Activa' : 'Inactiva'}</span>
+                            <button class="btn btn-icon text-primary" onclick="SettingsPage.showInsuranceForm('${i.id}', '${(i.name||'').replace(/'/g, "\\'")}', '${(i.code||'').replace(/'/g, "\\'")}', ${i.is_active})">✏️</button>
+                            <button class="btn btn-icon text-red" onclick="SettingsPage.deleteInsurance('${i.id}')">🗑️</button>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
             </div>
         `;
         return;

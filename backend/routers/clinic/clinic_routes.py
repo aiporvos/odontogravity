@@ -15,12 +15,14 @@ from backend.models.professional import Professional
 from backend.models.config import AppConfig
 from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff
 from backend.models.appointment import AppointmentStatus
+from backend.models.insurance import Insurance
 from backend.schemas.schemas import (
     PatientCreate, PatientRead, PatientUpdate,
     AppointmentCreate, AppointmentRead, AppointmentUpdate,
     OdontogramEntryCreate, OdontogramEntryRead, OdontogramEntryUpdate,
     ProfessionalRead, SearchResult,
     ScheduleBlock, ScheduleBlockRead, TimeOffCreate, TimeOffRead,
+    InsuranceCreate, InsuranceUpdate, InsuranceRead,
 )
 
 router = APIRouter(prefix="/api/clinic", tags=["Clínica"], dependencies=[Depends(require_clinic)])
@@ -375,6 +377,58 @@ def reschedule_list(db: Session = Depends(get_db)):
         result.extend(appts)
     result.sort(key=lambda a: a.start_time)
     return result
+
+
+# ═══════════════════════════════════════════════════════
+# OBRAS SOCIALES / MUTUALES (gestionables por el personal de clínica)
+# ═══════════════════════════════════════════════════════
+@router.get("/insurances", response_model=list[InsuranceRead])
+def clinic_list_insurances(db: Session = Depends(get_db)):
+    return db.query(Insurance).filter(Insurance.is_deleted == False).all()
+
+
+@router.post("/insurances", response_model=InsuranceRead, status_code=201)
+def clinic_create_insurance(data: InsuranceCreate, db: Session = Depends(get_db)):
+    existing = db.query(Insurance).filter(Insurance.name.ilike(data.name)).first()
+    if existing:
+        if existing.is_deleted:
+            existing.is_deleted = False
+            existing.is_active = True
+            existing.code = data.code
+            db.commit()
+            db.refresh(existing)
+            return existing
+        raise HTTPException(400, "Ya existe una obra social con ese nombre")
+    ins = Insurance(**data.model_dump())
+    db.add(ins)
+    db.commit()
+    db.refresh(ins)
+    return ins
+
+
+@router.put("/insurances/{ins_id}", response_model=InsuranceRead)
+def clinic_update_insurance(ins_id: UUID, data: InsuranceUpdate, db: Session = Depends(get_db)):
+    ins = db.query(Insurance).filter(Insurance.id == ins_id, Insurance.is_deleted == False).first()
+    if not ins:
+        raise HTTPException(404, "Obra social no encontrada")
+    if data.name is not None and data.name.lower() != ins.name.lower():
+        dup = db.query(Insurance).filter(Insurance.name.ilike(data.name)).first()
+        if dup and not dup.is_deleted:
+            raise HTTPException(400, "Ya existe una obra social con ese nombre")
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(ins, key, value)
+    db.commit()
+    db.refresh(ins)
+    return ins
+
+
+@router.delete("/insurances/{ins_id}")
+def clinic_delete_insurance(ins_id: UUID, db: Session = Depends(get_db)):
+    ins = db.query(Insurance).filter(Insurance.id == ins_id).first()
+    if ins:
+        ins.is_deleted = True
+        db.commit()
+    return {"detail": "Obra social eliminada"}
 
 
 # ═══════════════════════════════════════════════════════
