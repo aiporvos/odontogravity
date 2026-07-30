@@ -535,7 +535,7 @@ const AgendaPage = {
         UI.showModal('Nuevo Turno', `
             <div id="multi-appt-list" style="margin-bottom:1rem;">${listHtml()}</div>
             <form id="form-new-appointment" class="form-grid">
-                <div class="form-group">
+                <div class="form-group form-group-full">
                     <label>Paciente *</label>
                     <input type="text" id="appt-patient-search" placeholder="Buscar por nombre, apellido o DNI..." style="margin-bottom:.35rem;" oninput="AgendaPage._filterPatients(this.value)">
                     <select name="patient_id" id="appt-patient-select" required>
