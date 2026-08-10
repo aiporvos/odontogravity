@@ -145,6 +145,9 @@ const PatientsPage = {
             UI.toast('Completá los campos obligatorios', 'error');
             return;
         }
+        // Los campos opcionales vacíos ('') se envían como null; si no, valores
+        // tipados como la fecha de nacimiento rompen la validación (error 422).
+        Object.keys(data).forEach(k => { if (data[k] === '') data[k] = null; });
         try {
             if (id) {
                 await API.updatePatient(id, data);
