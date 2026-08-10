@@ -2,15 +2,16 @@
  * Horarios / Disponibilidad
  * - Horario de atención de la clínica (compartido, editable).
  * - Ausencias puntuales por profesional.
+ * - Días feriados (cierra toda la clínica).
  * Accesible para admin y recepción (rol clínica).
  */
 const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
 Router.register('horarios', async (container) => {
-    let blocks = [], professionals = [], timeoff = [];
+    let blocks = [], professionals = [], timeoff = [], holidays = [];
     try {
-        [blocks, professionals, timeoff] = await Promise.all([
-            API.getSchedule(), API.getProfessionals(), API.getTimeOff()
+        [blocks, professionals, timeoff, holidays] = await Promise.all([
+            API.getSchedule(), API.getProfessionals(), API.getTimeOff(), API.getHolidays()
         ]);
     } catch (e) {}
 
@@ -57,11 +58,32 @@ Router.register('horarios', async (container) => {
                 </div>
                 <div id="timeoff-list"></div>
             </div>
+
+            <!-- FERIADOS: nueva sección -->
+            <div class="card" style="grid-column:1/-1;">
+                <div class="card-header"><h2>📅 Días Feriados</h2></div>
+                <p style="font-size:.85rem;color:var(--slate-500);margin-bottom:1rem;">
+                    Los días feriados aplican a <strong>toda la clínica</strong>. El bot no ofrecerá turnos en estas fechas para ningún profesional.
+                </p>
+                <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end;margin-bottom:1rem;">
+                    <div class="form-group" style="margin:0;">
+                        <label>Fecha del feriado</label>
+                        <input type="date" id="holiday-date" class="form-control">
+                    </div>
+                    <div class="form-group" style="margin:0;flex:1;min-width:180px;">
+                        <label>Descripción (opcional)</label>
+                        <input type="text" id="holiday-desc" class="form-control" placeholder="Ej: Día de la Independencia">
+                    </div>
+                    <button class="btn btn-secondary" onclick="HorariosPage.addHoliday()">Agregar feriado</button>
+                </div>
+                <div id="holidays-list"></div>
+            </div>
         </div>
     `;
 
     HorariosPage.renderSchedule();
     HorariosPage.renderTimeOff(timeoff);
+    HorariosPage.renderHolidays(holidays);
 });
 
 window.HorariosPage = {
@@ -157,6 +179,53 @@ window.HorariosPage = {
         try {
             await API.deleteTimeOff(id);
             HorariosPage.renderTimeOff(await API.getTimeOff());
+        } catch (e) { UI.toast(e.message || 'Error', 'error'); }
+    },
+
+    // ── Feriados ──────────────────────────────────────
+    renderHolidays(list) {
+        const el = document.getElementById('holidays-list');
+        if (!list || list.length === 0) {
+            el.innerHTML = `<div style="font-size:.85rem;color:var(--slate-400);">Sin feriados cargados.</div>`;
+            return;
+        }
+        el.innerHTML = `
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:.75rem;">
+                ${list.map(h => {
+                    const d = new Date(h.date + 'T12:00:00');
+                    const formatted = d.toLocaleDateString('es-AR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+                    return `
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding:.75rem 1rem;border-radius:var(--radius-md);border:1px solid var(--border-color);background:var(--bg-surface);">
+                            <div>
+                                <div style="font-weight:600;font-size:.95rem;">📅 ${formatted}</div>
+                                <div style="font-size:.8rem;color:var(--slate-500);margin-top:.15rem;">${h.description || 'Feriado'}</div>
+                            </div>
+                            <button class="btn btn-icon text-red" onclick="HorariosPage.removeHoliday('${h.id}')">🗑️</button>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+    },
+
+    async addHoliday() {
+        const date = document.getElementById('holiday-date').value;
+        const description = document.getElementById('holiday-desc').value.trim();
+        if (!date) { UI.toast('Elegí la fecha del feriado', 'error'); return; }
+        try {
+            await API.createHoliday({ date, description: description || null });
+            UI.toast('Feriado agregado', 'success');
+            document.getElementById('holiday-date').value = '';
+            document.getElementById('holiday-desc').value = '';
+            HorariosPage.renderHolidays(await API.getHolidays());
+        } catch (e) { UI.toast(e.message || 'Error', 'error'); }
+    },
+
+    async removeHoliday(id) {
+        try {
+            await API.deleteHoliday(id);
+            UI.toast('Feriado eliminado', 'success');
+            HorariosPage.renderHolidays(await API.getHolidays());
         } catch (e) { UI.toast(e.message || 'Error', 'error'); }
     },
 };

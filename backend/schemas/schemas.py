@@ -344,3 +344,16 @@ class TimeOffRead(BaseModel):
     reason: Optional[str] = None
     professional: Optional[ProfessionalRead] = None
     model_config = {"from_attributes": True}
+
+
+class HolidayCreate(BaseModel):
+    date: date
+    description: Optional[str] = None
+
+
+class HolidayRead(BaseModel):
+    id: UUID
+    date: date
+    description: Optional[str] = None
+    created_at: datetime
+    model_config = {"from_attributes": True}

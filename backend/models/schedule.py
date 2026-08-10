@@ -35,3 +35,13 @@ class ProfessionalTimeOff(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     professional = relationship("Professional", lazy="selectin")
+
+
+class ClinicHoliday(Base):
+    """Día feriado de la clínica (cierra todo el día para todos los profesionales)."""
+    __tablename__ = "clinic_holidays"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    date: Mapped[date] = mapped_column(Date, nullable=False, unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

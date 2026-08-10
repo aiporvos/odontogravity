@@ -52,10 +52,27 @@ const API = {
 
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
-            throw new Error(errData.detail || `Error ${res.status}`);
+            throw new Error(this.errorMessage(errData, res.status));
         }
 
         return res.json();
+    },
+
+    // En un error de validacion (422) FastAPI manda "detail" como una lista de
+    // objetos; al pasarla a Error() se veia "[object Object]" en el toast.
+    errorMessage(errData, status) {
+        const detail = errData && errData.detail;
+        if (typeof detail === 'string') return detail;
+        if (Array.isArray(detail) && detail.length) {
+            return detail
+                .map(d => {
+                    const field = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : null;
+                    return field ? `${field}: ${d.msg}` : d.msg;
+                })
+                .filter(Boolean)
+                .join(' · ');
+        }
+        return `Error ${status}`;
     },
 
     get(path) { return this.request('GET', path); },
@@ -144,6 +161,11 @@ const API = {
     createTimeOff(data) { return this.post('/clinic/time-off', data); },
     deleteTimeOff(id) { return this.del(`/clinic/time-off/${id}`); },
     getRescheduleList() { return this.get('/clinic/reschedule-list'); },
+
+    // Feriados
+    getHolidays() { return this.get('/clinic/holidays'); },
+    createHoliday(data) { return this.post('/clinic/holidays', data); },
+    deleteHoliday(id) { return this.del(`/clinic/holidays/${id}`); },
 };
 
 API.init();

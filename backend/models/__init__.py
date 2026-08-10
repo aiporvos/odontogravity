@@ -7,11 +7,11 @@ from backend.models.chat_session import ChatSession, ChatMessage
 from backend.models.clinic_location import ClinicLocation
 from backend.models.insurance import Insurance
 from backend.models.config import AppConfig
-from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff
+from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff, ClinicHoliday
 
 __all__ = [
     "User", "Patient", "Professional", "Appointment",
     "OdontogramEntry", "ChatSession", "ChatMessage",
     "ClinicLocation", "Insurance", "AppConfig",
-    "ClinicSchedule", "ProfessionalTimeOff"
+    "ClinicSchedule", "ProfessionalTimeOff", "ClinicHoliday"
 ]

@@ -13,7 +13,7 @@ from backend.models.appointment import Appointment
 from backend.models.odontogram import OdontogramEntry
 from backend.models.professional import Professional
 from backend.models.config import AppConfig
-from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff
+from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff, ClinicHoliday
 from backend.models.appointment import AppointmentStatus
 from backend.models.insurance import Insurance
 from backend.schemas.schemas import (
@@ -23,6 +23,7 @@ from backend.schemas.schemas import (
     ProfessionalRead, SearchResult,
     ScheduleBlock, ScheduleBlockRead, TimeOffCreate, TimeOffRead,
     InsuranceCreate, InsuranceUpdate, InsuranceRead,
+    HolidayCreate, HolidayRead,
 )
 
 router = APIRouter(prefix="/api/clinic", tags=["Clínica"], dependencies=[Depends(require_clinic)])
@@ -356,6 +357,39 @@ def delete_time_off(off_id: UUID, db: Session = Depends(get_db)):
     db.delete(off)
     db.commit()
     return {"detail": "Ausencia eliminada"}
+
+
+# ═══════════════════════════════════════════════════════
+# FERIADOS (días feriados de la clínica, aplica a TODOS los profesionales)
+# ═══════════════════════════════════════════════════════
+@router.get("/holidays", response_model=list[HolidayRead])
+def list_holidays(db: Session = Depends(get_db)):
+    from datetime import date as _date
+    return db.query(ClinicHoliday).filter(
+        ClinicHoliday.date >= _date.today()
+    ).order_by(ClinicHoliday.date).all()
+
+
+@router.post("/holidays", response_model=HolidayRead, status_code=201)
+def create_holiday(data: HolidayCreate, db: Session = Depends(get_db)):
+    existing = db.query(ClinicHoliday).filter(ClinicHoliday.date == data.date).first()
+    if existing:
+        return existing
+    holiday = ClinicHoliday(date=data.date, description=data.description)
+    db.add(holiday)
+    db.commit()
+    db.refresh(holiday)
+    return holiday
+
+
+@router.delete("/holidays/{holiday_id}")
+def delete_holiday(holiday_id: UUID, db: Session = Depends(get_db)):
+    holiday = db.query(ClinicHoliday).filter(ClinicHoliday.id == holiday_id).first()
+    if not holiday:
+        raise HTTPException(404, "Feriado no encontrado")
+    db.delete(holiday)
+    db.commit()
+    return {"detail": "Feriado eliminado"}
 
 
 @router.get("/reschedule-list", response_model=list[AppointmentRead])

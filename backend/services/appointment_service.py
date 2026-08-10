@@ -5,7 +5,7 @@ from sqlalchemy import and_
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
-from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff
+from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff, ClinicHoliday
 
 # Maps reason keywords to professional LAST NAMES as stored in DB
 # DB has: 'Dr. Silvestro' and 'Dra. Murad'
@@ -175,6 +175,13 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # Profesional asignado por el motivo (necesario para chequear ausencias)
     prof = route_professional(reason, db)
     prof_name = prof.full_name if prof else "Cualquier profesional disponible"
+
+    # ── Feriado: si el día es feriado, saltar directamente al siguiente ──
+    is_holiday = db.query(ClinicHoliday).filter(ClinicHoliday.date == day).first()
+    if is_holiday:
+        if recursive_depth < 14:
+            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
+        return {"date": str(day), "location": location, "available_slots": [], "message": "No hay turnos disponibles (feriados)."}
 
     # Horario de la clínica para ese día (configurable desde el panel)
     schedule_rows = db.query(ClinicSchedule).filter(
