@@ -1,8 +1,11 @@
 import os
+import re
+import hashlib
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from backend.database import engine, Base, SessionLocal
@@ -100,8 +103,13 @@ app.add_middleware(
 async def no_cache_frontend(request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path == "/" or path.endswith((".js", ".css", ".html")):
+    if path.endswith((".js", ".css")):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    elif path == "/" or path.endswith(".html"):
+        # El HTML nunca se guarda: es el que trae los ?v= nuevos de cada deploy.
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 # ── Routers ─────────────────────────────────────────────
@@ -118,5 +126,72 @@ def health_check():
 
 # ── Serve Frontend (SPA) ───────────────────────────────
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+
+# Cache-busting automático: en vez de acordarnos de subir el "?v=N" a mano en
+# cada script del index.html, calculamos la versión de cada archivo a partir de
+# su contenido. Si el archivo cambió, la URL cambia y el navegador está obligado
+# a bajarlo de nuevo; si no cambió, sigue usando el que tiene en caché.
+_ASSET_RE = re.compile(r'(src|href)="(?!https?://|//)([^"?]+\.(?:js|css))(?:\?[^"]*)?"')
+_asset_versions: dict[str, tuple[float, str]] = {}
+
+
+def _asset_version(rel_path: str) -> str:
+    """Hash corto del contenido del archivo, cacheado por mtime."""
+    full = os.path.join(frontend_path, rel_path.lstrip("/"))
+    try:
+        mtime = os.path.getmtime(full)
+    except OSError:
+        return "0"
+    cached = _asset_versions.get(rel_path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        with open(full, "rb") as f:
+            digest = hashlib.sha1(f.read()).hexdigest()[:10]
+    except OSError:
+        return "0"
+    _asset_versions[rel_path] = (mtime, digest)
+    return digest
+
+
+def _build_index_html() -> tuple[str, str]:
+    """Devuelve (html con los assets versionados, versión global del build)."""
+    with open(os.path.join(frontend_path, "index.html"), encoding="utf-8") as f:
+        html = f.read()
+
+    versions: list[str] = []
+
+    def repl(m: re.Match) -> str:
+        attr, path = m.group(1), m.group(2)
+        version = _asset_version(path)
+        versions.append(f"{path}:{version}")
+        return f'{attr}="{path}?v={version}"'
+
+    html = _ASSET_RE.sub(repl, html)
+
+    # Versión global del build: si cambia cualquier asset, cambia este valor.
+    build = hashlib.sha1("|".join(versions).encode()).hexdigest()[:10]
+    html = html.replace(
+        "</head>",
+        f'    <script>window.APP_VERSION = "{build}";</script>\n</head>',
+        1,
+    )
+    return html, build
+
+
+@app.get("/api/version")
+def app_version():
+    """Lo consulta el frontend para detectar que salió una versión nueva."""
+    if not os.path.exists(frontend_path):
+        return {"version": "dev"}
+    return {"version": _build_index_html()[1]}
+
+
 if os.path.exists(frontend_path):
+
+    @app.get("/", response_class=HTMLResponse)
+    @app.get("/index.html", response_class=HTMLResponse)
+    def serve_index():
+        return HTMLResponse(_build_index_html()[0])
+
     app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
