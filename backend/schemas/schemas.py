@@ -143,7 +143,9 @@ class AppointmentCreate(BaseModel):
     start_time: datetime
     duration_minutes: int = 30
     reason: Optional[str] = None
-    status: AppointmentStatus = AppointmentStatus.pending
+    # Confirmado por default: el loop de recordatorios solo notifica los
+    # confirmados, asi que un turno "pendiente" nunca disparaba el aviso.
+    status: AppointmentStatus = AppointmentStatus.confirmed
     channel: AppointmentChannel = AppointmentChannel.web
     location: Optional[str] = None
     notes: Optional[str] = None

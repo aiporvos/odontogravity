@@ -424,8 +424,9 @@ const AgendaPage = {
     async showAppointment(id) {
         try {
             const a = await API.getAppointment(id);
-            let professionals = [];
+            let professionals = [], locations = [];
             try { professionals = await API.getProfessionals(); } catch (e) {}
+            try { locations = await API.getClinicLocations(); } catch (e) {}
 
             const p = a.patient || {};
             // Escapa un valor para usarlo dentro de un atributo HTML (value="...")
@@ -433,6 +434,11 @@ const AgendaPage = {
                 .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
             const profOptions = professionals.map(pr =>
                 `<option value="${pr.id}" ${a.professional_id === pr.id ? 'selected' : ''}>${attr(pr.full_name)}</option>`
+            ).join('');
+            // Sede: los turnos viejos la tienen vacía y así el bot no los ve al
+            // calcular disponibilidad. Se puede corregir desde acá.
+            const locOptions = locations.map(l =>
+                `<option value="${attr(l.name)}" ${a.location === l.name ? 'selected' : ''}>${attr(l.name)}</option>`
             ).join('');
             const startVal = (a.start_time || '').slice(0, 16); // YYYY-MM-DDTHH:MM para datetime-local
             const obra = a.insurance_name || p.insurance_name || '';
@@ -447,6 +453,12 @@ const AgendaPage = {
                     <div class="form-group"><label>Obra Social</label><input id="edit-insurance" class="form-control" value="${attr(obra)}"></div>
                     <div class="form-group"><label>Profesional</label><select id="edit-prof" class="form-control">${profOptions}</select></div>
                     <div class="form-group"><label>Fecha/Hora</label><input id="edit-start" type="datetime-local" class="form-control" value="${startVal}"></div>
+                    <div class="form-group">
+                        <label>Sede${a.location ? '' : ' ⚠️ sin asignar'}</label>
+                        <select id="edit-location" class="form-control">
+                            <option value="">Sin asignar</option>${locOptions}
+                        </select>
+                    </div>
                     <div class="form-group"><label>Motivo</label><input id="edit-reason" class="form-control" value="${attr(a.reason)}"></div>
                     <div class="form-group">
                         <label>Estado</label>
@@ -490,6 +502,8 @@ const AgendaPage = {
                 status: val('edit-status'),
             };
             if (startVal) apptData.start_time = startVal;
+            const loc = val('edit-location');
+            if (loc) apptData.location = loc;
             await API.updateAppointment(apptId, apptData);
 
             UI.toast('Turno actualizado', 'success');
@@ -521,8 +535,38 @@ const AgendaPage = {
 
     _showMultiModal(professionals, defaultDateTime) {
         this._pendingAppts = [];
-        let patients = [];
-        API.getPatients().then(p => { patients = p; this._renderMultiModal(professionals, patients, defaultDateTime); });
+        // Los feriados se traen junto con los pacientes para poder avisar en el
+        // momento, sin esperar a que el backend rechace el turno.
+        Promise.all([
+            API.getPatients(),
+            API.getHolidays().catch(() => []),
+            API.getClinicLocations().catch(() => []),
+        ]).then(([patients, holidays, locations]) => {
+            this._holidays = holidays || [];
+            this._locations = locations || [];
+            this._renderMultiModal(professionals, patients, defaultDateTime);
+        });
+    },
+
+    // Devuelve el feriado que cae en esa fecha, o null.
+    _holidayFor(dateTimeLocal) {
+        if (!dateTimeLocal) return null;
+        const day = String(dateTimeLocal).slice(0, 10); // YYYY-MM-DD
+        return (this._holidays || []).find(h => h.date === day) || null;
+    },
+
+    _holidayMsg(h) {
+        const [y, m, d] = h.date.split('-');
+        return `El ${d}/${m}/${y} es feriado${h.description ? ` (${h.description})` : ''}. La clínica está cerrada.`;
+    },
+
+    // Aviso en vivo debajo del campo de fecha.
+    _checkHoliday(value) {
+        const box = document.getElementById('appt-holiday-warning');
+        if (!box) return;
+        const h = this._holidayFor(value);
+        box.style.display = h ? 'block' : 'none';
+        box.textContent = h ? `⛔ ${this._holidayMsg(h)}` : '';
     },
 
     _renderMultiModal(professionals, patients, defaultDateTime) {
@@ -562,11 +606,20 @@ const AgendaPage = {
                 </div>
                 <div class="form-group">
                     <label>Fecha y Hora *</label>
-                    <input type="datetime-local" name="start_time" required value="${defaultDateTime}">
+                    <input type="datetime-local" name="start_time" required value="${defaultDateTime}"
+                        oninput="AgendaPage._checkHoliday(this.value)">
+                    <div id="appt-holiday-warning" style="display:none;margin-top:.35rem;padding:.4rem .6rem;border-radius:6px;background:#fee2e2;color:#991b1b;font-size:.82rem;"></div>
                 </div>
                 <div class="form-group">
                     <label>Duración (min)</label>
                     <input type="number" name="duration_minutes" value="30" min="15" step="15">
+                </div>
+                <div class="form-group">
+                    <label>Sede *</label>
+                    <select name="location" required>
+                        ${(this._locations || []).map((l, i) =>
+                            `<option value="${l.name}" ${i === 0 ? 'selected' : ''}>${l.name}</option>`).join('')}
+                    </select>
                 </div>
                 <div class="form-group form-group-full">
                     <label>Motivo</label>
@@ -583,6 +636,9 @@ const AgendaPage = {
     _addToList() {
         const data = UI.getFormData('form-new-appointment');
         if (!data.patient_id || !data.start_time) return UI.toast('Completá paciente y fecha', 'error');
+        if (!data.location) return UI.toast('Elegí la sede', 'error');
+        const h = this._holidayFor(data.start_time);
+        if (h) return UI.toast(this._holidayMsg(h), 'error');
         this._pendingAppts.push({...data, duration_minutes: parseInt(data.duration_minutes) || 30});
         const listEl = document.getElementById('multi-appt-list');
         if (listEl) {
@@ -651,17 +707,33 @@ const AgendaPage = {
             allAppts.push({...formData, duration_minutes: parseInt(formData.duration_minutes) || 30});
         }
         if (allAppts.length === 0) return UI.toast('Agregá al menos un turno', 'error');
+        // Sin sede el turno queda invisible para el bot al calcular disponibilidad.
+        if (allAppts.some(a => !a.location)) return UI.toast('Elegí la sede', 'error');
 
-        let ok = 0, fail = 0;
+        // Ningun turno de la tanda puede caer en feriado.
+        for (const appt of allAppts) {
+            const h = this._holidayFor(appt.start_time);
+            if (h) return UI.toast(this._holidayMsg(h), 'error');
+        }
+
+        let ok = 0;
+        const errores = [];
         for (const appt of allAppts) {
             try {
                 await API.createAppointment(appt);
                 ok++;
-            } catch (err) { fail++; }
+            } catch (err) {
+                // Sin esto el motivo del rechazo se perdia y solo se veia el conteo.
+                errores.push(err.message);
+            }
         }
         this._pendingAppts = [];
         UI.closeModal();
-        UI.toast(`${ok} turno(s) creado(s)${fail ? `, ${fail} con error` : ''}`, ok > 0 ? 'success' : 'error');
+        if (errores.length) {
+            UI.toast(`${ok} turno(s) creado(s). ${errores.length} con error: ${errores[0]}`, ok > 0 ? 'info' : 'error');
+        } else {
+            UI.toast(`${ok} turno(s) creado(s)`, 'success');
+        }
         if (AgendaPage.loadAgenda) AgendaPage.loadAgenda();
     },
 

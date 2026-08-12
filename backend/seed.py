@@ -106,7 +106,7 @@ def run_seed(db: Session):
                 patient_id=p2.id, professional_id=prof1.id,
                 start_time=now + timedelta(days=1, hours=15),
                 duration_minutes=60, reason="Limpieza y Caries",
-                status=AppointmentStatus.pending, location="San Rafael"
+                status=AppointmentStatus.confirmed, location="San Rafael"
             )
         ])
 

@@ -13,6 +13,7 @@ from backend.models.appointment import Appointment
 from backend.models.odontogram import OdontogramEntry
 from backend.models.professional import Professional
 from backend.models.config import AppConfig
+from backend.models.clinic_location import ClinicLocation
 from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff, ClinicHoliday
 from backend.models.appointment import AppointmentStatus
 from backend.models.insurance import Insurance
@@ -23,7 +24,7 @@ from backend.schemas.schemas import (
     ProfessionalRead, SearchResult,
     ScheduleBlock, ScheduleBlockRead, TimeOffCreate, TimeOffRead,
     InsuranceCreate, InsuranceUpdate, InsuranceRead,
-    HolidayCreate, HolidayRead,
+    HolidayCreate, HolidayRead, LocationRead,
 )
 
 router = APIRouter(prefix="/api/clinic", tags=["Clínica"], dependencies=[Depends(require_clinic)])
@@ -147,6 +148,43 @@ def get_appointment(appt_id: UUID, db: Session = Depends(get_db)):
     return a
 
 
+def _assert_not_holiday(db: Session, when: datetime) -> None:
+    """Corta el alta/reprogramacion si la fecha es feriado.
+
+    El chequeo de feriados vivia solo en get_available_slots (el flujo del bot),
+    asi que desde el panel se podian cargar turnos igual. Va aca, en el endpoint,
+    para que valga para cualquier origen: agenda, dashboard o bot.
+    """
+    holiday = db.query(ClinicHoliday).filter(ClinicHoliday.date == when.date()).first()
+    if holiday:
+        detalle = f" ({holiday.description})" if holiday.description else ""
+        raise HTTPException(
+            400,
+            f"El {when.strftime('%d/%m/%Y')} es feriado{detalle}. "
+            "La clínica está cerrada, no se pueden agendar turnos.",
+        )
+
+
+def _assert_slot_free(db: Session, start: datetime, duration_minutes: int,
+                      location: str | None, professional_id, exclude_id=None) -> None:
+    """Corta el alta/reprogramacion si el horario ya esta ocupado.
+
+    Misma regla que usa el bot para ofrecer horarios, para que el panel y el bot
+    no se contradigan: la cantidad de turnos simultaneos permitidos sale de
+    CHAIRS_PER_LOCATION (default 1) y ademas nunca se duplica un profesional.
+    """
+    from backend.services.appointment_service import (
+        get_day_appointments, get_chairs_per_location, slot_conflict,
+    )
+    del_dia = get_day_appointments(db, start.date(), location)
+    motivo = slot_conflict(
+        del_dia, start, duration_minutes or 30, get_chairs_per_location(db),
+        professional_id, exclude_id,
+    )
+    if motivo:
+        raise HTTPException(409, f"{start.strftime('%d/%m/%Y %H:%M')}: {motivo}")
+
+
 @router.post("/appointments", response_model=AppointmentRead, status_code=201)
 def create_appointment(data: AppointmentCreate, db: Session = Depends(get_db)):
     # Validate patient and professional exist
@@ -154,6 +192,10 @@ def create_appointment(data: AppointmentCreate, db: Session = Depends(get_db)):
         raise HTTPException(404, "Paciente no encontrado")
     if not db.query(Professional).filter(Professional.id == data.professional_id, Professional.is_deleted == False).first():
         raise HTTPException(404, "Profesional no encontrado")
+
+    _assert_not_holiday(db, data.start_time)
+    _assert_slot_free(db, data.start_time, data.duration_minutes,
+                      data.location, data.professional_id)
 
     appt = Appointment(**data.model_dump())
     db.add(appt)
@@ -171,6 +213,19 @@ async def update_appointment(appt_id: UUID, data: AppointmentUpdate, db: Session
     was_cancelled = False
     if getattr(data, "status", None) == "cancelled" and a.status != "cancelled":
         was_cancelled = True
+
+    # Reprogramar hacia un feriado tampoco se permite (salvo que se cancele).
+    campos = data.model_dump(exclude_unset=True)
+    if campos.get("start_time") and not was_cancelled:
+        _assert_not_holiday(db, campos["start_time"])
+        _assert_slot_free(
+            db,
+            campos["start_time"],
+            campos.get("duration_minutes", a.duration_minutes),
+            campos.get("location", a.location),
+            campos.get("professional_id", a.professional_id),
+            exclude_id=a.id,   # el propio turno no se cuenta como conflicto
+        )
 
     for key, val in data.model_dump(exclude_unset=True).items():
         setattr(a, key, val)
@@ -362,6 +417,16 @@ def delete_time_off(off_id: UUID, db: Session = Depends(get_db)):
 # ═══════════════════════════════════════════════════════
 # FERIADOS (días feriados de la clínica, aplica a TODOS los profesionales)
 # ═══════════════════════════════════════════════════════
+@router.get("/locations", response_model=list[LocationRead])
+def list_clinic_locations(db: Session = Depends(get_db)):
+    """Sedes activas. El endpoint de /admin/locations es admin-only y la agenda
+    la usa tambien recepcion, que necesita elegir sede al cargar un turno."""
+    return db.query(ClinicLocation).filter(
+        ClinicLocation.is_active == True,
+        ClinicLocation.is_deleted == False,
+    ).order_by(ClinicLocation.name).all()
+
+
 @router.get("/holidays", response_model=list[HolidayRead])
 def list_holidays(db: Session = Depends(get_db)):
     from datetime import date as _date

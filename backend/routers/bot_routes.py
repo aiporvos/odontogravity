@@ -172,7 +172,9 @@ def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends
         raise HTTPException(404, "Turno no encontrado")
 
     appt.start_time = data.new_start_time
-    appt.status = AppointmentStatus.pending
+    # Se mantiene confirmado: si volvia a "pending" el recordatorio dejaba de
+    # dispararse, porque el loop solo notifica turnos confirmados.
+    appt.status = AppointmentStatus.confirmed
     db.commit()
     return {"status": "ok", "message": f"Turno reprogramado para {data.new_start_time}", "appointment_id": str(appt.id)}
 

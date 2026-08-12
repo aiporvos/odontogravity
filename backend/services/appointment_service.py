@@ -1,11 +1,12 @@
 
 from datetime import datetime, timedelta, time as py_time
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
 from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff, ClinicHoliday
+from backend.models.config import AppConfig
 
 # Maps reason keywords to professional LAST NAMES as stored in DB
 # DB has: 'Dr. Silvestro' and 'Dra. Murad'
@@ -56,6 +57,63 @@ def get_clinic_now():
     # Fallback
     return datetime.utcnow() + timedelta(hours=CLINIC_TZ_OFFSET)
 
+def get_chairs_per_location(db: Session) -> int:
+    """Cuantos turnos pueden solaparse en una misma sede (sillones disponibles).
+
+    Configurable desde el panel con la clave CHAIRS_PER_LOCATION. El default es 1
+    (un solo sillon: cualquier solapamiento ocupa el horario), pero una clinica
+    con varios sillones puede subirlo sin tocar codigo.
+    """
+    cfg = db.query(AppConfig).filter(AppConfig.key == "CHAIRS_PER_LOCATION").first()
+    try:
+        return max(1, int((cfg.value if cfg and cfg.value else "1").strip()))
+    except (TypeError, ValueError):
+        return 1
+
+
+def get_day_appointments(db: Session, day, location: str | None):
+    """Turnos activos de una sede en un dia, para calcular ocupacion.
+
+    Incluye los que tienen la sede en NULL: son los que se cargaron desde el
+    panel antes de que el formulario pidiera sede, y en SQL `location = 'X'`
+    nunca matchea NULL, asi que quedaban invisibles y se ofrecian horarios ya
+    tomados. Contarlos como ocupados es lo conservador.
+    """
+    start_of_day = datetime.combine(day, py_time(0, 0))
+    end_of_day = datetime.combine(day, py_time(23, 59, 59))
+    return db.query(Appointment).filter(
+        or_(Appointment.location == location, Appointment.location.is_(None)),
+        Appointment.is_deleted == False,
+        Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
+        Appointment.start_time >= start_of_day,
+        Appointment.start_time <= end_of_day,
+    ).all()
+
+
+def overlapping_appointments(appointments, start: datetime, duration_minutes: int, exclude_id=None):
+    """De una lista ya cargada, los que se pisan con el rango dado."""
+    end = start + timedelta(minutes=duration_minutes)
+    return [
+        a for a in appointments
+        if a.id != exclude_id
+        and start < a.start_time + timedelta(minutes=a.duration_minutes or 30)
+        and a.start_time < end
+    ]
+
+
+def slot_conflict(appointments, start: datetime, duration_minutes: int, chairs: int,
+                  professional_id=None, exclude_id=None) -> str | None:
+    """Motivo por el que el horario no esta libre, o None si se puede agendar."""
+    solapan = overlapping_appointments(appointments, start, duration_minutes, exclude_id)
+    if professional_id and any(a.professional_id == professional_id for a in solapan):
+        return "El profesional ya tiene otro turno en ese horario."
+    if len(solapan) >= chairs:
+        if chairs == 1:
+            return "Ya hay un turno agendado en ese horario."
+        return f"No hay sillones libres en ese horario (hay {chairs})."
+    return None
+
+
 def route_professional(reason: str, db: Session) -> Professional | None:
     """Route to the correct professional based on the reason keyword. Uses last-name search."""
     reason_lower = reason.lower()
@@ -67,8 +125,11 @@ def route_professional(reason: str, db: Session) -> Professional | None:
             ).first()
             if prof:
                 return prof
-    # Fallback: return first active professional
-    return db.query(Professional).filter(Professional.is_deleted == False, Professional.is_active == True).first()
+    # Fallback: primer profesional activo. Con order_by para que sea siempre el
+    # mismo; sin el, la base devolvia uno arbitrario y el ruteo era impredecible.
+    return db.query(Professional).filter(
+        Professional.is_deleted == False, Professional.is_active == True
+    ).order_by(Professional.full_name).first()
 
 def create_appointment_logic(
     db: Session,
@@ -205,25 +266,13 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
         return {"date": str(day), "location": location, "available_slots": [], "message": "Sin disponibilidad en las próximas dos semanas."}
 
-    # Existing appointments for that day and location
-    start_of_day = datetime.combine(day, py_time(0, 0))
-    end_of_day = datetime.combine(day, py_time(23, 59))
-    
-    query = db.query(Appointment).filter(
-        Appointment.location == location,
-        Appointment.is_deleted == False,
-        Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
-        Appointment.start_time >= start_of_day,
-        Appointment.start_time <= end_of_day
-    )
-    if prof:
-        query = query.filter(Appointment.professional_id == prof.id)
-        
-    existing = query.all()
-    
-    occupied_ranges = []
-    for a in existing:
-        occupied_ranges.append((a.start_time, a.start_time + timedelta(minutes=a.duration_minutes)))
+    # Turnos del dia en esa sede. Antes esta consulta filtraba tambien por
+    # profesional, asi que un horario ocupado por el otro profesional se ofrecia
+    # como libre aunque hubiera un solo sillon. Ahora se traen todos y la
+    # decision la toma slot_conflict segun los sillones configurados.
+    existing = get_day_appointments(db, day, location)
+    chairs = get_chairs_per_location(db)
+    prof_id = prof.id if prof else None
     
     # Determine duration based on reason
     duration_minutes = 15
@@ -239,14 +288,9 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         shift_end = datetime.combine(day, shift_end_time)
         
         while current + timedelta(minutes=duration_minutes) <= shift_end:
-            slot_end = current + timedelta(minutes=duration_minutes)
-            is_occupied = False
-            for occ_start, occ_end in occupied_ranges:
-                if current < occ_end and occ_start < slot_end:
-                    is_occupied = True
-                    break
-            
-            if not is_occupied and current > clinic_now:
+            conflicto = slot_conflict(existing, current, duration_minutes, chairs, prof_id)
+
+            if not conflicto and current > clinic_now:
                 available_slots.append(current.strftime("%H:%M"))
             
             current += timedelta(minutes=duration_minutes)

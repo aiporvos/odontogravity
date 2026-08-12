@@ -36,7 +36,7 @@ class Appointment(Base):
     # se guarda por turno además de en la ficha del paciente.
     insurance_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     status: Mapped[AppointmentStatus] = mapped_column(
-        SAEnum(AppointmentStatus), default=AppointmentStatus.pending, nullable=False
+        SAEnum(AppointmentStatus), default=AppointmentStatus.confirmed, nullable=False
     )
     channel: Mapped[AppointmentChannel] = mapped_column(
         SAEnum(AppointmentChannel), default=AppointmentChannel.web, nullable=False
