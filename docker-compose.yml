@@ -73,6 +73,10 @@ services:
       API_BASE_URL: ${API_BASE_URL:-http://backend:8000}
       BOT_API_KEY: ${BOT_API_KEY:-dev-bot-key-change-in-prod}
     command: ["python", "-m", "bot.telegram_bot"]
+    # El healthcheck del Dockerfile consulta /api/health en el 8000, que solo
+    # sirve el backend. Heredado acá dejaba el contenedor siempre "unhealthy".
+    healthcheck:
+      disable: true
     ports:
       - "8443:8443"
     networks:

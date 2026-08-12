@@ -157,7 +157,15 @@ async def on_startup():
 async def main():
     """Run bot in polling mode (development)."""
     if not TELEGRAM_TOKEN:
-        logger.warning("TELEGRAM_BOT_TOKEN not set, bot not starting")
+        # Sin token el bot de Telegram queda apagado a proposito (hoy el canal
+        # es WhatsApp, que va por el backend). Se queda ocioso en vez de salir:
+        # con `restart: always` un exit deja el contenedor reiniciando para
+        # siempre y llena los logs de ruido.
+        logger.warning(
+            "TELEGRAM_BOT_TOKEN sin configurar: el bot de Telegram no se inicia. "
+            "El contenedor queda ocioso; cargá el token para activarlo."
+        )
+        await asyncio.Event().wait()
         return
     dp.startup.register(on_startup)
     if WEBHOOK_URL:
@@ -177,6 +185,16 @@ async def main():
         await asyncio.Event().wait()
     else:
         logger.info("⚡ Bot starting in POLLING mode (no WEBHOOK_URL set)")
+        # Si quedo un webhook registrado de una configuracion anterior, Telegram
+        # rechaza getUpdates con TelegramConflictError y el bot reintenta para
+        # siempre sin procesar un solo mensaje. Hay que borrarlo antes de pollear.
+        try:
+            info = await bot.get_webhook_info()
+            if info.url:
+                logger.warning(f"Había un webhook activo ({info.url}); se borra para poder pollear.")
+                await bot.delete_webhook(drop_pending_updates=True)
+        except Exception as e:
+            logger.error(f"No se pudo limpiar el webhook previo: {e}")
         await dp.start_polling(bot)
 
 
