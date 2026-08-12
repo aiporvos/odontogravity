@@ -150,6 +150,7 @@ const API = {
 
     getConfigs() { return this.get('/admin/configs'); },
     setConfig(key, value, description = '') { return this.post('/admin/configs', { key, value, description }); },
+    setConfigsBulk(values) { return this.post('/admin/configs/bulk', values); },
     // Subconjunto no sensible editable por el personal de clínica (recepción)
     getBotSettings() { return this.get('/clinic/bot-settings'); },
     setBotSettings(data) { return this.post('/clinic/bot-settings', data); },
@@ -163,6 +164,7 @@ const API = {
     getRescheduleList() { return this.get('/clinic/reschedule-list'); },
 
     // Feriados
+    getClinicLocations() { return this.get('/clinic/locations'); },
     getHolidays() { return this.get('/clinic/holidays'); },
     createHoliday(data) { return this.post('/clinic/holidays', data); },
     deleteHoliday(id) { return this.del(`/clinic/holidays/${id}`); },

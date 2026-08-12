@@ -240,6 +240,15 @@ Router.register('settings', async (container) => {
                     </div>
 
                     <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
+                        <h4 style="margin-bottom:.8rem;">🪑 Agenda</h4>
+                        <div class="form-group">
+                            <label>Sillones por sede</label>
+                            <input type="number" name="CHAIRS_PER_LOCATION" min="1" step="1" value="${getConfig('CHAIRS_PER_LOCATION') || '1'}" placeholder="1">
+                            <small>Cuántos turnos pueden superponerse en la misma sede. Con 1, cualquier horario ya tomado deja de ofrecerse.</small>
+                        </div>
+                    </div>
+
+                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
                         <h4 style="margin-bottom:.8rem;">Configuración de Recordatorios (WhatsApp)</h4>
                         <div class="form-group">
                             <label>Números para Notificar Cancelaciones</label>
@@ -277,18 +286,24 @@ window.SettingsPage = {
 
     async saveConfigs() {
         const form = document.getElementById('form-config');
-        const elements = form.querySelectorAll('input, select');
-        const tasks = [];
-        
-        elements.forEach(el => {
-            tasks.push(API.setConfig(el.name, el.value));
+        const btn = form.querySelector('button.btn-primary');
+
+        // Un solo request con todos los campos. Antes se mandaba un POST por
+        // campo con Promise.all y el pool de conexiones no daba abasto: tardaba
+        // 30s y avisaba error habiendo guardado casi todo.
+        const values = {};
+        form.querySelectorAll('input, select').forEach(el => {
+            if (el.name) values[el.name] = el.value;
         });
 
+        if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
         try {
-            await Promise.all(tasks);
+            await API.setConfigsBulk(values);
             UI.toast('Configuración guardada exitosamente', 'success');
         } catch (e) {
-            UI.toast('Error al guardar configuración', 'error');
+            UI.toast(e.message || 'Error al guardar configuración', 'error');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Guardar Todo'; }
         }
     },
 

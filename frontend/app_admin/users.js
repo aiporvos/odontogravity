@@ -96,6 +96,27 @@ const UsersPage = {
     async save(id) {
         const data = UI.getFormData('form-user');
         if (data.is_active !== undefined) data.is_active = data.is_active === 'true';
+
+        // El boton "Crear" esta en el footer del modal, fuera del <form>, asi que
+        // el navegador nunca corre el required/minlength del HTML. Validamos aca;
+        // si no, los campos vacios llegan al backend como un 422 ilegible.
+        if (!id) {
+            data.email = (data.email || '').trim().toLowerCase();
+            if (!data.email || !data.email.includes('@')) {
+                UI.toast('Ingresá un email válido', 'error');
+                return;
+            }
+            if (!data.password || data.password.length < 6) {
+                UI.toast('La contraseña debe tener al menos 6 caracteres', 'error');
+                return;
+            }
+        }
+        if (!data.full_name || !data.full_name.trim()) {
+            UI.toast('Ingresá el nombre completo', 'error');
+            return;
+        }
+        data.full_name = data.full_name.trim();
+
         try {
             if (id) {
                 await API.updateUser(id, data);

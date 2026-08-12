@@ -1,6 +1,7 @@
 """Authentication router - login & token generation."""
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -13,8 +14,10 @@ router = APIRouter(prefix="/api/auth", tags=["Autenticación"])
 
 @router.post("/login", response_model=TokenResponse)
 def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # Comparamos en minusculas: el usuario no tiene por que recordar como estaba
+    # escrito el email cuando se dio de alta (y hay registros viejos con mayusculas).
     user = db.query(User).filter(
-        User.email == form.username,
+        func.lower(User.email) == form.username.strip().lower(),
         User.is_deleted == False,
     ).first()
 

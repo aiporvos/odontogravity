@@ -1,6 +1,8 @@
 """Admin-only routes: user management, clinic settings."""
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -26,22 +28,43 @@ router = APIRouter(prefix="/api/admin", tags=["Admin"], dependencies=[Depends(re
 def list_users(db: Session = Depends(get_db)):
     return db.query(User).filter(User.is_deleted == False).order_by(User.full_name).all()
 
-# create_user is already mostly handled in the previous replace_file_content call, I'll keep the logic.
 @router.post("/users", response_model=UserRead, status_code=201)
 def create_user(data: UserCreate, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == data.email).first():
+    # El email se guarda normalizado: si no, "Juan@X.com" y "juan@x.com" entran
+    # como dos usuarios distintos y despues no se puede iniciar sesion.
+    email = data.email.strip().lower()
+
+    # Buscamos incluyendo los borrados. Al eliminar un usuario hacemos soft
+    # delete (is_deleted=True): desaparece de la lista pero el email sigue
+    # ocupado, asi que sin esto era imposible volver a dar de alta a alguien
+    # que se habia eliminado ("Email ya registrado" para un usuario invisible).
+    existing = db.query(User).filter(func.lower(User.email) == email).first()
+    if existing and not existing.is_deleted:
         raise HTTPException(400, "Email ya registrado")
+
     try:
-        user = User(
-            email=data.email,
-            hashed_password=hash_password(data.password),
-            full_name=data.full_name,
-            role=data.role,
-        )
-        db.add(user)
+        if existing:
+            # Reutilizamos el registro borrado en vez de rechazar el alta.
+            existing.hashed_password = hash_password(data.password)
+            existing.full_name = data.full_name
+            existing.role = data.role
+            existing.is_deleted = False
+            existing.is_active = True
+            user = existing
+        else:
+            user = User(
+                email=email,
+                hashed_password=hash_password(data.password),
+                full_name=data.full_name,
+                role=data.role,
+            )
+            db.add(user)
         db.commit()
         db.refresh(user)
         return user
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(400, "Email ya registrado")
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"Error interno: {str(e)}")
@@ -193,6 +216,39 @@ def set_config(data: ConfigCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(config)
     return config
+
+
+@router.post("/configs/bulk", response_model=list[ConfigRead])
+def set_configs_bulk(data: dict[str, str] = Body(...), db: Session = Depends(get_db)):
+    """Guarda todas las claves de una, en una sola transaccion.
+
+    El panel mandaba un POST por campo con Promise.all: 16 requests en paralelo
+    contra un pool de 15 conexiones. El request 16 esperaba los 30s de
+    pool_timeout y moria con un 500, asi que "Guardar Todo" tardaba media
+    minuto y despues avisaba error habiendo guardado casi todo. Peor: quedaba
+    a medias, sin forma de saber que se guardo.
+    """
+    if not data:
+        raise HTTPException(400, "No se recibió ninguna configuración")
+
+    existentes = {c.key: c for c in db.query(AppConfig).filter(AppConfig.key.in_(data.keys())).all()}
+    resultado = []
+    for key, value in data.items():
+        key = key.strip()
+        if not key:
+            continue
+        config = existentes.get(key)
+        if config:
+            config.value = value
+        else:
+            config = AppConfig(key=key, value=value)
+            db.add(config)
+        resultado.append(config)
+
+    db.commit()
+    for c in resultado:
+        db.refresh(c)
+    return resultado
 
 
 # ── Test: Disparar recordatorios manualmente ────────────
