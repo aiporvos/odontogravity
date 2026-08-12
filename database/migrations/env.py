@@ -14,7 +14,11 @@ from backend.models import *  # noqa
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False es clave: por defecto fileConfig apaga todos
+    # los loggers ya creados, incluidos los de uvicorn y los de la app. Cuando el
+    # arranque fallaba despues de correr las migraciones, el contenedor moria sin
+    # imprimir una sola linea de error.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

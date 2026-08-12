@@ -6,6 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Sin esto la salida queda en el buffer y, si el proceso muere, los ultimos
+# logs (los del error) no llegan nunca a `docker logs` ni al panel de Dokploy.
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # Install Python dependencies
