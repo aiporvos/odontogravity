@@ -8,27 +8,75 @@ from backend.models.professional import Professional
 from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff, ClinicHoliday
 from backend.models.config import AppConfig
 
-# Maps reason keywords to professional LAST NAMES as stored in DB
-# DB has: 'Dr. Silvestro' and 'Dra. Murad'
-ROUTING_MAP = {
-    "extracciones": "Silvestro",
-    "extracción": "Silvestro",
-    "extraccion": "Silvestro",
-    "implantes": "Silvestro",
-    "implante": "Silvestro",
-    "prótesis": "Silvestro",
-    "protesis": "Silvestro",
-    "cirugía": "Silvestro",
-    "cirugia": "Silvestro",
-    "ortodoncia": "Murad",
-    "conductos": "Murad",
-    "conducto": "Murad",
-    "endodoncia": "Murad",
-    "limpieza": "Murad",
-    "consulta": "Murad",
-    "revisión": "Murad",
-    "revision": "Murad",
-}
+# El ruteo por motivo sale de las especialidades que cada profesional tiene
+# cargadas en su ficha (Profesionales -> Especialidades), no de un mapa fijo en
+# el codigo. Asi la clinica lo cambia sola sin tocar el backend.
+_STOPWORDS = {"de", "del", "la", "el", "y", "e", "los", "las", "un", "una",
+              "en", "para", "por", "con", "al", "a"}
+
+
+def _sin_acentos(texto: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto or "")
+        if unicodedata.category(c) != "Mn"
+    ).lower()
+
+
+def _palabras(texto: str) -> list[str]:
+    limpio = "".join(c if c.isalnum() else " " for c in _sin_acentos(texto))
+    return [p for p in limpio.split() if p not in _STOPWORDS and len(p) >= 3]
+
+
+def _misma_palabra(a: str, b: str) -> bool:
+    """Compara tolerando singular/plural: extraccion == extracciones."""
+    n = min(len(a), len(b))
+    return n >= 4 and a[:n] == b[:n]
+
+
+def _especialidad_coincide(especialidad: str, palabras_motivo: list[str]) -> bool:
+    """True si todas las palabras significativas de la especialidad estan en el motivo.
+
+    Se exigen todas para evitar falsos positivos: "tratamiento de conducto" no
+    matchea con "tratamiento de caries" porque falta "conducto".
+    """
+    requeridas = _palabras(especialidad)
+    if not requeridas:
+        return False
+    return all(
+        any(_misma_palabra(req, pal) for pal in palabras_motivo)
+        for req in requeridas
+    )
+
+
+def find_professionals_for_reason(reason: str, db: Session) -> list[Professional]:
+    """Profesionales que atienden ese motivo, segun sus especialidades cargadas.
+
+    Si ninguno matchea (motivo vacio, generico o especialidad no cargada) se
+    devuelven todos los activos: es preferible ofrecer turno con cualquiera
+    antes que dejar al paciente sin respuesta.
+    """
+    activos = db.query(Professional).filter(
+        Professional.is_deleted == False,
+        Professional.is_active == True,
+    ).order_by(Professional.full_name).all()
+
+    palabras = _palabras(reason or "")
+    if not palabras:
+        return activos
+
+    coinciden = [
+        p for p in activos
+        if any(_especialidad_coincide(e, palabras) for e in (p.specialties or []))
+    ]
+    return coinciden or activos
+
+
+def route_professional(reason: str, db: Session) -> Professional | None:
+    """El profesional asignado a un motivo. Si lo atienden varios, el primero."""
+    candidatos = find_professionals_for_reason(reason, db)
+    return candidatos[0] if candidatos else None
+
 
 import httpx
 
@@ -102,34 +150,27 @@ def overlapping_appointments(appointments, start: datetime, duration_minutes: in
 
 
 def slot_conflict(appointments, start: datetime, duration_minutes: int, chairs: int,
-                  professional_id=None, exclude_id=None) -> str | None:
-    """Motivo por el que el horario no esta libre, o None si se puede agendar."""
+                  professional_ids=None, exclude_id=None) -> str | None:
+    """Motivo por el que el horario no esta libre, o None si se puede agendar.
+
+    professional_ids son los profesionales que podrian tomar ese turno. Si el
+    motivo lo atienden varios (por ejemplo Limpieza, que hacen los dos), el
+    horario recien se considera ocupado cuando estan todos ocupados.
+    """
     solapan = overlapping_appointments(appointments, start, duration_minutes, exclude_id)
-    if professional_id and any(a.professional_id == professional_id for a in solapan):
-        return "El profesional ya tiene otro turno en ese horario."
+
+    # El limite de sillones manda: es fisico, no depende de quien atienda.
     if len(solapan) >= chairs:
         if chairs == 1:
             return "Ya hay un turno agendado en ese horario."
         return f"No hay sillones libres en ese horario (hay {chairs})."
+
+    if professional_ids:
+        ocupados = {a.professional_id for a in solapan}
+        if all(pid in ocupados for pid in professional_ids):
+            return "El profesional ya tiene otro turno en ese horario."
     return None
 
-
-def route_professional(reason: str, db: Session) -> Professional | None:
-    """Route to the correct professional based on the reason keyword. Uses last-name search."""
-    reason_lower = reason.lower()
-    for keyword, last_name in ROUTING_MAP.items():
-        if keyword in reason_lower:
-            prof = db.query(Professional).filter(
-                Professional.full_name.ilike(f"%{last_name}%"),
-                Professional.is_deleted == False,
-            ).first()
-            if prof:
-                return prof
-    # Fallback: primer profesional activo. Con order_by para que sea siempre el
-    # mismo; sin el, la base devolvia uno arbitrario y el ruteo era impredecible.
-    return db.query(Professional).filter(
-        Professional.is_deleted == False, Professional.is_active == True
-    ).order_by(Professional.full_name).first()
 
 def create_appointment_logic(
     db: Session,
@@ -272,7 +313,9 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # decision la toma slot_conflict segun los sillones configurados.
     existing = get_day_appointments(db, day, location)
     chairs = get_chairs_per_location(db)
-    prof_id = prof.id if prof else None
+    # Si el motivo lo atienden varios, el horario esta libre mientras quede al
+    # menos uno de ellos disponible.
+    prof_ids = [p.id for p in find_professionals_for_reason(reason, db)]
     
     # Determine duration based on reason
     duration_minutes = 15
@@ -288,7 +331,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         shift_end = datetime.combine(day, shift_end_time)
         
         while current + timedelta(minutes=duration_minutes) <= shift_end:
-            conflicto = slot_conflict(existing, current, duration_minutes, chairs, prof_id)
+            conflicto = slot_conflict(existing, current, duration_minutes, chairs, prof_ids)
 
             if not conflicto and current > clinic_now:
                 available_slots.append(current.strftime("%H:%M"))

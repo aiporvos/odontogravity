@@ -69,9 +69,12 @@ const ProfessionalsPage = {
                     <label>Matrícula *</label>
                     <input type="text" name="license_number" value="${prof.license_number}" required ${id ? 'readonly' : ''}>
                 </div>
-                <div class="form-group">
+                <div class="form-group form-group-full">
                     <label>Especialidades (separar con coma)</label>
-                    <input type="text" name="specialties" value="${(prof.specialties || []).join(', ')}" placeholder="Extracciones, Implantes">
+                    <input type="text" name="specialties" value="${(prof.specialties || []).join(', ')}" placeholder="Cirugía, Extracción, Limpieza, Arreglos">
+                    <small>Con esto el bot decide a quién asignarle cada turno: compara el motivo
+                    que dice el paciente contra estas especialidades. Si una la atienden los dos,
+                    cargala en ambos. Sin acentos ni plurales exactos: "extracción" y "extracciones" se toman igual.</small>
                 </div>
                 <div class="form-group">
                     <label>Sedes (separar con coma)</label>

@@ -179,7 +179,7 @@ def _assert_slot_free(db: Session, start: datetime, duration_minutes: int,
     del_dia = get_day_appointments(db, start.date(), location)
     motivo = slot_conflict(
         del_dia, start, duration_minutes or 30, get_chairs_per_location(db),
-        professional_id, exclude_id,
+        [professional_id] if professional_id else None, exclude_id,
     )
     if motivo:
         raise HTTPException(409, f"{start.strftime('%d/%m/%Y %H:%M')}: {motivo}")
