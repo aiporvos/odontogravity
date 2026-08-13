@@ -237,6 +237,10 @@ def set_configs_bulk(data: dict[str, str] = Body(...), db: Session = Depends(get
         key = key.strip()
         if not key:
             continue
+        # Los valores se guardan sin espacios de sobra: una API Key pegada con
+        # un salto de linea al final falla con un 401 imposible de diagnosticar.
+        if isinstance(value, str):
+            value = value.strip()
         config = existentes.get(key)
         if config:
             config.value = value

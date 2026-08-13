@@ -18,13 +18,18 @@ def get_config(key: str, default: str = ""):
     db = SessionLocal()
     try:
         conf = db.query(AppConfig).filter(AppConfig.key == key).first()
-        if conf and conf.value:
-            return conf.value
+        if conf and conf.value and conf.value.strip():
+            # .strip() a proposito: copiar una API Key del panel del proveedor
+            # arrastra espacios o un salto de linea con muchisima facilidad, y
+            # el 401 que devuelve despues no da ninguna pista de que sobra un
+            # caracter invisible.
+            return conf.value.strip()
     except Exception:
         pass
     finally:
         db.close()
-    return os.getenv(key, default)
+    valor = os.getenv(key, default)
+    return valor.strip() if isinstance(valor, str) else valor
 
 def get_especialistas_texto() -> str:
     """Los profesionales y sus especialidades, tal como estan cargados en el panel.
