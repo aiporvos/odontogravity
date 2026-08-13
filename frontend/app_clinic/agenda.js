@@ -452,7 +452,7 @@ const AgendaPage = {
                     <div class="form-group"><label>Teléfono</label><input id="edit-phone" class="form-control" value="${attr(p.phone)}"></div>
                     <div class="form-group"><label>Obra Social</label><input id="edit-insurance" class="form-control" value="${attr(obra)}"></div>
                     <div class="form-group"><label>Profesional</label><select id="edit-prof" class="form-control">${profOptions}</select></div>
-                    <div class="form-group"><label>Fecha/Hora</label><input id="edit-start" type="datetime-local" class="form-control" value="${startVal}"></div>
+                    <div class="form-group"><label>Fecha/Hora</label>${AgendaPage._dateTimeFieldsHTML('edit', startVal, 'id="edit-start"')}</div>
                     <div class="form-group">
                         <label>Sede${a.location ? '' : ' ⚠️ sin asignar'}</label>
                         <select id="edit-location" class="form-control">
@@ -590,6 +590,92 @@ const AgendaPage = {
         box.textContent = h ? `⛔ ${this._holidayMsg(h)}` : '';
     },
 
+    // ── Selector de Fecha y Hora (reemplaza <input type="datetime-local">) ──
+    // El picker nativo no abre de forma confiable en todos los navegadores (a
+    // veces no "despliega nada" salvo que se clickee el icono exacto) y el
+    // formato de hora depende del locale del sistema operativo, asi que a
+    // veces se ve en 12h con AM/PM. Un <input type="date"> mas dos <select>
+    // de hora/minuto son robustos en cualquier navegador y fuerzan 24h siempre.
+    //
+    // idPrefix: 'appt' (nuevo turno) o 'edit' (editar turno). hiddenAttr es el
+    // atributo (name="..." o id="...") que el resto del codigo espera leer:
+    // UI.getFormData busca por name, y saveAppointment por getElementById.
+    _dateTimeFieldsHTML(idPrefix, isoValue, hiddenAttr) {
+        const [datePart, timePart] = (isoValue || '').split('T');
+        const hh = timePart ? parseInt(timePart.slice(0, 2), 10) : null;
+        const mm = timePart ? parseInt(timePart.slice(3, 5), 10) : null;
+
+        const hourOpts = Array.from({ length: 24 }, (_, h) => {
+            const v = String(h).padStart(2, '0');
+            return `<option value="${v}" ${h === hh ? 'selected' : ''}>${v}</option>`;
+        }).join('');
+
+        // Minutos cada 5, mas el valor real si no cae en esa grilla (para no
+        // "correr" turnos ya cargados con minutos sueltos, ej. :41).
+        const minutos = new Set([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]);
+        if (mm !== null) minutos.add(mm);
+        const minOpts = [...minutos].sort((a, b) => a - b).map(m => {
+            const v = String(m).padStart(2, '0');
+            return `<option value="${v}" ${m === mm ? 'selected' : ''}>${v}</option>`;
+        }).join('');
+
+        return `
+            <div style="display:flex;gap:.4rem;align-items:center;">
+                <input type="date" id="${idPrefix}-date" class="form-control" style="flex:1.6;"
+                    value="${datePart || ''}" required
+                    onchange="AgendaPage._onDateTimeChange('${idPrefix}')">
+                <select id="${idPrefix}-hour" class="form-control" style="flex:1;"
+                    onchange="AgendaPage._onDateTimeChange('${idPrefix}')">${hourOpts}</select>
+                <span style="font-weight:700;">:</span>
+                <select id="${idPrefix}-min" class="form-control" style="flex:1;"
+                    onchange="AgendaPage._onDateTimeChange('${idPrefix}')">${minOpts}</select>
+            </div>
+            <input type="hidden" ${hiddenAttr} value="${isoValue || ''}">
+        `;
+    },
+
+    // Junta los 3 controles visibles en "YYYY-MM-DDTHH:MM" y lo guarda en el
+    // input oculto, que es lo que lee el resto del codigo (getFormData / val()).
+    _syncDateTimeFields(idPrefix) {
+        const d = document.getElementById(`${idPrefix}-date`)?.value;
+        const h = document.getElementById(`${idPrefix}-hour`)?.value;
+        const m = document.getElementById(`${idPrefix}-min`)?.value;
+        if (!d || h === undefined || m === undefined) return null;
+        return `${d}T${h}:${m}`;
+    },
+
+    // Pone fecha/hora en los 3 controles visibles Y en el input oculto,
+    // manteniendolos siempre en sincronia (por ejemplo al avanzar +30min
+    // despues de "Agregar a Lista").
+    _setDateTimeFields(idPrefix, isoValue) {
+        const [datePart, timePart] = (isoValue || '').split('T');
+        const dateEl = document.getElementById(`${idPrefix}-date`);
+        const hourEl = document.getElementById(`${idPrefix}-hour`);
+        const minEl = document.getElementById(`${idPrefix}-min`);
+        if (dateEl) dateEl.value = datePart || '';
+        if (hourEl && timePart) hourEl.value = timePart.slice(0, 2);
+        if (minEl && timePart) {
+            const mm = timePart.slice(3, 5);
+            // Si el minuto no esta en la grilla de a 5, se agrega como opcion
+            // nueva (igual que hace _dateTimeFieldsHTML al renderizar).
+            if (![...minEl.options].some(o => o.value === mm)) {
+                const opt = document.createElement('option');
+                opt.value = mm; opt.textContent = mm;
+                minEl.appendChild(opt);
+            }
+            minEl.value = mm;
+        }
+        this._onDateTimeChange(idPrefix);
+    },
+
+    _onDateTimeChange(idPrefix) {
+        const combinado = this._syncDateTimeFields(idPrefix);
+        if (!combinado) return;
+        const hidden = document.getElementById(idPrefix === 'appt' ? 'appt-start-hidden' : 'edit-start');
+        if (hidden) hidden.value = combinado;
+        if (idPrefix === 'appt') this._checkHoliday(combinado);
+    },
+
     _renderMultiModal(professionals, patients, defaultDateTime) {
         this._modalPatients = patients;
         const listHtml = () => this._pendingAppts.map((a, i) => {
@@ -627,8 +713,7 @@ const AgendaPage = {
                 </div>
                 <div class="form-group">
                     <label>Fecha y Hora *</label>
-                    <input type="datetime-local" name="start_time" required value="${defaultDateTime}"
-                        oninput="AgendaPage._checkHoliday(this.value)">
+                    ${AgendaPage._dateTimeFieldsHTML('appt', defaultDateTime, 'id="appt-start-hidden" name="start_time"')}
                     <div id="appt-holiday-warning" style="display:none;margin-top:.35rem;padding:.4rem .6rem;border-radius:6px;background:#fee2e2;color:#991b1b;font-size:.82rem;"></div>
                 </div>
                 <div class="form-group">
@@ -666,12 +751,17 @@ const AgendaPage = {
             const pat = document.querySelector('[name="patient_id"] option:checked');
             listEl.innerHTML += `<div class="pending-appt-item"><span>🕐 ${data.start_time.replace('T',' ')} — ${pat ? pat.textContent : '?'} — ${data.reason || 'Sin motivo'}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${this._pendingAppts.length - 1})" style="color:var(--danger)">✕</button></div>`;
         }
-        // Reset form time +30min
-        const timeInput = document.querySelector('[name="start_time"]');
-        if (timeInput) {
-            const d = new Date(data.start_time); d.setMinutes(d.getMinutes() + 30);
-            timeInput.value = d.toISOString().slice(0,16);
-        }
+        // Reset form time +30min. new Date("YYYY-MM-DDTHH:MM") sin zona se
+        // interpreta como hora local, pero toISOString() la devuelve en UTC:
+        // con eso la fecha/hora se corria segun el huso horario del navegador.
+        // Se arma el string a mano para quedarse en hora local todo el tiempo.
+        const [dd, hh] = data.start_time.split('T');
+        const [yy, mo, da] = dd.split('-').map(Number);
+        const [hr, mi] = hh.split(':').map(Number);
+        const next = new Date(yy, mo - 1, da, hr, mi + 30);
+        const pad = (n) => String(n).padStart(2, '0');
+        const nextISO = `${next.getFullYear()}-${pad(next.getMonth()+1)}-${pad(next.getDate())}T${pad(next.getHours())}:${pad(next.getMinutes())}`;
+        this._setDateTimeFields('appt', nextISO);
         UI.toast(`Turno agregado a lista (${this._pendingAppts.length})`, 'info');
     },
 
