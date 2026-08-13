@@ -74,13 +74,65 @@ def _ensure_owns_dni(patient, requester_phone: str | None):
 
 
 # ── Agendar Turno ──────────────────────────────────────
+def _solo_digitos(valor):
+    return "".join(c for c in (valor or "") if c.isdigit())
+
+
+def _validar_dni_y_telefono(dni, phone, requester_phone):
+    """Valida los datos y devuelve el DNI normalizado a solo digitos.
+
+    Evita que se guarde un telefono en el campo DNI y viceversa.
+
+    El modelo asignaba cada numero al campo que estaba pidiendo en ese momento,
+    sin mirar que era: un paciente escribio "Claudio Luna 2604844952" y esos 10
+    digitos (un telefono) quedaron como DNI; despues su DNI de 8 digitos quedo
+    como telefono. Ademas de ensuciar la ficha, rompe la verificacion de
+    identidad para cancelar o reprogramar, que busca al paciente por DNI.
+
+    Un DNI argentino tiene 7 u 8 digitos; un celular con caracteristica, 10.
+    """
+    d = _solo_digitos(dni)
+    t = _solo_digitos(phone)
+
+    parece_telefono = len(d) >= 10
+    parece_dni = 7 <= len(t) <= 8
+
+    if parece_telefono and parece_dni:
+        raise HTTPException(400, (
+            f"El DNI y el telefono parecen estar invertidos: '{dni}' tiene {len(d)} digitos "
+            f"(es un telefono) y '{phone}' tiene {len(t)} (es un DNI). "
+            "Volve a preguntarle al paciente cual es cada uno y confirmalo antes de agendar."
+        ))
+
+    if not 7 <= len(d) <= 8:
+        detalle = " (parece un telefono)" if parece_telefono else ""
+        raise HTTPException(400, (
+            f"El DNI '{dni}' no es valido{detalle}: un DNI argentino tiene 7 u 8 digitos "
+            f"y este tiene {len(d)}. Pediselo de nuevo al paciente, solo numeros."
+        ))
+
+    # El telefono puede venir vacio: en WhatsApp usamos el numero del remitente.
+    if t and not 8 <= len(t) <= 13:
+        raise HTTPException(400, (
+            f"El telefono '{phone}' no es valido: tiene {len(t)} digitos. "
+            "Pediselo de nuevo con caracteristica, por ejemplo 2604123456."
+        ))
+    if not t and not requester_phone:
+        raise HTTPException(400, "Falta el telefono del paciente. Pediselo antes de agendar.")
+
+    # Se devuelve normalizado: "29.759.464" y "29759464" son la misma persona, y
+    # sin esto quedaban como dos pacientes distintos en la base.
+    return d
+
+
 @router.post("/appointments", dependencies=[Depends(verify_bot_key)])
 def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(get_db)):
+    dni_normalizado = _validar_dni_y_telefono(data.dni, data.phone, data.requester_phone)
     result = create_appointment_logic(
         db=db,
         patient_name=data.patient_name,
         patient_last_name=data.patient_last_name,
-        dni=data.dni,
+        dni=dni_normalizado,
         phone=data.phone,
         reason=data.reason,
         location=data.location,

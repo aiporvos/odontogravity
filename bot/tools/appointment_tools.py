@@ -40,8 +40,8 @@ def agendar_turno(
     Args:
         patient_name: Nombre del paciente
         patient_last_name: Apellido del paciente
-        dni: DNI del paciente (solo números)
-        phone: Teléfono de contacto
+        dni: DNI del paciente, solo números, 7 u 8 dígitos (ej: 29759464). NO es el teléfono.
+        phone: Teléfono con característica, 10 dígitos (ej: 2604844952). NO es el DNI.
         reason: Motivo de la consulta (ej: Limpieza, Extracción)
         preferred_date: OBLIGATORIO. Fecha y hora EXACTA que el paciente eligió, en formato 'YYYY-MM-DD HH:MM'. Ejemplo: '2026-06-18 09:30'. NUNCA dejes este campo vacío.
         location: Sede (Por defecto "San Rafael")
@@ -66,6 +66,15 @@ def agendar_turno(
         data = r.json()
         cancel_url = f"https://odobot.aiporvos.com/api/public/cancel/{data['appointment_id']}"
         return f"✅ {data['message']}. Fecha: {data['datetime']}. ID: {data['appointment_id']}. Aclarale al paciente que si desea cancelar el turno, puede escribir 'quiero cancelar mi turno' o ingresar a este link: {cancel_url}"
+    except httpx.HTTPStatusError as e:
+        # str(e) solo dice "Client error '400 Bad Request'"; el motivo util esta
+        # en el body. Sin esto el modelo no se entera de por que fue rechazado
+        # y no puede corregirlo con el paciente.
+        try:
+            motivo = e.response.json().get("detail", str(e))
+        except Exception:
+            motivo = e.response.text or str(e)
+        return f"❌ No se pudo agendar: {motivo}"
     except Exception as e:
         return f"❌ Error al agendar: {str(e)}"
 
