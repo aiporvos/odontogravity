@@ -13,6 +13,17 @@ Router.register('agenda', async (container) => {
         professionals = await API.getProfessionals();
     } catch (e) {}
 
+    // Sillones por sede: define cuando dos turnos superpuestos son un
+    // problema real (mas turnos que sillones) o algo que la sede absorbe.
+    // Se trae una sola vez al entrar a la pagina, no en cada refresco de la
+    // agenda (que corre cada 30s).
+    try {
+        const cfg = await API.getAgendaConfig();
+        AgendaPage._chairsPerLocation = cfg.chairs_per_location || 1;
+    } catch (e) {
+        AgendaPage._chairsPerLocation = 1;
+    }
+
     container.innerHTML = `
         <div class="page-header">
             <h1>Agenda de Turnos</h1>
@@ -113,24 +124,39 @@ Router.register('agenda', async (container) => {
                 status: status,
             });
 
-            // Conflict Detection (same professional, overlapping times, active status)
-            const conflictIds = new Set();
+            // Deteccion de conflictos: mismo profesional al mismo tiempo, o mas
+            // turnos superpuestos que sillones tiene la sede. Antes solo miraba
+            // "mismo profesional", asi que un sobreturno con OTRO profesional en
+            // el mismo sillon no disparaba ningun aviso.
+            const chairs = AgendaPage._chairsPerLocation || 1;
+            const conflictIds = new Set();     // cualquiera dentro de un conflicto (para el banner)
+            const sobreturnoIds = new Set();   // solo el/los turno(s) creados DESPUES del primero
             const activeAppts = appointments.filter(a => a.status !== 'cancelled');
             for (let i = 0; i < activeAppts.length; i++) {
                 const a = activeAppts[i];
                 const aStart = new Date(a.start_time).getTime();
                 const aEnd = aStart + (a.duration_minutes || 30) * 60 * 1000;
-                for (let j = i + 1; j < activeAppts.length; j++) {
+                const overlapping = [a];
+                for (let j = 0; j < activeAppts.length; j++) {
+                    if (i === j) continue;
                     const b = activeAppts[j];
-                    if (a.professional_id === b.professional_id) {
-                        const bStart = new Date(b.start_time).getTime();
-                        const bEnd = bStart + (b.duration_minutes || 30) * 60 * 1000;
-                        if (aStart < bEnd && bStart < aEnd) {
-                            conflictIds.add(a.id);
-                            conflictIds.add(b.id);
-                        }
-                    }
+                    if ((a.location || '') !== (b.location || '')) continue;
+                    const bStart = new Date(b.start_time).getTime();
+                    const bEnd = bStart + (b.duration_minutes || 30) * 60 * 1000;
+                    if (aStart < bEnd && bStart < aEnd) overlapping.push(b);
                 }
+                if (overlapping.length <= 1) continue;
+
+                const mismoProfesional = overlapping.some(x => x !== a && x.professional_id === a.professional_id);
+                const superaSillones = overlapping.length > chairs;
+                if (!mismoProfesional && !superaSillones) continue;
+
+                overlapping.forEach(x => conflictIds.add(x.id));
+                // El turno "original" es el de created_at mas antiguo del grupo; el
+                // resto son sobreturnos (el/los que se agregaron encima despues).
+                const original = overlapping.reduce((min, x) =>
+                    new Date(x.created_at) < new Date(min.created_at) ? x : min);
+                overlapping.forEach(x => { if (x.id !== original.id) sobreturnoIds.add(x.id); });
             }
 
             const grouping = document.getElementById('agenda-grouping')?.value || 'chronological';
@@ -149,7 +175,7 @@ Router.register('agenda', async (container) => {
                             <div style="display:flex; gap:1rem; align-items:center;">
                                 <div style="font-size:1.5rem;">⚠️</div>
                                 <div style="font-size:.9rem; color:var(--danger-dark); font-weight: 600;">
-                                    Conflicto de Agenda: Se han detectado turnos superpuestos para el mismo profesional.
+                                    Sobreturno: hay más turnos agendados que los que la sede puede atender a esa hora.
                                 </div>
                             </div>
                         </div>
@@ -159,20 +185,23 @@ Router.register('agenda', async (container) => {
                 // Render card function helper
                 const renderCard = (a) => {
                     const icons = { pending:'⏳', confirmed:'✅', completed:'🏁', cancelled:'❌', no_show:'🚫' };
-                    const hasConflict = conflictIds.has(a.id);
+                    // El aviso va SOLO en el turno que se agrego encima (el creado
+                    // despues); el original queda con su apariencia normal, sin
+                    // marca, para que quede claro cual es el "extra".
+                    const esSobreturno = sobreturnoIds.has(a.id);
                     const pri = a.treatment_priority || 'Baja';
                     const priorityClass = pri === 'Alta' ? 'badge-cancelled' : (pri === 'Media' ? 'badge-pending' : 'badge-confirmed');
                     
-                    const conflictBadge = hasConflict ? `
-                        <span class="badge badge-cancelled" style="font-weight:700; display:inline-flex; align-items:center; gap:0.25rem;">
-                            ⚠️ ¡Superposición!
+                    const conflictBadge = esSobreturno ? `
+                        <span class="badge badge-pending" style="font-weight:700; display:inline-flex; align-items:center; gap:0.25rem;">
+                            🔶 Sobreturno
                         </span>
                     ` : '';
 
                     return `
                         <div class="appointment-card status-${a.status}" 
                              onclick="AgendaPage.showAppointment('${a.id}')"
-                             style="${hasConflict ? 'border-left-color: var(--danger); outline: 2px solid var(--danger);' : ''}">
+                             style="${esSobreturno ? 'border-left-color: var(--warning); outline: 2px solid var(--warning);' : ''}">
                             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem;">
                                 <div class="appt-name" style="display:flex; align-items:center; gap:.5rem;">
                                     <span>${icons[a.status] || ''}</span>
@@ -302,11 +331,11 @@ Router.register('agenda', async (container) => {
                         const top = mins * SLOT_H / 30;
                         const dur = a.duration_minutes || 30;
                         const height = Math.max(dur * SLOT_H / 30, SLOT_H);
-                        const hasConflict = conflictIds.has(a.id);
+                        const esSobreturno = sobreturnoIds.has(a.id);
                         const pri = a.treatment_priority || '';
-                        eventsHtml += `<div class="wk-event status-${a.status} ${hasConflict ? 'wk-conflict' : ''}" style="top:${top}px;height:${height}px" onclick="AgendaPage.showAppointment('${a.id}')">
+                        eventsHtml += `<div class="wk-event status-${a.status} ${esSobreturno ? 'wk-conflict' : ''}" style="top:${top}px;height:${height}px" onclick="AgendaPage.showAppointment('${a.id}')">
                             <strong>${UI.formatTime(a.start_time)}</strong> ${a.patient ? a.patient.last_name : ''}
-                            ${hasConflict ? '<span class="wk-conflict-icon">⚠️</span>' : ''}
+                            ${esSobreturno ? '<span class="wk-conflict-icon" title="Sobreturno">🔶</span>' : ''}
                             ${pri ? `<span class="wk-pri wk-pri-${pri.toLowerCase()}">${pri}</span>` : ''}
                         </div>`;
                     });
@@ -317,7 +346,7 @@ Router.register('agenda', async (container) => {
                 // Conflict banner
                 let bannerHtml = '';
                 if (conflictIds.size > 0) {
-                    bannerHtml = `<div style="background:var(--danger-light);border:1px solid var(--danger);border-radius:var(--radius);padding:.6rem 1rem;margin-bottom:.75rem;font-size:.85rem;color:var(--danger);font-weight:600;">⚠️ Turnos superpuestos detectados</div>`;
+                    bannerHtml = `<div style="background:var(--danger-light);border:1px solid var(--danger);border-radius:var(--radius);padding:.6rem 1rem;margin-bottom:.75rem;font-size:.85rem;color:var(--danger);font-weight:600;">⚠️ Hay sobreturnos esta semana</div>`;
                 }
 
                 content.innerHTML = bannerHtml + `<div class="wk-calendar"><div class="wk-header">${hdrHtml}</div><div class="wk-body">${bodyHtml}</div></div>`;

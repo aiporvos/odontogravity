@@ -166,6 +166,7 @@ const API = {
 
     // Feriados
     getClinicLocations() { return this.get('/clinic/locations'); },
+    getAgendaConfig() { return this.get('/clinic/agenda-config'); },
     getHolidays() { return this.get('/clinic/holidays'); },
     createHoliday(data) { return this.post('/clinic/holidays', data); },
     deleteHoliday(id) { return this.del(`/clinic/holidays/${id}`); },

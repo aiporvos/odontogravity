@@ -432,6 +432,19 @@ def delete_time_off(off_id: UUID, db: Session = Depends(get_db)):
     return {"detail": "Ausencia eliminada"}
 
 
+@router.get("/agenda-config")
+def get_agenda_config(db: Session = Depends(get_db)):
+    """Parametros de agenda que el frontend necesita para pintar conflictos.
+
+    CHAIRS_PER_LOCATION vive en AppConfig, que es admin-only (/api/admin/configs).
+    La agenda la usa cualquier rol de la clinica para saber si dos turnos
+    superpuestos son un problema real (mas turnos que sillones) o algo que la
+    sede puede absorber, asi que necesita un endpoint no restringido a admin.
+    """
+    from backend.services.appointment_service import get_chairs_per_location
+    return {"chairs_per_location": get_chairs_per_location(db)}
+
+
 # ═══════════════════════════════════════════════════════
 # FERIADOS (días feriados de la clínica, aplica a TODOS los profesionales)
 # ═══════════════════════════════════════════════════════
