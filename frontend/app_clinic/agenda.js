@@ -590,15 +590,27 @@ const AgendaPage = {
 
     _showMultiModal(professionals, defaultDateTime) {
         this._pendingAppts = [];
+        this._locationsFailed = false;
         // Los feriados se traen junto con los pacientes para poder avisar en el
         // momento, sin esperar a que el backend rechace el turno.
         Promise.all([
             API.getPatients(),
             API.getHolidays().catch(() => []),
-            API.getClinicLocations().catch(() => []),
+            API.getClinicLocations().catch(() => { this._locationsFailed = true; return []; }),
         ]).then(([patients, holidays, locations]) => {
             this._holidays = holidays || [];
             this._locations = locations || [];
+            // Antes esto se tragaba en silencio: si la lista de sedes no cargaba
+            // (o no había ninguna activa), el desplegable de Sede quedaba vacío
+            // y, al ser un campo obligatorio, el navegador bloqueaba el botón
+            // Guardar sin explicar por qué. Ahora se avisa y el campo deja de
+            // ser obligatorio en ese caso puntual, para no trabar la carga de
+            // turnos por un problema ajeno al usuario.
+            if (this._locationsFailed) {
+                UI.toast('No se pudo cargar la lista de sedes. Se puede guardar sin asignar sede.', 'error');
+            } else if (this._locations.length === 0) {
+                UI.toast('No hay ninguna sede activa cargada (revisá Configuración → Sedes).', 'error');
+            }
             this._renderMultiModal(professionals, patients, defaultDateTime);
         });
     },
@@ -773,11 +785,15 @@ const AgendaPage = {
                     <input type="number" name="duration_minutes" value="30" min="15" step="15">
                 </div>
                 <div class="form-group">
-                    <label>Sede *</label>
-                    <select name="location" required>
-                        ${(this._locations || []).map((l, i) =>
-                            `<option value="${l.name}" ${i === 0 ? 'selected' : ''}>${l.name}</option>`).join('')}
+                    <label>Sede${(this._locations || []).length > 0 ? ' *' : ''}</label>
+                    <select name="location" ${(this._locations || []).length > 0 ? 'required' : ''}>
+                        ${(this._locations || []).length === 0
+                            ? '<option value="">Sin asignar</option>'
+                            : (this._locations || []).map((l, i) =>
+                                `<option value="${l.name}" ${i === 0 ? 'selected' : ''}>${l.name}</option>`).join('')}
                     </select>
+                    ${(this._locations || []).length === 0
+                        ? '<small style="color:var(--danger);">No hay sedes cargadas: revisá Configuración → Sedes.</small>' : ''}
                 </div>
                 <div class="form-group form-group-full">
                     <label>Motivo</label>
@@ -794,10 +810,15 @@ const AgendaPage = {
     _addToList() {
         const data = UI.getFormData('form-new-appointment');
         if (!data.patient_id || !data.start_time) return UI.toast('Completá paciente y fecha', 'error');
-        if (!data.location) return UI.toast('Elegí la sede', 'error');
+        // Si hay sedes para elegir, se exige elegir una (evita turnos invisibles
+        // para el bot). Si la lista vino vacía por un problema de carga, no se
+        // bloquea la creación por eso: mejor un turno sin sede que ninguno.
+        if ((this._locations || []).length > 0 && !data.location) return UI.toast('Elegí la sede', 'error');
         const h = this._holidayFor(data.start_time);
         if (h) return UI.toast(this._holidayMsg(h), 'error');
-        this._pendingAppts.push({...data, duration_minutes: parseInt(data.duration_minutes) || 30});
+        // location: '' (opcion "Sin asignar") se manda como null, no como
+        // string vacio -- el backend distingue NULL de '' al calcular ocupacion.
+        this._pendingAppts.push({...data, duration_minutes: parseInt(data.duration_minutes) || 30, location: data.location || null});
         const listEl = document.getElementById('multi-appt-list');
         if (listEl) {
             const pat = document.querySelector('[name="patient_id"] option:checked');
@@ -867,11 +888,15 @@ const AgendaPage = {
         const formData = UI.getFormData('form-new-appointment');
         const allAppts = [...this._pendingAppts];
         if (formData.patient_id && formData.start_time) {
-            allAppts.push({...formData, duration_minutes: parseInt(formData.duration_minutes) || 30});
+            allAppts.push({...formData, duration_minutes: parseInt(formData.duration_minutes) || 30, location: formData.location || null});
         }
         if (allAppts.length === 0) return UI.toast('Agregá al menos un turno', 'error');
-        // Sin sede el turno queda invisible para el bot al calcular disponibilidad.
-        if (allAppts.some(a => !a.location)) return UI.toast('Elegí la sede', 'error');
+        // Sin sede el turno queda invisible para el bot al calcular disponibilidad,
+        // asi que se exige mientras haya sedes para elegir. Si la lista vino vacía
+        // (falla de carga o ninguna sede activa), no se bloquea por eso.
+        if ((this._locations || []).length > 0 && allAppts.some(a => !a.location)) {
+            return UI.toast('Elegí la sede', 'error');
+        }
 
         // Ningun turno de la tanda puede caer en feriado.
         for (const appt of allAppts) {
