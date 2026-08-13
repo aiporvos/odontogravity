@@ -17,8 +17,9 @@ from backend.schemas.schemas import (
     UserCreate, UserRead, UserUpdate,
     ProfessionalCreate, ProfessionalRead, ProfessionalUpdate,
     LocationCreate, LocationRead, InsuranceCreate, InsuranceRead, InsuranceUpdate,
-    ConfigCreate, ConfigRead
+    ConfigCreate, ConfigRead, ScheduleBlock, ProfessionalScheduleBlockRead,
 )
+from backend.models.schedule import ProfessionalSchedule
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"], dependencies=[Depends(require_admin)])
 
@@ -123,6 +124,40 @@ def soft_delete_professional(prof_id: UUID, db: Session = Depends(get_db)):
     prof.is_active = False
     db.commit()
     return {"detail": "Profesional eliminado"}
+
+
+@router.get("/professionals/{prof_id}/schedule", response_model=list[ProfessionalScheduleBlockRead])
+def get_professional_schedule(prof_id: UUID, db: Session = Depends(get_db)):
+    """Días y franjas en que ESTE profesional atiende (distinto del horario
+    general de la clínica: dos profesionales pueden trabajar días distintos)."""
+    return db.query(ProfessionalSchedule).filter(
+        ProfessionalSchedule.professional_id == prof_id,
+        ProfessionalSchedule.is_active == True,
+    ).order_by(ProfessionalSchedule.weekday, ProfessionalSchedule.start_time).all()
+
+
+@router.put("/professionals/{prof_id}/schedule", response_model=list[ProfessionalScheduleBlockRead])
+def replace_professional_schedule(prof_id: UUID, blocks: list[ScheduleBlock], db: Session = Depends(get_db)):
+    """Reemplaza toda la grilla de este profesional por la lista recibida.
+
+    Una lista vacía significa "sin grilla propia cargada": el bot vuelve a
+    ofrecerlo en cualquier horario que la clínica tenga abierto (comportamiento
+    de siempre), no que el profesional no trabaje ningún día.
+    """
+    prof = db.query(Professional).filter(Professional.id == prof_id, Professional.is_deleted == False).first()
+    if not prof:
+        raise HTTPException(404, "Profesional no encontrado")
+    for b in blocks:
+        if b.end_time <= b.start_time:
+            raise HTTPException(400, f"El horario de fin debe ser mayor al de inicio (día {b.weekday}).")
+    db.query(ProfessionalSchedule).filter(ProfessionalSchedule.professional_id == prof_id).delete()
+    for b in blocks:
+        db.add(ProfessionalSchedule(professional_id=prof_id, weekday=b.weekday,
+                                    start_time=b.start_time, end_time=b.end_time))
+    db.commit()
+    return db.query(ProfessionalSchedule).filter(
+        ProfessionalSchedule.professional_id == prof_id
+    ).order_by(ProfessionalSchedule.weekday, ProfessionalSchedule.start_time).all()
 
 # ── Clinic Locations ────────────────────────────────────
 @router.get("/locations", response_model=list[LocationRead])

@@ -22,6 +22,33 @@ class ClinicSchedule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ProfessionalSchedule(Base):
+    """Días y franjas en que un profesional en particular atiende.
+
+    Sin esto el bot ofrecía turnos de un profesional en cualquier día que la
+    clínica estuviera abierta, aunque ese profesional específicamente no
+    trabajara ese día (ej. ofrecía Ortodoncia un miércoles aunque la Dra. Murad
+    solo atienda lunes y martes). Es la intersección de esto con
+    ClinicSchedule (el horario general) lo que define cuándo se puede agendar
+    con CADA profesional.
+
+    Un profesional sin ninguna fila acá se trata como disponible en todo el
+    horario general de la clínica (comportamiento previo, para no romper
+    profesionales que todavía no tienen su grilla cargada).
+    """
+    __tablename__ = "professional_schedule"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    professional_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("professionals.id"), nullable=False, index=True
+    )
+    weekday: Mapped[int] = mapped_column(Integer, nullable=False)  # 0=Lunes ... 6=Domingo
+    start_time: Mapped[py_time] = mapped_column(Time, nullable=False)
+    end_time: Mapped[py_time] = mapped_column(Time, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ProfessionalTimeOff(Base):
     """Ausencia puntual de un profesional (día completo)."""
     __tablename__ = "professional_time_off"

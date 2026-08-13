@@ -141,6 +141,8 @@ const API = {
     deleteUser(id) { return this.del(`/admin/users/${id}`); },
 
     getAdminProfessionals() { return this.get('/admin/professionals'); },
+    getProfessionalSchedule(id) { return this.get(`/admin/professionals/${id}/schedule`); },
+    saveProfessionalSchedule(id, blocks) { return this.put(`/admin/professionals/${id}/schedule`, blocks); },
     createProfessional(data) { return this.post('/admin/professionals', data); },
     updateProfessional(id, data) { return this.put(`/admin/professionals/${id}`, data); },
     deleteProfessional(id) { return this.del(`/admin/professionals/${id}`); },

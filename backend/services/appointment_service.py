@@ -5,7 +5,7 @@ from sqlalchemy import and_, or_
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
-from backend.models.schedule import ClinicSchedule, ProfessionalTimeOff, ClinicHoliday
+from backend.models.schedule import ClinicSchedule, ProfessionalSchedule, ProfessionalTimeOff, ClinicHoliday
 from backend.models.config import AppConfig
 
 # El ruteo por motivo sale de las especialidades que cada profesional tiene
@@ -318,6 +318,60 @@ def fecha_en_palabras(d) -> str:
     return f"{DIAS_SEMANA[d.weekday()]} {d.day} de {MESES[d.month - 1]} de {d.year}"
 
 
+def _intersectar_franjas(a, b):
+    """Franjas horarias que estan en AMBAS listas a la vez. Cada franja es
+    (start_time, end_time). Se usa para acotar el horario general de la
+    clinica a lo que un profesional especifico realmente trabaja."""
+    resultado = []
+    for a_ini, a_fin in a:
+        for b_ini, b_fin in b:
+            ini = max(a_ini, b_ini)
+            fin = min(a_fin, b_fin)
+            if ini < fin:
+                resultado.append((ini, fin))
+    return resultado
+
+
+def _unir_franjas(listas):
+    """Union de varias listas de franjas horarias, fusionando las que se
+    superponen o son contiguas. Sirve para cuando un motivo lo atienden varios
+    profesionales: el dia esta disponible si CUALQUIERA de ellos trabaja esa
+    hora, sin ofrecer el mismo horario duplicado."""
+    todas = sorted((s for lista in listas for s in lista), key=lambda x: x[0])
+    if not todas:
+        return []
+    fusionadas = [todas[0]]
+    for ini, fin in todas[1:]:
+        ult_ini, ult_fin = fusionadas[-1]
+        if ini <= ult_fin:
+            fusionadas[-1] = (ult_ini, max(ult_fin, fin))
+        else:
+            fusionadas.append((ini, fin))
+    return fusionadas
+
+
+def _franjas_del_profesional(db: Session, professional_id, weekday: int, clinic_shifts):
+    """Franjas efectivas de un profesional puntual en un dia de la semana.
+
+    Interseccion de su propia grilla (ProfessionalSchedule) con el horario
+    general de la clinica. Si el profesional no tiene ninguna fila cargada en
+    ProfessionalSchedule (en NINGUN dia), se lo trata como disponible en todo
+    el horario general, para no romper a profesionales que todavia no
+    configuraron sus dias — es el comportamiento que habia antes de que
+    existiera esta tabla.
+    """
+    propias = db.query(ProfessionalSchedule).filter(
+        ProfessionalSchedule.professional_id == professional_id,
+        ProfessionalSchedule.is_active == True,
+    ).all()
+    if not propias:
+        return clinic_shifts
+    del_dia = [(r.start_time, r.end_time) for r in propias if r.weekday == weekday]
+    if not del_dia:
+        return []  # tiene grilla cargada, pero no trabaja este dia
+    return _intersectar_franjas(clinic_shifts, del_dia)
+
+
 def get_available_slots(db: Session, target_date: str, location: str, reason: str,
                         obra_social: str = "Particular", recursive_depth=0,
                         fecha_pedida=None, motivo_salto=None):
@@ -367,9 +421,21 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             return siguiente("PAMI se atiende solo los viernes")
         return respuesta([], "No hay turnos disponibles para PAMI en las próximas semanas.")
 
-    # Profesional asignado por el motivo (necesario para chequear ausencias)
-    prof = route_professional(reason, db)
+    # Viernes es al reves: exclusivo para PAMI. Es la contracara de la regla de
+    # arriba (antes solo se restringia PAMI a viernes; no se restringia viernes
+    # a PAMI, asi que un particular podia sacar turno un viernes igual).
+    if weekday == 4 and (not obra_social or obra_social.upper() != "PAMI"):
+        if recursive_depth < 14:
+            return siguiente("los viernes la clínica solo atiende pacientes de PAMI")
+        return respuesta([], "Sin disponibilidad en las próximas dos semanas.")
+
+    # Profesionales que pueden atender este motivo. Puede ser mas de uno (ej.
+    # "Limpieza" la hacen los dos): el dia esta disponible si CUALQUIERA de
+    # ellos trabaja, y se ofrece la union de sus horarios, no solo el de uno.
+    candidatos = find_professionals_for_reason(reason, db)
+    prof = candidatos[0] if candidatos else None
     prof_name = prof.full_name if prof else "Cualquier profesional disponible"
+    prof_ids = [p.id for p in candidatos]
 
     # ── Feriado: si el día es feriado, saltar directamente al siguiente ──
     is_holiday = db.query(ClinicHoliday).filter(ClinicHoliday.date == day).first()
@@ -379,26 +445,31 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             return siguiente(f"el {fecha_en_palabras(day)} es feriado{detalle} y la clínica está cerrada")
         return respuesta([], "No hay turnos disponibles (feriados).")
 
-    # Horario de la clínica para ese día (configurable desde el panel)
+    # Horario general de la clínica para ese día (configurable desde el panel)
     schedule_rows = db.query(ClinicSchedule).filter(
         ClinicSchedule.weekday == weekday,
         ClinicSchedule.is_active == True,
     ).order_by(ClinicSchedule.start_time).all()
-    shifts = [(r.start_time, r.end_time) for r in schedule_rows]
+    clinic_shifts = [(r.start_time, r.end_time) for r in schedule_rows]
 
-    # Si el profesional está ausente ese día, no se ofrece
-    if prof:
-        absent = db.query(ProfessionalTimeOff).filter(
-            ProfessionalTimeOff.professional_id == prof.id,
+    # Para cada candidato: su propia grilla (si la tiene cargada) acotada al
+    # horario general, salvo que ese día esté de ausencia puntual. La union de
+    # todos define cuándo hay alguien disponible para este motivo.
+    def _franjas_si_no_ausente(p):
+        ausente = db.query(ProfessionalTimeOff).filter(
+            ProfessionalTimeOff.professional_id == p.id,
             ProfessionalTimeOff.date == day,
         ).first()
-        if absent:
-            shifts = []
+        if ausente:
+            return []
+        return _franjas_del_profesional(db, p.id, weekday, clinic_shifts)
+
+    shifts = _unir_franjas([_franjas_si_no_ausente(p) for p in candidatos]) if candidatos else clinic_shifts
 
     if not shifts:
-        # Día cerrado o profesional ausente: buscar el próximo día con disponibilidad
+        # Día cerrado, o ningún candidato trabaja/está disponible ese día.
         if recursive_depth < 14:
-            return siguiente(f"el {fecha_en_palabras(day)} la clínica no atiende")
+            return siguiente(f"el {fecha_en_palabras(day)} no hay nadie disponible para {reason}")
         return respuesta([], "Sin disponibilidad en las próximas dos semanas.")
 
     # Turnos del dia en esa sede. Antes esta consulta filtraba tambien por
@@ -407,9 +478,6 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # decision la toma slot_conflict segun los sillones configurados.
     existing = get_day_appointments(db, day, location)
     chairs = get_chairs_per_location(db)
-    # Si el motivo lo atienden varios, el horario esta libre mientras quede al
-    # menos uno de ellos disponible.
-    prof_ids = [p.id for p in find_professionals_for_reason(reason, db)]
     
     # Determine duration based on reason
     duration_minutes = 15

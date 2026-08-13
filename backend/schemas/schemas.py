@@ -340,6 +340,14 @@ class ScheduleBlockRead(ScheduleBlock):
     model_config = {"from_attributes": True}
 
 
+class ProfessionalScheduleBlockRead(BaseModel):
+    id: UUID
+    weekday: int
+    start_time: time
+    end_time: time
+    model_config = {"from_attributes": True}
+
+
 class TimeOffCreate(BaseModel):
     professional_id: UUID
     date: date
