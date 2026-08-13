@@ -303,8 +303,29 @@ def create_appointment_logic(
         "datetime": str(appt.start_time),
     }
 
-def get_available_slots(db: Session, target_date: str, location: str, reason: str, obra_social: str = "Particular", recursive_depth=0):
-    """Calculate free slots for a given date and location based on clinic schedule."""
+DIAS_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
+         "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+def fecha_en_palabras(d) -> str:
+    """'martes 18 de agosto de 2026'.
+
+    Se calcula aca y no en el prompt: el modelo deducia el dia de la semana a
+    partir de la fecha ISO y se equivocaba (llamo "lunes" al 18/08/2026, que es
+    martes). Es aritmetica, no tiene por que hacerla un LLM.
+    """
+    return f"{DIAS_SEMANA[d.weekday()]} {d.day} de {MESES[d.month - 1]} de {d.year}"
+
+
+def get_available_slots(db: Session, target_date: str, location: str, reason: str,
+                        obra_social: str = "Particular", recursive_depth=0,
+                        fecha_pedida=None, motivo_salto=None):
+    """Calculate free slots for a given date and location based on clinic schedule.
+
+    fecha_pedida y motivo_salto se arrastran entre llamadas recursivas para poder
+    contarle al paciente que el dia que pidio no estaba y por que.
+    """
     clinic_now = get_clinic_now()
     try:
         # If target_date is a full ISO string, we take the date part
@@ -312,14 +333,39 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         day = day_dt.date()
     except Exception:
         day = clinic_now.date()
-        
+
+    if fecha_pedida is None:
+        fecha_pedida = day
+
+    def siguiente(motivo):
+        """Prueba el dia siguiente, recordando por que se salteo el primero."""
+        return get_available_slots(
+            db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social,
+            recursive_depth + 1, fecha_pedida, motivo_salto or motivo,
+        )
+
+    def respuesta(slots, mensaje=None, profesional=None):
+        movido = day != fecha_pedida
+        return {
+            "date": str(day),
+            "fecha_texto": fecha_en_palabras(day),
+            "fecha_pedida": str(fecha_pedida),
+            "fecha_pedida_texto": fecha_en_palabras(fecha_pedida),
+            "movido": movido,
+            "motivo_salto": motivo_salto if movido else None,
+            "location": location,
+            "professional": profesional,
+            "available_slots": slots,
+            "message": mensaje,
+        }
+
     weekday = day.weekday() # 0=Mon, 2=Wed
         
     # Regla PAMI: solo viernes
     if obra_social and obra_social.upper() == "PAMI" and weekday != 4:
         if recursive_depth < 14:
-            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
-        return {"date": str(day), "location": location, "available_slots": [], "message": "No hay turnos disponibles para PAMI en las próximas semanas."}
+            return siguiente("PAMI se atiende solo los viernes")
+        return respuesta([], "No hay turnos disponibles para PAMI en las próximas semanas.")
 
     # Profesional asignado por el motivo (necesario para chequear ausencias)
     prof = route_professional(reason, db)
@@ -328,9 +374,10 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # ── Feriado: si el día es feriado, saltar directamente al siguiente ──
     is_holiday = db.query(ClinicHoliday).filter(ClinicHoliday.date == day).first()
     if is_holiday:
+        detalle = f" ({is_holiday.description})" if is_holiday.description else ""
         if recursive_depth < 14:
-            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
-        return {"date": str(day), "location": location, "available_slots": [], "message": "No hay turnos disponibles (feriados)."}
+            return siguiente(f"el {fecha_en_palabras(day)} es feriado{detalle} y la clínica está cerrada")
+        return respuesta([], "No hay turnos disponibles (feriados).")
 
     # Horario de la clínica para ese día (configurable desde el panel)
     schedule_rows = db.query(ClinicSchedule).filter(
@@ -351,8 +398,8 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     if not shifts:
         # Día cerrado o profesional ausente: buscar el próximo día con disponibilidad
         if recursive_depth < 14:
-            return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
-        return {"date": str(day), "location": location, "available_slots": [], "message": "Sin disponibilidad en las próximas dos semanas."}
+            return siguiente(f"el {fecha_en_palabras(day)} la clínica no atiende")
+        return respuesta([], "Sin disponibilidad en las próximas dos semanas.")
 
     # Turnos del dia en esa sede. Antes esta consulta filtraba tambien por
     # profesional, asi que un horario ocupado por el otro profesional se ofrecia
@@ -387,11 +434,6 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     
     # If no slots found for today, auto-search next available day
     if not available_slots and recursive_depth < 14:
-        return get_available_slots(db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social, recursive_depth + 1)
+        return siguiente(f"el {fecha_en_palabras(day)} ya no quedaban horarios libres")
         
-    return {
-        "date": str(day),
-        "location": location,
-        "professional": prof_name,
-        "available_slots": available_slots[:4]
-    }
+    return respuesta(available_slots[:4], profesional=prof_name)

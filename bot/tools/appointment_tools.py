@@ -151,17 +151,34 @@ def consultar_disponibilidad(motivo_confirmado_por_paciente: str, location: str 
         r.raise_for_status()
         data = r.json()
         slots = data.get("available_slots", [])
-        date_iso = data.get("date", "")  # YYYY-MM-DD format
+        date_iso = data.get("date", "")            # YYYY-MM-DD
+        # El día de la semana viene calculado por el backend. NO lo deduzca el
+        # modelo a partir de la fecha: lo hacía y se equivocaba (llamó "lunes"
+        # al 18/08/2026, que es martes).
+        fecha_texto = data.get("fecha_texto") or date_iso
         if not slots:
-            return f"No hay turnos disponibles en {location} para esa fecha."
-        # IMPORTANTE: la fecha devuelta es SIEMPRE futura (el backend lo garantiza).
-        # Al presentar los horarios al paciente, guardá esta fecha ISO para usarla en agendar_turno.
-        # NO volver a llamar a consultar_disponibilidad cuando el paciente elija un horario.
+            return (
+                f"No hay turnos disponibles en {location} en las próximas dos semanas. "
+                f"Decíselo al paciente y ofrecele que deje sus datos para que lo contacten."
+            )
+
+        aviso = ""
+        if data.get("movido"):
+            motivo = data.get("motivo_salto") or "ese día no había disponibilidad"
+            aviso = (
+                f"OJO: el paciente pidió el {data.get('fecha_pedida_texto')}, pero {motivo}. "
+                f"Avisale esto con naturalidad (no es un error ni pidas disculpas) y ofrecele "
+                f"el {fecha_texto}, que es el próximo día con lugar. "
+            )
+
         return (
-            f"[FECHA GARANTIZADA FUTURA: {date_iso}] "
-            f"Turnos disponibles en {location} para el {date_iso}: {', '.join(slots)}. "
-            f"Cuando el paciente elija uno, combiná esta fecha ({date_iso}) con el horario elegido "
-            f"para formar preferred_date en formato YYYY-MM-DD HH:MM. NO llames a esta herramienta de nuevo."
+            f"{aviso}"
+            f"[FECHA GARANTIZADA FUTURA: {date_iso} = {fecha_texto}] "
+            f"Turnos disponibles en {location} para el {fecha_texto}: {', '.join(slots)}. "
+            f"Al escribirle al paciente usá EXACTAMENTE '{fecha_texto}'. PROHIBIDO calcular vos "
+            f"el día de la semana. Cuando elija un horario, combiná {date_iso} con ese horario "
+            f"para formar preferred_date en formato YYYY-MM-DD HH:MM. "
+            f"NO llames a esta herramienta de nuevo."
         )
     except Exception as e:
         return f"Error consultando disponibilidad: {e}"
