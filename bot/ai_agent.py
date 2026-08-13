@@ -26,6 +26,32 @@ def get_config(key: str, default: str = ""):
         db.close()
     return os.getenv(key, default)
 
+def get_especialistas_texto() -> str:
+    """Los profesionales y sus especialidades, tal como estan cargados en el panel.
+
+    Estaba escrito a mano en el prompt y ya no coincidia con la realidad: decia
+    que Limpiezas las hacia solo Murad y no mencionaba Cirugia, ademas de tener
+    mal el nombre ("Helena" en vez de "Elena"). Ahora sale de la misma fuente
+    que usa el ruteo, asi no se pueden contradecir.
+    """
+    from backend.models.professional import Professional
+    db = SessionLocal()
+    try:
+        profs = db.query(Professional).filter(
+            Professional.is_deleted == False,
+            Professional.is_active == True,
+        ).order_by(Professional.full_name).all()
+        partes = [
+            f"{p.full_name} ({', '.join(p.specialties)})"
+            for p in profs if p.specialties
+        ]
+        return " y ".join(partes) if partes else "el equipo de la clínica"
+    except Exception:
+        return "el equipo de la clínica"
+    finally:
+        db.close()
+
+
 def get_active_insurances() -> list[str]:
     db = SessionLocal()
     try:
@@ -41,7 +67,7 @@ Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Habl
 
 ### 🕒 REGLAS DEL CONSULTORIO:
 - **Horarios**: Lunes a Viernes (09:00-12:30 y 17:00-20:30). Los Miércoles a la tarde cerramos.
-- **Especialistas**: Dr. Silvestro (Extracciones, Implantes, Cirugía, Prótesis) y Dra. Murad (Ortodoncia, Endodoncia, Limpiezas, Consultas generales).
+- **Especialistas**: {especialistas}
 - **Duraciones**: Limpieza/Consulta (15m), Extracción/Ortodoncia (30m), Endodoncia (60m).
 
 ### 🎯 TU DINÁMICA DE CONVERSACIÓN (SEGUIR ESTRICTAMENTE EL ORDEN):
@@ -50,9 +76,7 @@ Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Habl
    - Comprobá si su obra social está en {insurances}. Si no está, ofrecele atención "Particular".
    - **REGLA PAMI:** Si es PAMI, internamente solo debes buscar turnos para los días Viernes. 🚫 PROHIBIDO mencionarle al usuario que PAMI es solo los viernes. Simplemente ofrécele fechas de viernes con total naturalidad sin dar explicaciones.
 3. **Motivo de Consulta (NO OMITIR):** DESPUÉS de aclarar la obra social, preguntale obligatoriamente para qué es la consulta. ¡PROHIBIDO AVANZAR SIN SABER EL MOTIVO!
-4. **Asignación de Profesional:** Informale al paciente qué especialista lo atenderá:
-   - Dr. Martin Silvestro → Extracciones, Implantes, Prótesis, Cirugía.
-   - Dra. Helena Murad → Ortodoncia, Endodoncia, Limpiezas, Consultas.
+4. **Asignación de Profesional:** Informale al paciente qué especialista lo atenderá, según: {especialistas}. Si el motivo lo atienden los dos, mencioná a cualquiera de ellos con naturalidad.
 5. **Buscar Disponibilidad:** Ejecutá `consultar_disponibilidad` UNA SOLA VEZ. La herramienta devuelve la fecha en formato YYYY-MM-DD. Presentá 3 o 4 horarios al paciente en texto amigable incluyendo la fecha completa con el año.
 
 ---
@@ -181,12 +205,14 @@ def chat(user_message: str, history: list[dict] | None = None, requester_phone: 
     logger = logging.getLogger(__name__)
 
     last_error = None
+    sin_key = []
     for attempt, provider in enumerate(providers, 1):
         try:
-            print(f"DEBUG: AI_AGENT -> Intentando proveedor {attempt}/{len(providers)}: {provider}")
+            logger.info(f"AI_AGENT -> Intentando proveedor {attempt}/{len(providers)}: {provider}")
             agent = get_agent(provider)
             if not agent:
-                print(f"DEBUG: AI_AGENT -> Omitiendo {provider} por falta de API Key.")
+                logger.error(f"AI_AGENT -> {provider} omitido: no hay API Key cargada.")
+                sin_key.append(provider)
                 continue
 
             # Prepend the real Argentina date/time to EVERY user message
@@ -204,12 +230,28 @@ def chat(user_message: str, history: list[dict] | None = None, requester_phone: 
                 "input": dated_message,
                 "chat_history": chat_history,
                 "today": f"{dia_semana} {clinic_now.strftime('%Y-%m-%d %H:%M')}",
-                "insurances": ", ".join(get_active_insurances())
+                "insurances": ", ".join(get_active_insurances()),
+                "especialistas": get_especialistas_texto(),
             })
             return result["output"]
         except Exception as e:
             logger.error(f"Error usando proveedor {provider}: {e}")
             last_error = f"{provider}: {str(e)}"
 
-    # Si todos fallan o no hay agentes disponibles:
+    # Si todos fallan o no hay agentes disponibles. El motivo real se calculaba
+    # pero no se registraba en ningún lado, así que desde afuera solo se veía el
+    # mensaje genérico y no había forma de saber qué proveedor falló ni por qué.
+    if sin_key and not last_error:
+        logger.error(
+            "AI_AGENT -> Ningún proveedor utilizable: sin API Key en %s. "
+            "Cargala en Configuración -> Integraciones.",
+            ", ".join(sin_key),
+        )
+    else:
+        logger.error(
+            "AI_AGENT -> Fallaron todos los proveedores (%s). Último error: %s%s",
+            ", ".join(providers),
+            last_error,
+            f" | sin API Key: {', '.join(sin_key)}" if sin_key else "",
+        )
     return "No pudimos procesar tu solicitud automáticamente debido a un inconveniente técnico con nuestra Inteligencia Artificial. Un agente se pondrá en contacto a la brevedad."

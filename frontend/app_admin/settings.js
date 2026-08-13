@@ -72,7 +72,24 @@ Router.register('settings', async (container) => {
             API.getInsurances(),
             API.getConfigs()
         ]);
-    } catch (e) {}
+    } catch (e) {
+        // Antes esto se tragaba el error y se seguía renderizando el formulario
+        // con TODOS los campos vacíos. Un click en "Guardar Todo" escribía ""
+        // encima de cada clave y borraba las API Keys. Mejor no mostrar el form.
+        container.innerHTML = `
+            <div class="page-header"><h1>Configuración</h1></div>
+            <div class="card">
+                <div class="empty-state">
+                    <div class="empty-state-icon">⚠️</div>
+                    <div class="empty-state-text">
+                        No se pudo cargar la configuración: ${e.message || 'error de red'}.<br>
+                        No se muestra el formulario para no sobrescribir los datos guardados con valores vacíos.
+                    </div>
+                    <button class="btn btn-primary" style="margin-top:1rem;" onclick="Router.currentPage=null;Router.navigate('settings')">Reintentar</button>
+                </div>
+            </div>`;
+        return;
+    }
 
     const getConfig = (key) => configs.find(c => c.key === key)?.value || '';
 
@@ -293,7 +310,11 @@ window.SettingsPage = {
         // 30s y avisaba error habiendo guardado casi todo.
         const values = {};
         form.querySelectorAll('input, select').forEach(el => {
-            if (el.name) values[el.name] = el.value;
+            if (!el.name) return;
+            // Una API Key vacía significa "no la toques", no "borrala". Sin esto,
+            // guardar sin retipear la clave la dejaba en blanco y el bot se caía.
+            if (el.type === 'password' && !el.value) return;
+            values[el.name] = el.value;
         });
 
         if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
