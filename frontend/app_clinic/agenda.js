@@ -554,7 +554,7 @@ const AgendaPage = {
             if (startVal) apptData.start_time = startVal;
             const loc = val('edit-location');
             if (loc) apptData.location = loc;
-            await API.updateAppointment(apptId, apptData);
+            await this._guardarConSobreturno(apptData, (d) => API.updateAppointment(apptId, d));
 
             UI.toast('Turno actualizado', 'success');
             UI.closeModal();
@@ -703,6 +703,24 @@ const AgendaPage = {
         const hidden = document.getElementById(idPrefix === 'appt' ? 'appt-start-hidden' : 'edit-start');
         if (hidden) hidden.value = combinado;
         if (idPrefix === 'appt') this._checkHoliday(combinado);
+    },
+
+    // Guarda un turno (alta o edicion) y, si el backend lo rechaza por
+    // sobreturno (409), ofrece confirmar y reintenta con force=true. El
+    // feriado y otros errores (404, etc.) no entran aca: siguen cortando.
+    async _guardarConSobreturno(data, intentar) {
+        try {
+            return await intentar(data);
+        } catch (err) {
+            if (err.status === 409) {
+                const confirmar = await UI.confirm(
+                    'Sobreturno',
+                    `${err.message} ¿Confirmás crear el turno igual?`
+                );
+                if (confirmar) return await intentar({ ...data, force: true });
+            }
+            throw err;
+        }
     },
 
     _renderMultiModal(professionals, patients, defaultDateTime) {

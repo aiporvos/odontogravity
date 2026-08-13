@@ -194,10 +194,13 @@ def create_appointment(data: AppointmentCreate, db: Session = Depends(get_db)):
         raise HTTPException(404, "Profesional no encontrado")
 
     _assert_not_holiday(db, data.start_time)
-    _assert_slot_free(db, data.start_time, data.duration_minutes,
-                      data.location, data.professional_id)
+    if not data.force:
+        _assert_slot_free(db, data.start_time, data.duration_minutes,
+                          data.location, data.professional_id)
 
-    appt = Appointment(**data.model_dump())
+    campos = data.model_dump()
+    campos.pop("force", None)  # no es una columna del modelo, solo una bandera del request
+    appt = Appointment(**campos)
     db.add(appt)
     db.commit()
     db.refresh(appt)
@@ -216,18 +219,20 @@ async def update_appointment(appt_id: UUID, data: AppointmentUpdate, db: Session
 
     # Reprogramar hacia un feriado tampoco se permite (salvo que se cancele).
     campos = data.model_dump(exclude_unset=True)
+    campos.pop("force", None)  # no es una columna del modelo, solo una bandera del request
     if campos.get("start_time") and not was_cancelled:
         _assert_not_holiday(db, campos["start_time"])
-        _assert_slot_free(
-            db,
-            campos["start_time"],
-            campos.get("duration_minutes", a.duration_minutes),
-            campos.get("location", a.location),
-            campos.get("professional_id", a.professional_id),
-            exclude_id=a.id,   # el propio turno no se cuenta como conflicto
-        )
+        if not data.force:
+            _assert_slot_free(
+                db,
+                campos["start_time"],
+                campos.get("duration_minutes", a.duration_minutes),
+                campos.get("location", a.location),
+                campos.get("professional_id", a.professional_id),
+                exclude_id=a.id,   # el propio turno no se cuenta como conflicto
+            )
 
-    for key, val in data.model_dump(exclude_unset=True).items():
+    for key, val in campos.items():
         setattr(a, key, val)
     db.commit()
     db.refresh(a)

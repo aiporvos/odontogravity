@@ -52,7 +52,12 @@ const API = {
 
         if (!res.ok) {
             const errData = await res.json().catch(() => ({}));
-            throw new Error(this.errorMessage(errData, res.status));
+            const err = new Error(this.errorMessage(errData, res.status));
+            // Se expone el status para poder distinguir un 409 (sobreturno: se
+            // puede confirmar igual) de otros errores (404, feriado, etc.) sin
+            // tener que parsear el texto del mensaje.
+            err.status = res.status;
+            throw err;
         }
 
         return res.json();

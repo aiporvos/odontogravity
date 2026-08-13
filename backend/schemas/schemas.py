@@ -149,6 +149,12 @@ class AppointmentCreate(BaseModel):
     channel: AppointmentChannel = AppointmentChannel.web
     location: Optional[str] = None
     notes: Optional[str] = None
+    # Permite crear un sobreturno deliberado (dos turnos superpuestos) desde el
+    # panel. Por default el horario ocupado se rechaza con 409; con force=True
+    # se crea igual. Es una decisión humana explícita, no algo que el bot deba
+    # poder hacer nunca: create_appointment_logic (el flujo del bot) no expone
+    # este campo.
+    force: bool = False
 
 
 class AppointmentRead(BaseModel):
@@ -180,6 +186,7 @@ class AppointmentUpdate(BaseModel):
     insurance_name: Optional[str] = None
     notes: Optional[str] = None
     professional_id: Optional[UUID] = None
+    force: bool = False  # ver AppointmentCreate.force
 
 
 # ═══════════════════════════════════════════════════════
