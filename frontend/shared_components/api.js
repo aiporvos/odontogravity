@@ -118,6 +118,7 @@ const API = {
     createAppointment(data) { return this.post('/clinic/appointments', data); },
     updateAppointment(id, data) { return this.put(`/clinic/appointments/${id}`, data); },
     deleteAppointment(id) { return this.del(`/clinic/appointments/${id}`); },
+    deleteAppointmentPermanent(id) { return this.del(`/clinic/appointments/${id}/permanente`); },
 
     getOdontogram(patientId) { return this.get(`/clinic/odontogram/${patientId}`); },
     createOdontogramEntry(data) { return this.post('/clinic/odontogram', data); },

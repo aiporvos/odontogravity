@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from backend.database import get_db
-from backend.security import require_clinic
+from backend.security import require_admin, require_clinic
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment
 from backend.models.odontogram import OdontogramEntry
@@ -261,6 +261,24 @@ async def soft_delete_appointment(appt_id: UUID, db: Session = Depends(get_db)):
             print(f"Error notifying patient of cancellation: {e}")
 
     return {"detail": "Turno eliminado (soft-delete)"}
+
+
+@router.delete("/appointments/{appt_id}/permanente", dependencies=[Depends(require_admin)])
+def hard_delete_appointment(appt_id: UUID, db: Session = Depends(get_db)):
+    """Borra el turno de la base para siempre. No es lo mismo que cancelar.
+
+    Cancelar (o el soft-delete de arriba) deja el registro: sirve para
+    historial y para no perder el rastro de por qué el paciente no vino. Esto
+    es para lo que no debería haber quedado ahí ni como cancelado: turnos de
+    prueba, duplicados por un doble clic, datos cargados mal. No hay vuelta
+    atrás, así que queda restringido a admin.
+    """
+    a = db.query(Appointment).filter(Appointment.id == appt_id).first()
+    if not a:
+        raise HTTPException(404, "Turno no encontrado")
+    db.delete(a)
+    db.commit()
+    return {"detail": "Turno borrado definitivamente"}
 
 
 # ═══════════════════════════════════════════════════════

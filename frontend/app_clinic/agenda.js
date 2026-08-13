@@ -472,9 +472,30 @@ const AgendaPage = {
                     </div>
                 </div>
             `, `
+                ${API.user?.role === 'admin' ? `
+                    <button class="btn btn-danger" style="margin-right:auto;" onclick="AgendaPage.deletePermanent('${a.id}')">🗑️ Borrar definitivamente</button>
+                ` : ''}
                 <button class="btn btn-secondary" onclick="UI.closeModal()">Cerrar</button>
                 <button class="btn btn-primary" onclick="AgendaPage.saveAppointment('${a.id}', '${p.id || ''}')">Guardar cambios</button>
             `);
+        } catch (err) { UI.toast(err.message, 'error'); }
+    },
+
+    async deletePermanent(apptId) {
+        // Distinto de "Cancelado": ese estado deja el turno en el historial (para
+        // saber por que el paciente no vino). Esto lo saca de la base para
+        // siempre, para lo que ni siquiera merece quedar como cancelado: turnos
+        // de prueba, duplicados por un doble clic, datos cargados mal.
+        const ok = await UI.confirm(
+            'Borrar turno definitivamente',
+            'Esta acción NO se puede deshacer y es distinta de cancelar: el turno desaparece de la base, no queda en el historial. ¿Continuar?'
+        );
+        if (!ok) return;
+        try {
+            await API.deleteAppointmentPermanent(apptId);
+            UI.toast('Turno borrado', 'success');
+            UI.closeModal();
+            if (AgendaPage.loadAgenda) AgendaPage.loadAgenda();
         } catch (err) { UI.toast(err.message, 'error'); }
     },
 
