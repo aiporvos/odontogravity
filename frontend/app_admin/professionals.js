@@ -131,7 +131,7 @@ const ProfessionalsPage = {
                 </div>
                 <div class="form-group">
                     <label>Matrícula *</label>
-                    <input type="text" name="license_number" value="${prof.license_number}" required ${id ? 'readonly' : ''}>
+                    <input type="text" name="license_number" value="${prof.license_number}" required>
                 </div>
                 <div class="form-group form-group-full">
                     <label>Especialidades (separar con coma)</label>

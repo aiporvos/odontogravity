@@ -126,6 +126,7 @@ class ProfessionalRead(BaseModel):
 
 class ProfessionalUpdate(BaseModel):
     full_name: Optional[str] = None
+    license_number: Optional[str] = None
     specialties: Optional[list[str]] = None
     phone: Optional[str] = None
     email: Optional[str] = None

@@ -109,7 +109,26 @@ def update_professional(prof_id: UUID, data: ProfessionalUpdate, db: Session = D
     prof = db.query(Professional).filter(Professional.id == prof_id, Professional.is_deleted == False).first()
     if not prof:
         raise HTTPException(404, "Profesional no encontrado")
-    for key, val in data.model_dump(exclude_unset=True).items():
+
+    payload = data.model_dump(exclude_unset=True)
+
+    # La matrícula es única: si viene y cambia, verificar que no la tenga otro
+    new_license = payload.get("license_number")
+    if new_license is not None:
+        new_license = new_license.strip()
+        if not new_license:
+            payload.pop("license_number")  # no permitir dejarla vacía
+        elif new_license != prof.license_number:
+            existe = db.query(Professional).filter(
+                Professional.license_number == new_license,
+                Professional.id != prof_id,
+                Professional.is_deleted == False,
+            ).first()
+            if existe:
+                raise HTTPException(400, f"Ya existe otro profesional con la matrícula {new_license}")
+            payload["license_number"] = new_license
+
+    for key, val in payload.items():
         setattr(prof, key, val)
     db.commit()
     db.refresh(prof)
