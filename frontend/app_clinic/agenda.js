@@ -140,7 +140,12 @@ Router.register('agenda', async (container) => {
                 for (let j = 0; j < activeAppts.length; j++) {
                     if (i === j) continue;
                     const b = activeAppts[j];
-                    if ((a.location || '') !== (b.location || '')) continue;
+                    // Una sede en blanco cuenta como "cualquier sede", igual que en el
+                    // backend (get_day_appointments): dos turnos con sede vacia u
+                    // distinta-de-vacia-y-otra-vacia siguen compitiendo por el mismo
+                    // sillon fisico. Comparacion estricta solo cuando AMBAS estan
+                    // cargadas y son distintas.
+                    if (a.location && b.location && a.location !== b.location) continue;
                     const bStart = new Date(b.start_time).getTime();
                     const bEnd = bStart + (b.duration_minutes || 30) * 60 * 1000;
                     if (aStart < bEnd && bStart < aEnd) overlapping.push(b);
