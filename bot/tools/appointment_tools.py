@@ -166,4 +166,32 @@ def consultar_disponibilidad(motivo_confirmado_por_paciente: str, location: str 
     except Exception as e:
         return f"Error consultando disponibilidad: {e}"
 
-ALL_TOOLS = [agendar_turno, cancelar_turno, reprogramar_turno, consultar_mis_turnos, consultar_disponibilidad]
+@tool
+def verificar_obra_social(obra_social: str) -> str:
+    """Verifica si la clínica atiende una obra social. USAR SIEMPRE apenas el paciente la menciona, antes de seguir con cualquier otra cosa.
+    Args:
+        obra_social: El nombre de la obra social tal como lo dijo el paciente (ej: OSDE, Swiss Medical, Galeno).
+    """
+    try:
+        r = httpx.post(f"{API_BASE}/api/bot/verificar-obra-social",
+                       json={"obra_social": obra_social}, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        d = r.json()
+        if d["cubierta"]:
+            return (
+                f"CUBIERTA. La clínica atiende {d['nombre']}. "
+                f"Seguí normalmente con el turno usando obra_social='{d['nombre']}'."
+            )
+        activas = ", ".join(d["activas"]) or "ninguna"
+        return (
+            f"NO CUBIERTA. La clínica no atiende '{d['consultada']}'. "
+            f"Decile al paciente con amabilidad que no trabajamos con esa obra social y que "
+            f"su atención sería de forma PARTICULAR, y preguntale si desea avanzar así. "
+            f"Si acepta, usá obra_social='Particular'. Si pregunta cuáles se atienden: {activas}. "
+            f"PROHIBIDO agendar con '{d['consultada']}'."
+        )
+    except Exception as e:
+        return f"Error verificando la obra social: {e}"
+
+
+ALL_TOOLS = [agendar_turno, cancelar_turno, reprogramar_turno, consultar_mis_turnos, consultar_disponibilidad, verificar_obra_social]

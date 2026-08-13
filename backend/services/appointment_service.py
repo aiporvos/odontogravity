@@ -49,6 +49,45 @@ def _especialidad_coincide(especialidad: str, palabras_motivo: list[str]) -> boo
     )
 
 
+def match_insurance(nombre: str, db: Session):
+    """Busca la obra social entre las activas. Devuelve el registro o None.
+
+    La comparacion la hacia el modelo contra una lista dentro del prompt, y se
+    le escapaban casos: aceptaba obras sociales que la clinica no atiende. Aca
+    es deterministico. Tolera mayusculas, acentos y variantes como "OSDE 210",
+    pero no confunde nombres parecidos: "osep" y "osde" no matchean entre si.
+    """
+    from backend.models.insurance import Insurance
+
+    buscado = " ".join(_sin_acentos(nombre or "").split())
+    if not buscado:
+        return None
+
+    # Se compara por palabras completas, no por substring: "OSPE" es una obra
+    # social distinta de "OSPELSYM" y no debe darse por cubierta. Ante la duda
+    # conviene devolver None: el bot avisa que no esta cubierta y el paciente
+    # corrige, que es mejor que agendar con una cobertura que no se atiende.
+    palabras_buscado = {p for p in buscado.split() if len(p) >= 3}
+
+    activas = db.query(Insurance).filter(Insurance.is_active == True).all()
+    for ins in activas:
+        candidato = " ".join(_sin_acentos(ins.name).split())
+        if not candidato:
+            continue
+        if buscado == candidato:
+            return ins
+        if ins.code and _sin_acentos(ins.code).strip() == buscado:
+            return ins
+
+        palabras_candidato = {p for p in candidato.split() if len(p) >= 3}
+        if not palabras_buscado or not palabras_candidato:
+            continue
+        # "OSDE 210" contiene a "OSDE"; "Swiss" es parte de "Swiss Medical".
+        if palabras_candidato <= palabras_buscado or palabras_buscado <= palabras_candidato:
+            return ins
+    return None
+
+
 def find_professionals_for_reason(reason: str, db: Session) -> list[Professional]:
     """Profesionales que atienden ese motivo, segun sus especialidades cargadas.
 
@@ -186,6 +225,14 @@ def create_appointment_logic(
     duration_minutes: int = 30,
     requester_phone: str = None,
 ):
+    # Garantia dura: si la obra social no esta entre las activas, el turno se
+    # agenda como Particular. El prompt le pide al modelo que lo verifique con
+    # verificar_obra_social, pero un prompt no es una garantia: sin esto podia
+    # quedar agendado con una cobertura que la clinica no atiende.
+    if insurance_name:
+        encontrada = match_insurance(insurance_name, db)
+        insurance_name = encontrada.name if encontrada else "Particular"
+
     # Find or create patient
     patient = db.query(Patient).filter(Patient.dni == dni, Patient.is_deleted == False).first()
     if not patient:

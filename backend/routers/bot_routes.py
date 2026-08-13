@@ -1,7 +1,7 @@
 """Bot-facing API routes - used by DentiBot tools to manage appointments."""
 from uuid import UUID
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import Body, APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 import os
@@ -207,6 +207,30 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
             }
             for a in appts
         ],
+    }
+
+
+@router.post("/verificar-obra-social", dependencies=[Depends(verify_bot_key)])
+def bot_verificar_obra_social(data: dict = Body(...), db: Session = Depends(get_db)):
+    """Dice si la clinica atiende esa obra social. Lo consulta el bot.
+
+    Antes la comparacion la hacia el modelo contra una lista metida en el prompt
+    y se le colaban obras sociales no cubiertas. Esto es deterministico.
+    """
+    from backend.services.appointment_service import match_insurance
+    from backend.models.insurance import Insurance
+
+    consultada = (data.get("obra_social") or "").strip()
+    encontrada = match_insurance(consultada, db)
+    activas = [
+        i.name for i in db.query(Insurance).filter(Insurance.is_active == True).order_by(Insurance.name).all()
+        if i.name.lower() != "particular"
+    ]
+    return {
+        "consultada": consultada,
+        "cubierta": bool(encontrada),
+        "nombre": encontrada.name if encontrada else "Particular",
+        "activas": activas,
     }
 
 
