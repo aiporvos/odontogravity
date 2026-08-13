@@ -44,22 +44,11 @@ Router.register('settings', async (container) => {
                     <h2>🏥 Obras Sociales</h2>
                     <button class="btn btn-sm btn-primary" onclick="SettingsPage.showInsuranceForm()">+ Nueva</button>
                 </div>
-                ${recInsurances.map(i => `
-                    <div style="padding:.5rem 0;border-bottom:1px solid var(--slate-100);display:flex;justify-content:space-between;align-items:center;">
-                        <div>
-                            <strong>${i.name}</strong>
-                            <div style="font-size:.8rem;color:var(--slate-500);">Código: ${i.code || '-'}</div>
-                        </div>
-                        <div style="display:flex;gap:.5rem;align-items:center;">
-                            <span class="badge badge-${i.is_active ? 'confirmed' : 'cancelled'}">${i.is_active ? 'Activa' : 'Inactiva'}</span>
-                            <button class="btn btn-icon text-primary" onclick="SettingsPage.showInsuranceForm('${i.id}', '${(i.name||'').replace(/'/g, "\\'")}', '${(i.code||'').replace(/'/g, "\\'")}', ${i.is_active})">✏️</button>
-                            <button class="btn btn-icon text-red" onclick="SettingsPage.deleteInsurance('${i.id}')">🗑️</button>
-                        </div>
-                    </div>
-                `).join('')}
+                <div id="obras-sociales-body">${SettingsPage.renderInsurances(recInsurances, 1)}</div>
             </div>
             </div>
         `;
+        SettingsPage._insurances = recInsurances;
         return;
     }
 
@@ -125,19 +114,7 @@ Router.register('settings', async (container) => {
                         <h2>🏥 Obras Sociales</h2>
                         <button class="btn btn-sm btn-primary" onclick="SettingsPage.showInsuranceForm()">+ Nueva</button>
                     </div>
-                    ${insurances.map(i => `
-                        <div style="padding:.5rem 0;border-bottom:1px solid var(--slate-100);display:flex;justify-content:space-between;align-items:center;">
-                            <div>
-                                <strong>${i.name}</strong>
-                                <div style="font-size:.8rem;color:var(--slate-500);">Código: ${i.code || '-'}</div>
-                            </div>
-                            <div style="display:flex;gap:.5rem;align-items:center;">
-                                <span class="badge badge-${i.is_active ? 'confirmed' : 'cancelled'}">${i.is_active ? 'Activa' : 'Inactiva'}</span>
-                                <button class="btn btn-icon text-primary" onclick="SettingsPage.showInsuranceForm('${i.id}', '${(i.name||'').replace(/'/g, "\\'")}', '${(i.code||'').replace(/'/g, "\\'")}', ${i.is_active})">✏️</button>
-                                <button class="btn btn-icon text-red" onclick="SettingsPage.deleteInsurance('${i.id}')">🗑️</button>
-                            </div>
-                        </div>
-                    `).join('')}
+                    <div id="obras-sociales-body">${SettingsPage.renderInsurances(insurances, 1)}</div>
                 </div>
             </div>
 
@@ -284,9 +261,63 @@ Router.register('settings', async (container) => {
             </div>
         </div>
     `;
+    SettingsPage._insurances = insurances;
 });
 
 window.SettingsPage = {
+    // ── Paginado de Obras Sociales ──────────────────────
+    // Con 51+ obras sociales cargadas la lista sin paginar era muy larga para
+    // escanear. El cambio de pagina es client-side: la lista completa ya esta
+    // en memoria (_insurances), asi que no hace falta otro request al backend.
+    _insurances: [],
+    _insurancePage: 1,
+    _insurancePerPage: 10,
+
+    renderInsurances(items, page) {
+        const perPage = this._insurancePerPage;
+        const total = items.length;
+        const totalPages = Math.max(1, Math.ceil(total / perPage));
+        page = Math.min(Math.max(1, page), totalPages);
+        this._insurancePage = page;
+
+        const desde = (page - 1) * perPage;
+        const pagina = items.slice(desde, desde + perPage);
+
+        const filas = pagina.map(i => `
+            <div style="padding:.5rem 0;border-bottom:1px solid var(--slate-100);display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <strong>${i.name}</strong>
+                    <div style="font-size:.8rem;color:var(--slate-500);">Código: ${i.code || '-'}</div>
+                </div>
+                <div style="display:flex;gap:.5rem;align-items:center;">
+                    <span class="badge badge-${i.is_active ? 'confirmed' : 'cancelled'}">${i.is_active ? 'Activa' : 'Inactiva'}</span>
+                    <button class="btn btn-icon text-primary" onclick="SettingsPage.showInsuranceForm('${i.id}', '${(i.name||'').replace(/'/g, "\\'")}', '${(i.code||'').replace(/'/g, "\\'")}', ${i.is_active})">✏️</button>
+                    <button class="btn btn-icon text-red" onclick="SettingsPage.deleteInsurance('${i.id}')">🗑️</button>
+                </div>
+            </div>
+        `).join('');
+
+        if (total === 0) {
+            return `<div class="empty-state"><div class="empty-state-text">No hay obras sociales cargadas</div></div>`;
+        }
+
+        return `
+            ${filas}
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:.85rem;">
+                <small style="color:var(--slate-500);">${total} obras sociales · página ${page} de ${totalPages}</small>
+                <div style="display:flex;gap:.35rem;">
+                    <button class="btn btn-sm btn-ghost" ${page <= 1 ? 'disabled' : ''} onclick="SettingsPage.goToInsurancePage(${page - 1})">‹ Anterior</button>
+                    <button class="btn btn-sm btn-ghost" ${page >= totalPages ? 'disabled' : ''} onclick="SettingsPage.goToInsurancePage(${page + 1})">Siguiente ›</button>
+                </div>
+            </div>
+        `;
+    },
+
+    goToInsurancePage(page) {
+        const body = document.getElementById('obras-sociales-body');
+        if (!body) return;
+        body.innerHTML = this.renderInsurances(this._insurances, page);
+    },
     async saveBotSettings() {
         const form = document.getElementById('form-bot');
         const data = {};
