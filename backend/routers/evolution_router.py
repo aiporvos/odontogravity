@@ -4,7 +4,7 @@ import json
 import logging
 import httpx
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from fastapi import APIRouter, Request, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 
@@ -153,31 +153,9 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.warning("⚠️ Mensaje sin número de origen ('from')")
         return {"status": "ignored_no_sender"}
 
-    # Un mensaje que llega "desde nuestro propio número" es el eco de algo que
-    # salió de ESTE número: puede ser el eco del propio bot, o -lo importante-
-    # una respuesta que el personal tipeó a mano desde el WhatsApp linkeado a
-    # este número. En ese segundo caso el sistema no se enteraba de nada y el
-    # bot le seguía respondiendo al paciente por su cuenta, pisándose con lo
-    # que el personal ya le había dicho (ver commit de esta fecha).
-    #
-    # Se habilitan dos palabras clave para que el personal pause/reactive al
-    # bot en ESA conversación puntual, sin tocar el resto de los pacientes:
-    # "#pausa" y "#reactivar", tipeadas directamente en el chat de WhatsApp.
+    # Evitar bucles: Ignorar si el mensaje proviene de nuestro propio número
     from_phone_norm = normalize_to_e164(get_config("YCLOUD_FROM_PHONE"))
     if from_phone_norm and normalize_to_e164(from_number) == from_phone_norm:
-        texto_propio = ""
-        if msg_data.get("type") == "text":
-            texto_propio = (msg_data.get("text", {}).get("body") or "").strip().lower()
-
-        if texto_propio in ("#pausa", "#reactivar"):
-            # OJO: en un mensaje "propio", el paciente es el destinatario (to),
-            # no el remitente (from, que somos nosotros).
-            clean_to = "".join(filter(str.isdigit, to_number or ""))
-            if clean_to:
-                remote_jid_paciente = f"{clean_to}@s.whatsapp.net"
-                background_tasks.add_task(handle_pause_command, remote_jid_paciente, texto_propio)
-                return {"status": "pause_command"}
-
         logger.info("⏭️ Mensaje enviado por nosotros mismos (ignorado)")
         return {"status": "ignored_self"}
 
@@ -214,28 +192,6 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
     logger.warning("⚠️ Mensaje sin contenido de texto, interactivo o audio soportado")
     return {"status": "ignored_unsupported_type"}
 
-async def handle_pause_command(remote_jid: str, comando: str):
-    """Pausa o reactiva al bot para UN paciente puntual, sin tocar a los demás.
-
-    Se ejecuta como background task, igual que los mensajes normales, para no
-    demorar la respuesta al webhook.
-    """
-    db = SessionLocal()
-    try:
-        session = get_or_create_session(db, remote_jid)
-        if comando == "#pausa":
-            # 24hs de margen: si el personal se olvida de escribir "#reactivar",
-            # el paciente no se queda sin bot para siempre.
-            session.paused_until = datetime.utcnow() + timedelta(hours=24)
-            logger.info(f"🔕 Bot pausado para {remote_jid} (24hs o hasta #reactivar)")
-        else:
-            session.paused_until = None
-            logger.info(f"🔔 Bot reactivado para {remote_jid}")
-        db.commit()
-    finally:
-        db.close()
-
-
 async def handle_text_message(remote_jid: str, text: str):
     # Acquire lock for this user
     if remote_jid not in user_locks:
@@ -257,12 +213,7 @@ async def handle_text_message(remote_jid: str, text: str):
             save_message(db, session.id, MessageRole.user, text)
             
             if get_config("BOT_IS_ACTIVE", "true") == "false":
-                logger.info(f"⏸️ Bot pausado (global). Mensaje de {remote_jid} guardado, pero no se responde.")
-                return
-
-            if session.paused_until and session.paused_until > datetime.utcnow():
-                logger.info(f"⏸️ Bot pausado en esta conversación hasta {session.paused_until} "
-                           f"(personal atendiendo a mano). Mensaje de {remote_jid} guardado, pero no se responde.")
+                logger.info(f"⏸️ Bot pausado. Mensaje de {remote_jid} guardado, pero no se responde.")
                 return
             
             logger.info(f"🧠 Consultando a la IA para {remote_jid}...")

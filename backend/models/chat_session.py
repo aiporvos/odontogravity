@@ -26,14 +26,6 @@ class ChatSession(Base):
     platform_user_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     patient_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("patients.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    # Si el personal contesta a mano desde el mismo numero (WhatsApp linkeado),
-    # el bot no se entera y sigue respondiendo por su cuenta: dos "agentes"
-    # hablandole a la vez al paciente, cada uno ignorando al otro. El personal
-    # escribe "#pausa" en el chat para que el bot se calle en ESA conversacion
-    # puntual, y "#reactivar" para que retome. Expira solo a las 24hs por si
-    # se olvidan de reactivarlo, para no dejar a un paciente sin bot para
-    # siempre por un descuido.
-    paused_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     context_data: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON con datos recolectados")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
