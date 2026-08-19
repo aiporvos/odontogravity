@@ -28,10 +28,69 @@ def _palabras(texto: str) -> list[str]:
     return [p for p in limpio.split() if p not in _STOPWORDS and len(p) >= 3]
 
 
+def _distancia(a: str, b: str, tope: int = 2) -> int:
+    """Distancia de edicion acotada (cuantas letras hay que cambiar)."""
+    if abs(len(a) - len(b)) > tope:
+        return tope + 1
+    previa = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        actual = [i]
+        for j, cb in enumerate(b, 1):
+            actual.append(min(
+                previa[j] + 1,          # borrar
+                actual[j - 1] + 1,      # insertar
+                previa[j - 1] + (ca != cb),  # sustituir
+            ))
+        if min(actual) > tope:
+            return tope + 1
+        previa = actual
+    return previa[-1]
+
+
 def _misma_palabra(a: str, b: str) -> bool:
-    """Compara tolerando singular/plural: extraccion == extracciones."""
+    """True si son la misma palabra, tolerando plural y errores de tipeo.
+
+    Los pacientes escriben "estraccion", "extraciones" o "limpiesa" y antes
+    ninguna de esas coincidia, asi que el turno se ruteaba a cualquiera. Se
+    aceptan hasta 1-2 letras de diferencia segun el largo, que cubre los typos
+    comunes sin confundir palabras realmente distintas.
+    """
+    if a == b:
+        return True
+    # Prefijo comun largo: cubre singular/plural (extraccion / extracciones).
     n = min(len(a), len(b))
-    return n >= 4 and a[:n] == b[:n]
+    if n >= 5 and a[:n] == b[:n]:
+        return True
+    # Errores de tipeo: 1 letra en palabras cortas, 2 en las largas.
+    if n < 5:
+        return False
+    tope = 1 if n <= 7 else 2
+    return _distancia(a, b, tope) <= tope
+
+
+# Como dice el paciente lo que necesita, vs. como esta cargada la especialidad.
+# Es texto libre en WhatsApp: nadie escribe "Extraccion", escriben "sacar una
+# muela". Se puede ampliar sin tocar nada mas.
+SINONIMOS = {
+    "extraccion": ["sacar", "sacarme", "muela", "cordal", "extraer", "extraigan", "quitar"],
+    "limpieza": ["limpiar", "limpieza", "sarro", "profilaxis", "higiene", "blanquear"],
+    "arreglos": ["arreglo", "arreglar", "caries", "tapar", "empaste", "roto", "rotura"],
+    "conducto": ["conducto", "endodoncia", "nervio", "matar el nervio"],
+    "ortodoncia": ["ortodoncia", "brackets", "aparato", "alinear", "invisalign"],
+    "protesis": ["protesis", "placa", "dentadura", "puente", "implante"],
+    "control": ["control", "revision", "chequeo", "consulta", "ver", "duele", "dolor"],
+}
+
+
+def _expandir_con_sinonimos(palabras: list[str]) -> set[str]:
+    """Agrega el termino "canonico" cuando el paciente uso una forma coloquial."""
+    ampliado = set(palabras)
+    for canonico, variantes in SINONIMOS.items():
+        for v in variantes:
+            if any(_misma_palabra(_sin_acentos(v), p) for p in palabras):
+                ampliado.add(canonico)
+                break
+    return ampliado
 
 
 def _especialidad_coincide(especialidad: str, palabras_motivo: list[str]) -> bool:
@@ -43,8 +102,9 @@ def _especialidad_coincide(especialidad: str, palabras_motivo: list[str]) -> boo
     requeridas = _palabras(especialidad)
     if not requeridas:
         return False
+    disponibles = _expandir_con_sinonimos(palabras_motivo)
     return all(
-        any(_misma_palabra(req, pal) for pal in palabras_motivo)
+        any(_misma_palabra(req, pal) for pal in disponibles)
         for req in requeridas
     )
 
