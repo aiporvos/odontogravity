@@ -50,8 +50,9 @@ def get_or_create_session(db: Session, platform_user_id: str):
 
 # Cantidad de mensajes previos que se le pasan al LLM como contexto.
 # Cada mensaje se reenvía en cada llamada, así que subirlo encarece tokens.
-# 12 alcanza para mantener el hilo de una conversación de agendado.
-HISTORY_LIMIT = 12
+# 20 cubre una conversación completa de agendado (~10 intercambios) sin
+# perder contexto de la obra social o el motivo que se dijo al principio.
+HISTORY_LIMIT = 20
 
 
 def load_history(db: Session, session_id) -> list[dict]:
@@ -183,13 +184,42 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
             text = interactive.get("button_reply", {}).get("title", "")
         elif interactive_type == "list_reply":
             text = interactive.get("list_reply", {}).get("title", "")
+    elif message_type == "reaction":
+        # Reacciones (👍 a un mensaje) — ignorar silenciosamente
+        logger.info(f"⏭️ Reacción recibida de {remote_jid}, ignorada")
+        return {"status": "ignored_reaction"}
+    elif message_type in ("image", "video", "document"):
+        # Imágenes, videos, documentos — avisar que no se pueden procesar
+        logger.info(f"📎 Archivo {message_type} recibido de {remote_jid}")
+        background_tasks.add_task(
+            send_whatsapp_message,
+            remote_jid,
+            "¡Hola! 🦷 Por el momento solo puedo procesar mensajes de *texto* y *audio*. "
+            "No puedo ver imágenes, videos ni documentos. "
+            "Si necesitás enviar una radiografía o estudio, te recomiendo comunicarte "
+            "directamente con la clínica. ¿En qué puedo ayudarte con texto? 😊",
+        )
+        return {"status": "replied_unsupported_media"}
+    elif message_type == "sticker":
+        # Stickers — ignorar silenciosamente (no aportan info)
+        logger.info(f"⏭️ Sticker recibido de {remote_jid}, ignorado")
+        return {"status": "ignored_sticker"}
+    elif message_type in ("location", "contacts"):
+        logger.info(f"⏭️ {message_type} recibido de {remote_jid}")
+        background_tasks.add_task(
+            send_whatsapp_message,
+            remote_jid,
+            "Gracias, pero no puedo procesar ese tipo de mensaje. "
+            "¿Puedo ayudarte a agendar, cancelar o consultar un turno? 😊",
+        )
+        return {"status": "replied_unsupported_type"}
 
     if text:
         logger.info(f"🤖 Procesando texto: {text}")
         background_tasks.add_task(handle_text_message, remote_jid, text)
         return {"status": "processing_text"}
 
-    logger.warning("⚠️ Mensaje sin contenido de texto, interactivo o audio soportado")
+    logger.warning(f"⚠️ Tipo de mensaje no soportado: {message_type}")
     return {"status": "ignored_unsupported_type"}
 
 async def handle_text_message(remote_jid: str, text: str):

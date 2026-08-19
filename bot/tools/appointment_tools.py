@@ -1,8 +1,8 @@
-"""DentiBot tools - communicate with the backend API."""
+"""DentiBot tools - communicate with the backend API (OpenAI function calling)."""
 import os
+import json
 import contextvars
 import httpx
-from langchain_core.tools import tool
 
 API_BASE = os.getenv("API_BASE_URL", "http://backend:8000")
 BOT_KEY = os.getenv("BOT_API_KEY", "dev-bot-key-change-in-prod")
@@ -24,7 +24,8 @@ def _current_requester_phone():
     return _requester_phone.get()
 
 
-@tool
+# ── Tool implementations ─────────────────────────────────────────────────────
+
 def agendar_turno(
     patient_name: str,
     patient_last_name: str,
@@ -34,20 +35,9 @@ def agendar_turno(
     preferred_date: str,
     location: str = "San Rafael",
     insurance_name: str = "Particular",
-    duration_minutes: int = 30
+    duration_minutes: int = 30,
 ) -> str:
-    """Agenda un nuevo turno en el sistema.
-    Args:
-        patient_name: Nombre del paciente
-        patient_last_name: Apellido del paciente
-        dni: DNI del paciente, solo números, 7 u 8 dígitos (ej: 29759464). NO es el teléfono.
-        phone: Teléfono con característica, 10 dígitos (ej: 2604844952). NO es el DNI.
-        reason: Motivo de la consulta (ej: Limpieza, Extracción)
-        preferred_date: OBLIGATORIO. Fecha y hora EXACTA que el paciente eligió, en formato 'YYYY-MM-DD HH:MM'. Ejemplo: '2026-06-18 09:30'. NUNCA dejes este campo vacío.
-        location: Sede (Por defecto "San Rafael")
-        insurance_name: Obra Social (usar 'Particular' si no tiene)
-        duration_minutes: Duración en minutos (Extracción: 30, Endodoncia: 60, Consulta/Limpieza: 15, Ortodoncia: 30)
-    """
+    """Agenda un nuevo turno en el sistema."""
     payload = {
         "patient_name": patient_name,
         "patient_last_name": patient_last_name,
@@ -65,11 +55,12 @@ def agendar_turno(
         r.raise_for_status()
         data = r.json()
         cancel_url = f"https://odobot.aiporvos.com/api/public/cancel/{data['appointment_id']}"
-        return f"✅ {data['message']}. Fecha: {data['datetime']}. ID: {data['appointment_id']}. Aclarale al paciente que si desea cancelar el turno, puede escribir 'quiero cancelar mi turno' o ingresar a este link: {cancel_url}"
+        return (
+            f"✅ {data['message']}. Fecha: {data['datetime']}. ID: {data['appointment_id']}. "
+            f"Aclarale al paciente que si desea cancelar el turno, puede escribir "
+            f"'quiero cancelar mi turno' o ingresar a este link: {cancel_url}"
+        )
     except httpx.HTTPStatusError as e:
-        # str(e) solo dice "Client error '400 Bad Request'"; el motivo util esta
-        # en el body. Sin esto el modelo no se entera de por que fue rechazado
-        # y no puede corregirlo con el paciente.
         try:
             motivo = e.response.json().get("detail", str(e))
         except Exception:
@@ -79,13 +70,8 @@ def agendar_turno(
         return f"❌ Error al agendar: {str(e)}"
 
 
-@tool
 def cancelar_turno(dni: str, appointment_id: str = "") -> str:
-    """Cancela un turno existente del paciente.
-    Args:
-        dni: DNI del paciente.
-        appointment_id: ID del turno a cancelar (opcional, cancela el próximo si no se indica).
-    """
+    """Cancela un turno existente del paciente."""
     payload = {"dni": dni, "requester_phone": _current_requester_phone()}
     if appointment_id:
         payload["appointment_id"] = appointment_id
@@ -99,14 +85,8 @@ def cancelar_turno(dni: str, appointment_id: str = "") -> str:
         return f"❌ Error: {str(e)}"
 
 
-@tool
 def reprogramar_turno(dni: str, appointment_id: str, new_datetime: str) -> str:
-    """Reprograma un turno existente a una nueva fecha.
-    Args:
-        dni: DNI del paciente.
-        appointment_id: ID del turno a reprogramar.
-        new_datetime: Nueva fecha y hora en formato ISO (ej: 2024-03-25T10:00:00).
-    """
+    """Reprograma un turno existente a una nueva fecha."""
     payload = {
         "dni": dni,
         "appointment_id": appointment_id,
@@ -123,12 +103,8 @@ def reprogramar_turno(dni: str, appointment_id: str, new_datetime: str) -> str:
         return f"❌ Error: {str(e)}"
 
 
-@tool
 def consultar_mis_turnos(dni: str) -> str:
-    """Consulta los turnos pendientes de un paciente.
-    Args:
-        dni: DNI del paciente.
-    """
+    """Consulta los turnos pendientes de un paciente."""
     try:
         payload = {"dni": dni, "requester_phone": _current_requester_phone()}
         r = httpx.post(f"{API_BASE}/api/bot/my-appointments", json=payload, headers=HEADERS, timeout=30)
@@ -145,25 +121,26 @@ def consultar_mis_turnos(dni: str) -> str:
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
-@tool
-def consultar_disponibilidad(motivo_confirmado_por_paciente: str, location: str = "San Rafael", date: str = "", obra_social: str = "Particular") -> str:
-    """Consulta los horarios disponibles para una sede, especialidad y fecha.
-    Args:
-        motivo_confirmado_por_paciente: Motivo de la consulta dicho por el paciente (ej: Extracción, Limpieza). ¡PROHIBIDO ADIVINAR O INVENTAR! Si el paciente no te ha dicho el motivo de la consulta, TIENES QUE PREGUNTÁRSELO y esperar su respuesta antes de usar esta herramienta.
-        location: Sede (Por defecto "San Rafael")
-        date: Fecha opcional (YYYY-MM-DD). Si se omite, busca para hoy.
-        obra_social: Obra social del paciente (ej: Particular, PAMI, OSDE, etc.)
-    """
+
+def consultar_disponibilidad(
+    motivo_confirmado_por_paciente: str,
+    location: str = "San Rafael",
+    date: str = "",
+    obra_social: str = "Particular",
+) -> str:
+    """Consulta los horarios disponibles para una sede, especialidad y fecha."""
     try:
-        payload = {"location": location, "reason": motivo_confirmado_por_paciente, "date": date, "obra_social": obra_social}
+        payload = {
+            "location": location,
+            "reason": motivo_confirmado_por_paciente,
+            "date": date,
+            "obra_social": obra_social,
+        }
         r = httpx.post(f"{API_BASE}/api/bot/availability", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
         data = r.json()
         slots = data.get("available_slots", [])
-        date_iso = data.get("date", "")            # YYYY-MM-DD
-        # El día de la semana viene calculado por el backend. NO lo deduzca el
-        # modelo a partir de la fecha: lo hacía y se equivocaba (llamó "lunes"
-        # al 18/08/2026, que es martes).
+        date_iso = data.get("date", "")
         fecha_texto = data.get("fecha_texto") or date_iso
         if not slots:
             return (
@@ -192,15 +169,16 @@ def consultar_disponibilidad(motivo_confirmado_por_paciente: str, location: str 
     except Exception as e:
         return f"Error consultando disponibilidad: {e}"
 
-@tool
+
 def verificar_obra_social(obra_social: str) -> str:
-    """Verifica si la clínica atiende una obra social. USAR SIEMPRE apenas el paciente la menciona, antes de seguir con cualquier otra cosa.
-    Args:
-        obra_social: El nombre de la obra social tal como lo dijo el paciente (ej: OSDE, Swiss Medical, Galeno).
-    """
+    """Verifica si la clínica atiende una obra social."""
     try:
-        r = httpx.post(f"{API_BASE}/api/bot/verificar-obra-social",
-                       json={"obra_social": obra_social}, headers=HEADERS, timeout=15)
+        r = httpx.post(
+            f"{API_BASE}/api/bot/verificar-obra-social",
+            json={"obra_social": obra_social},
+            headers=HEADERS,
+            timeout=15,
+        )
         r.raise_for_status()
         d = r.json()
         if d["cubierta"]:
@@ -220,4 +198,176 @@ def verificar_obra_social(obra_social: str) -> str:
         return f"Error verificando la obra social: {e}"
 
 
-ALL_TOOLS = [agendar_turno, cancelar_turno, reprogramar_turno, consultar_mis_turnos, consultar_disponibilidad, verificar_obra_social]
+# ── Tool registry ────────────────────────────────────────────────────────────
+
+_TOOL_MAP = {
+    "agendar_turno": agendar_turno,
+    "cancelar_turno": cancelar_turno,
+    "reprogramar_turno": reprogramar_turno,
+    "consultar_mis_turnos": consultar_mis_turnos,
+    "consultar_disponibilidad": consultar_disponibilidad,
+    "verificar_obra_social": verificar_obra_social,
+}
+
+
+def execute_tool(name: str, arguments: dict) -> str:
+    """Execute a tool by name with the given arguments."""
+    func = _TOOL_MAP.get(name)
+    if not func:
+        return f"❌ Tool desconocida: {name}"
+    try:
+        return func(**arguments)
+    except TypeError as e:
+        return f"❌ Argumentos incorrectos para {name}: {e}"
+    except Exception as e:
+        return f"❌ Error ejecutando {name}: {e}"
+
+
+# ── OpenAI Function Definitions (JSON Schema) ────────────────────────────────
+
+TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "agendar_turno",
+            "description": "Agenda un nuevo turno en el sistema.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patient_name": {"type": "string", "description": "Nombre del paciente"},
+                    "patient_last_name": {"type": "string", "description": "Apellido del paciente"},
+                    "dni": {
+                        "type": "string",
+                        "description": "DNI del paciente, solo números, 7 u 8 dígitos (ej: 29759464). NO es el teléfono.",
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": "Teléfono con característica, 10 dígitos (ej: 2604844952). NO es el DNI.",
+                    },
+                    "reason": {"type": "string", "description": "Motivo de la consulta (ej: Limpieza, Extracción)"},
+                    "preferred_date": {
+                        "type": "string",
+                        "description": "Fecha y hora EXACTA en formato 'YYYY-MM-DD HH:MM' (ej: '2026-06-18 09:30'). OBLIGATORIO.",
+                    },
+                    "location": {"type": "string", "description": "Sede (por defecto 'San Rafael')", "default": "San Rafael"},
+                    "insurance_name": {
+                        "type": "string",
+                        "description": "Obra Social (usar 'Particular' si no tiene)",
+                        "default": "Particular",
+                    },
+                    "duration_minutes": {
+                        "type": "integer",
+                        "description": "Duración: Consulta/Limpieza=15, Extracción/Ortodoncia=30, Endodoncia=60",
+                        "default": 30,
+                    },
+                },
+                "required": ["patient_name", "patient_last_name", "dni", "phone", "reason", "preferred_date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancelar_turno",
+            "description": "Cancela un turno existente del paciente.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dni": {"type": "string", "description": "DNI del paciente"},
+                    "appointment_id": {
+                        "type": "string",
+                        "description": "ID del turno a cancelar (opcional, cancela el próximo si no se indica)",
+                    },
+                },
+                "required": ["dni"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reprogramar_turno",
+            "description": "Reprograma un turno existente a una nueva fecha.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dni": {"type": "string", "description": "DNI del paciente"},
+                    "appointment_id": {"type": "string", "description": "ID del turno a reprogramar"},
+                    "new_datetime": {
+                        "type": "string",
+                        "description": "Nueva fecha y hora en formato ISO (ej: 2026-03-25T10:00:00)",
+                    },
+                },
+                "required": ["dni", "appointment_id", "new_datetime"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_mis_turnos",
+            "description": "Consulta los turnos pendientes de un paciente.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dni": {"type": "string", "description": "DNI del paciente"},
+                },
+                "required": ["dni"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_disponibilidad",
+            "description": (
+                "Consulta los horarios disponibles para una sede, especialidad y fecha. "
+                "SOLO llamar cuando necesités buscar turnos nuevos. "
+                "NO llamar si el paciente ya está eligiendo un horario de los que le ofreciste."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "motivo_confirmado_por_paciente": {
+                        "type": "string",
+                        "description": (
+                            "Motivo de la consulta dicho por el paciente (ej: Extracción, Limpieza). "
+                            "PROHIBIDO adivinar; si no lo dijo, preguntale primero."
+                        ),
+                    },
+                    "location": {"type": "string", "description": "Sede (por defecto 'San Rafael')", "default": "San Rafael"},
+                    "date": {
+                        "type": "string",
+                        "description": "Fecha opcional (YYYY-MM-DD). Si se omite, busca para hoy.",
+                    },
+                    "obra_social": {
+                        "type": "string",
+                        "description": "Obra social del paciente (ej: Particular, PAMI, OSDE)",
+                        "default": "Particular",
+                    },
+                },
+                "required": ["motivo_confirmado_por_paciente"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "verificar_obra_social",
+            "description": (
+                "Verifica si la clínica atiende una obra social. "
+                "USAR SIEMPRE apenas el paciente menciona su obra social, antes de seguir."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "obra_social": {
+                        "type": "string",
+                        "description": "Nombre de la obra social tal como lo dijo el paciente (ej: OSDE, PAMI)",
+                    },
+                },
+                "required": ["obra_social"],
+            },
+        },
+    },
+]

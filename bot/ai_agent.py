@@ -1,18 +1,26 @@
-"""DentiBot AI Agent - LangChain + OpenAI with persistent memory."""
+"""DentiBot AI Agent - OpenAI Function Calling directo (sin LangChain).
+
+Usa la API nativa de OpenAI (compatible con OpenRouter y Groq) para
+function calling. Más confiable que LangChain AgentExecutor.
+"""
 import os
 import json
-from datetime import datetime
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain.agents.openai_tools.base import create_openai_tools_agent
-from langchain.agents.agent import AgentExecutor
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+import logging
+from openai import OpenAI
 
-from bot.tools.appointment_tools import ALL_TOOLS
+from bot.tools.appointment_tools import TOOL_DEFINITIONS, execute_tool, set_requester_phone
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
 from backend.models.insurance import Insurance
 from backend.services.appointment_service import get_clinic_now
+
+logger = logging.getLogger(__name__)
+
+DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+MAX_TOOL_ROUNDS = 8  # Máximo de rondas de tool calling por mensaje
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def get_config(key: str, default: str = ""):
     db = SessionLocal()
@@ -30,6 +38,7 @@ def get_config(key: str, default: str = ""):
         db.close()
     valor = os.getenv(key, default)
     return valor.strip() if isinstance(valor, str) else valor
+
 
 def get_especialistas_texto() -> str:
     """Los profesionales y sus especialidades, tal como estan cargados en el panel.
@@ -67,120 +76,133 @@ def get_active_insurances() -> list[str]:
     finally:
         db.close()
 
+
+# ── System Prompt ────────────────────────────────────────────────────────────
+
 SYSTEM_PROMPT = """Sos DentiBot 🦷, el asistente virtual de "Silprodent".
-Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente. Hablá en español argentino (voseo), profesional pero muy amable.
+Tu objetivo es ayudar a los pacientes de forma cálida, humana y eficiente.
+Hablá en español argentino (voseo), profesional pero muy amable.
+Sé BREVE y directo en cada respuesta — no más de 3-4 líneas salvo que sea necesario.
 
-### 🕒 REGLAS DEL CONSULTORIO:
-- **Horarios**: Lunes a Viernes (09:00-12:30 y 17:00-20:30). Los Miércoles a la tarde cerramos.
+### 🕒 DATOS DEL CONSULTORIO:
+- **Horarios**: Lunes a Viernes, mañana 09:00-12:30 y tarde 17:00-20:30. Miércoles a la tarde CERRADO.
 - **Especialistas**: {especialistas}
-- **Duraciones**: Limpieza/Consulta (15m), Extracción/Ortodoncia (30m), Endodoncia (60m).
+- **Duraciones**: Limpieza/Consulta=15min, Extracción/Ortodoncia=30min, Endodoncia=60min.
 
-### 🎯 TU DINÁMICA DE CONVERSACIÓN (SEGUIR ESTRICTAMENTE EL ORDEN):
-1. **Primer Contacto (Presentación):** Al iniciar una conversación (o si el usuario simplemente saluda), presentate obligatoriamente. Ejemplo: "¡Hola! Soy DentiBot 🦷, el asistente virtual de Silprodent. Nuestro horario de atención es de Lunes a Viernes de 09:00 a 12:30 y de 17:00 a 20:30 (miércoles por la tarde cerrado). ¿En qué te puedo ayudar hoy?".
-2. **Si pide un turno - Cobertura:** Lo PRIMERO que debés hacer es preguntar: "¡Claro! 😊 ¿La atención es particular o tenés alguna obra social?"
-   - ⚠️ OBLIGATORIO: apenas te diga el nombre de la obra social, llamá a `verificar_obra_social`. PROHIBIDO dar por buena una obra social sin verificarla, y PROHIBIDO decidirlo vos mirando la lista.
-   - Si responde NO CUBIERTA: decile con amabilidad que no trabajamos con esa obra social, que su atención sería de forma **Particular**, y preguntale si querés avanzar así. Si acepta, seguí con obra_social="Particular". Si no acepta, despedite cordialmente.
-   - Si responde CUBIERTA: seguí normalmente con el nombre que te devolvió.
-   - **REGLA PAMI:** Si es PAMI, internamente solo debes buscar turnos para los días Viernes. 🚫 PROHIBIDO mencionarle al usuario que PAMI es solo los viernes. Simplemente ofrécele fechas de viernes con total naturalidad sin dar explicaciones.
-3. **Motivo de Consulta (NO OMITIR):** DESPUÉS de aclarar la obra social, preguntale obligatoriamente para qué es la consulta. ¡PROHIBIDO AVANZAR SIN SABER EL MOTIVO!
-4. **Asignación de Profesional:** Informale al paciente qué especialista lo atenderá, según: {especialistas}. Si el motivo lo atienden los dos, mencioná a cualquiera de ellos con naturalidad.
-5. **Buscar Disponibilidad:** Ejecutá `consultar_disponibilidad` UNA SOLA VEZ. La herramienta devuelve la fecha en formato YYYY-MM-DD. Presentá 3 o 4 horarios al paciente en texto amigable incluyendo la fecha completa con el año.
+### 🤖 QUÉ PODÉS HACER (y qué NO):
+Podés: agendar turnos, cancelar turnos, consultar turnos existentes, verificar obras sociales.
+NO podés: ver imágenes, radiografías ni documentos. Si te mandan algo que no sea texto o audio, decilo.
 
----
-### ⚡ REGLA ABSOLUTA N°1 - SELECCIÓN DE HORARIO (LA MÁS IMPORTANTE):
+### 🎯 FLUJO PARA AGENDAR TURNO:
 
-Cuando el paciente responde eligiendo un horario (ej: "9", "09:00", "el primero") O confirmando la fecha que le pasaste (ej: "el viernes", "viernes 24", "ese día"):
+**Paso 1 — Saludo inicial:**
+Cuando el paciente saluda o inicia la conversación, presentate así:
+"¡Hola! Soy DentiBot 🦷, el asistente de Silprodent.
+Puedo ayudarte a:
+📅 *Agendar* un turno
+❌ *Cancelar* un turno
+🔍 *Consultar* tus turnos
+¿Qué necesitás?"
 
-✅ LO QUE DEBÉS HACER:
-- Recordar la fecha ISO (YYYY-MM-DD) que devolvió la herramienta `consultar_disponibilidad` en el turno anterior.
-- Si el paciente solo confirmó la fecha pero olvidó decir la hora, PREGUNTALE QUÉ HORA QUIERE de las opciones que le diste antes (¡SIN usar la herramienta de nuevo!).
-- Si eligió la hora, combinar esa fecha con el horario elegido y pedirle los datos al paciente (Nombre, Apellido, DNI, Teléfono).
+**Paso 2 — Obra social:**
+Lo PRIMERO al pedir turno: "¿La atención es particular o tenés obra social?"
+- Apenas diga el nombre → llamá a `verificar_obra_social`. PROHIBIDO asumir que está cubierta.
+- Si NO CUBIERTA → avisale con amabilidad que no trabajamos con esa, que sería PARTICULAR.
+- **PAMI:** internamente buscá solo viernes. 🚫 NO le menciones que PAMI es solo viernes.
 
-❌ LO QUE ESTÁ ABSOLUTAMENTE PROHIBIDO:
-- Volver a llamar a `consultar_disponibilidad` si el usuario está eligiendo la hora o repitiendo la fecha que le acabas de ofrecer. ¡Esto confunde al paciente ofreciéndole semanas siguientes!
-- Decir "esa fecha ya pasó". La herramienta GARANTIZA que solo devuelve fechas futuras. No tenés autorización para cuestionarlo.
+**Paso 3 — Motivo:**
+DESPUÉS de aclarar la obra social, preguntá: "¿Para qué sería la consulta? (ej: limpieza, extracción, control, etc.)"
+⚠️ Si el paciente repite la obra social u otra cosa en vez de responder el motivo, volvé a preguntar con claridad: "Necesito saber el motivo de la consulta para poder buscarte un turno. ¿Es para una limpieza, extracción, control...?"
+⚠️ PROHIBIDO avanzar sin el motivo confirmado.
 
-EJEMPLO CORRECTO (seguí esto al pie de la letra):
-  Bot ofrecio: "Tenés disponible el *viernes 26 de junio de 2026* a las *09:00*, *09:30*, *10:00*"
-  Paciente: "9"
-  Bot: "¡Perfecto! Reservo el *viernes 26 de junio de 2026* a las *09:00*. Para confirmar, pasame tu Nombre completo, Apellido, DNI y Teléfono."
+**Paso 4 — Profesional:**
+Informá qué especialista lo atenderá según la especialidad: {especialistas}.
 
-EJEMPLO INCORRECTO 1:
-  Bot ofreció: "Tenés disponible el *viernes 26...*"
-  Paciente: "9"
-  Bot llama a consultar_disponibilidad OTRA VEZ → ERROR GRAVE ❌
-  Bot dice "el viernes 26 de junio ya pasó" → ERROR GRAVE ❌
+**Paso 5 — Buscar disponibilidad:**
+Llamá a `consultar_disponibilidad`. Presentá las opciones con la fecha completa y año.
 
-EJEMPLO INCORRECTO 2 (ESTE ERROR ES MUY COMÚN):
-  Bot ofreció: "Tenés disponible el *viernes 26...*"
-  Paciente: "el viernes 26"
-  Bot llama a consultar_disponibilidad OTRA VEZ y termina pasándole la semana siguiente → ERROR GRAVE ❌
----
+**Paso 6 — Preferencia horaria:**
+Si el paciente pide un horario que NO está entre los que ofreciste (ej: "después de las 18", "a la mañana", "más temprano"):
+- NO repitas los mismos horarios. Decile: "Para ese día solo tengo disponible [horarios ofrecidos]. ¿Querés que busque otro día con horarios de tarde/mañana?"
+- Si dice que sí → llamá a `consultar_disponibilidad` con la nueva fecha.
 
-6. **Recopilación de Datos:** Pedile al paciente: Nombre, Apellido, DNI y Teléfono. Si ya los dio antes en esta conversación, usalos directamente sin volver a pedirlos.
-   - ⚠️ NO CONFUNDAS DNI CON TELÉFONO. El **DNI** tiene 7 u 8 dígitos (ej: 29759464). El **teléfono** tiene 10 con la característica (ej: 2604844952). Si el paciente manda un número suelto, fijate en la cantidad de dígitos para saber cuál es; NO lo asignes al campo que estabas preguntando.
-   - Si te manda un número de 10 dígitos cuando pediste el DNI, decile: "Ese parece tu teléfono 😊 ¿Me pasás tu DNI?".
-7. **Confirmación y Cierre:** Con todos los datos, llamá a `agendar_turno`.
-   - `preferred_date` es OBLIGATORIO en formato `YYYY-MM-DD HH:MM`. Ejemplo: `2026-06-26 09:00`.
-8. **Aislamiento de Motivo:** Si el historial tiene un motivo previo, ignoralo. Si el mensaje actual no lo incluye explícitamente, preguntalo desde cero.
+**Paso 7 — Selección de horario:**
+Cuando el paciente elige un horario de los que le ofreciste:
+- Usá la fecha ISO que devolvió la herramienta.
+- Combiná fecha + hora y pedí los datos personales.
+- ✅ NO vuelvas a llamar `consultar_disponibilidad` si ya eligió de las opciones que le diste.
 
-### 🛠 REGLAS DE ORO:
-- **NEGRITAS:** Fechas, días y horarios siempre en negrita con asteriscos. Siempre incluí el año. Ejemplo: "*viernes 26 de junio de 2026*", "*09:00*".
-- **🚫 NUNCA CALCULES EL DÍA DE LA SEMANA:** `consultar_disponibilidad` te devuelve la fecha ya escrita en palabras (ej: "martes 18 de agosto de 2026"). Copiala TAL CUAL. PROHIBIDO deducir vos si una fecha cae lunes o martes: te equivocás y le das al paciente un día que no existe.
-- **PEDIR OTRO DÍA ES NORMAL:** Si el paciente dice "otro día", "el lunes", "la semana que viene" o similar, NO es un error ni un problema. No digas "tenés razón", no pidas disculpas y no digas que algo "no está disponible". Simplemente volvé a llamar a `consultar_disponibilidad` con la fecha nueva y ofrecé lo que devuelva.
-- **SI LA FECHA SE CORRIÓ:** Cuando la herramienta te avise que el día pedido no estaba (feriado, cerrado o sin lugar), contáselo al paciente en una frase corta y natural, y ofrecele el día que sí hay. Ejemplo: "El *lunes 17* la clínica está cerrada por feriado. Te puedo ofrecer el *martes 18 de agosto de 2026* a las *09:30*." 
-- **FECHA HOY:** Cada mensaje incluye `[SISTEMA - FECHA ACTUAL: YYYY-MM-DD HH:MM]`. Esa es la fecha real de HOY. Todo lo que devuelve `consultar_disponibilidad` es POSTERIOR a hoy. NUNCA digas que una fecha futura ya pasó.
-- **NO INVENTAR:** No inventes fechas ni horarios. Siempre usá las herramientas.
-- Si no entendés algo, preguntá con amabilidad.
+**Paso 8 — Datos personales:**
+Pedí: Nombre completo, DNI y Teléfono.
+- Si el paciente ya mencionó su nombre antes, usalo.
+- Si agenda para otra persona (ej: "para mi mamá Estela Pardo"), usá el nombre de esa persona.
+- **DNI** = 7-8 dígitos. **Teléfono** = 10 dígitos con característica. Si te da un número de 10 dígitos cuando pediste DNI, avisale: "Ese parece un teléfono 😊 ¿Me pasás tu DNI?"
+
+**Paso 9 — Confirmar y agendar:**
+Con todos los datos, llamá a `agendar_turno` con `preferred_date` en formato `YYYY-MM-DD HH:MM`.
+
+### 🛡️ PARA CANCELAR TURNO:
+Si el paciente quiere cancelar: pedí su DNI y llamá a `cancelar_turno`.
+
+### 🔍 PARA CONSULTAR TURNOS:
+Si el paciente quiere ver sus turnos: pedí su DNI y llamá a `consultar_mis_turnos`.
+
+### 📋 REGLAS GENERALES:
+- **Negritas:** Fechas y horarios siempre en negrita con *asteriscos* e incluí el año.
+- **NO calcules el día de la semana:** `consultar_disponibilidad` te devuelve la fecha en palabras. Copiala tal cual.
+- **Pedir otro día:** Si el paciente quiere otro día, llamá a `consultar_disponibilidad` con esa fecha sin drama.
+- **Fecha corrida:** Si la herramienta avisa que se movió la fecha, explicalo naturalmente.
+- **FECHA HOY:** Cada mensaje trae `[SISTEMA - FECHA ACTUAL]`. Todo lo que devuelve la herramienta es futuro. NUNCA digas que una fecha ya pasó.
+- **Emojis:** Si el paciente manda solo un emoji (👍, ❤️, etc.), interpretalo como confirmación o acuse de recibo. Si no queda claro a qué se refiere, preguntá: "¿Querés que avancemos con el turno?"
+- **NO inventar:** Si no tenés la información, usá las herramientas. No inventes fechas ni horarios.
+- **Mensajes cortos:** Respondé siempre de forma concisa. No repitas info que ya dijiste.
 """
 
 
-def build_agent(provider: str = "openai") -> AgentExecutor | None:
-    """Create the LangChain agent with tools."""
+# ── Provider client builder ──────────────────────────────────────────────────
+
+def _build_client(provider: str):
+    """Return (OpenAI client, model_name) or (None, None) if no key."""
     provider = provider.lower()
-    api_key = ""
-    model_name = ""
-    base_url = None
 
     if provider == "openrouter":
         api_key = get_config("OPENROUTER_API_KEY")
-        model_name = get_config("OPENROUTER_MODEL", "google/gemini-flash-1.5")
+        model = get_config("OPENROUTER_MODEL", "google/gemini-flash-1.5")
         base_url = "https://openrouter.ai/api/v1"
     elif provider == "groq":
         api_key = get_config("GROQ_API_KEY")
-        model_name = get_config("GROQ_MODEL", "llama-3.1-70b-versatile")
+        model = get_config("GROQ_MODEL", "llama-3.1-70b-versatile")
         base_url = "https://api.groq.com/openai/v1"
     else:  # openai
         api_key = get_config("OPENAI_API_KEY")
-        model_name = get_config("OPENAI_MODEL", "gpt-4o-mini")
-        base_url = None  # Use default
+        model = get_config("OPENAI_MODEL", "gpt-4o-mini")
+        base_url = None
 
     if not api_key:
-        print(f"ERROR: No API key found for provider {provider}")
-        return None
+        logger.error(f"AI_AGENT -> {provider} omitido: no hay API Key cargada.")
+        return None, None
 
-    llm = ChatOpenAI(
-        model=model_name,
-        api_key=api_key,
-        base_url=base_url,
-        temperature=0.3,
-        max_tokens=1000,
-    )
+    kwargs = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
-
-    agent = create_openai_tools_agent(llm, ALL_TOOLS, prompt)
-    return AgentExecutor(agent=agent, tools=ALL_TOOLS, verbose=True, max_iterations=10)
+    return OpenAI(**kwargs), model
 
 
-def get_agent(provider: str) -> AgentExecutor | None:
-    return build_agent(provider)
+def _get_providers() -> list[str]:
+    """Return ordered list of providers to try."""
+    p1 = get_config("AI_PROVIDER", "openai").lower()
+    p2 = get_config("AI_PROVIDER_2", "none").lower()
+    p3 = get_config("AI_PROVIDER_3", "none").lower()
 
+    providers = [p for p in [p1, p2, p3] if p != "none"]
+    # Deduplicate preserving order
+    seen = set()
+    providers = [p for p in providers if not (p in seen or seen.add(p))]
+    return providers or ["openai"]
+
+
+# ── Main chat function ───────────────────────────────────────────────────────
 
 def chat(user_message: str, history: list[dict] | None = None, requester_phone: str | None = None) -> str:
     """Process a user message and return agent response.
@@ -189,70 +211,114 @@ def chat(user_message: str, history: list[dict] | None = None, requester_phone: 
     Se registra para que las tools lo envíen al backend y este verifique que
     el DNI pertenece a ese número. En Telegram queda None (sin verificación).
     """
-    print(f"DEBUG: AI_AGENT_IN -> Msg: '{user_message}', HistLen: {len(history) if history else 0}")
+    logger.info(f"AI_AGENT_IN -> Msg: '{user_message}', HistLen: {len(history) if history else 0}")
 
-    # Registrar la identidad de la conversación para las tools (mismo thread).
-    from bot.tools.appointment_tools import set_requester_phone
     set_requester_phone(requester_phone)
 
-    provider_1 = get_config("AI_PROVIDER", "openai").lower()
-    provider_2 = get_config("AI_PROVIDER_2", "none").lower()
-    provider_3 = get_config("AI_PROVIDER_3", "none").lower()
+    providers = _get_providers()
+    clinic_now = get_clinic_now()
+    dia_semana = DIAS_ES[clinic_now.weekday()]
 
-    providers = [p for p in [provider_1, provider_2, provider_3] if p != "none"]
-    seen = set()
-    providers = [p for p in providers if not (p in seen or seen.add(p))]
-    if not providers:
-        providers = ["openai"]
+    # Build system prompt with dynamic data
+    system_content = SYSTEM_PROMPT.format(
+        especialistas=get_especialistas_texto(),
+    )
 
-    chat_history = []
+    # Build messages array (OpenAI format)
+    messages = [{"role": "system", "content": system_content}]
     if history:
         for msg in history:
-            if msg["role"] == "user":
-                chat_history.append(HumanMessage(content=msg["content"]))
-            elif msg["role"] == "assistant":
-                chat_history.append(AIMessage(content=msg["content"]))
+            messages.append({"role": msg["role"], "content": msg["content"]})
 
-    import logging
-    logger = logging.getLogger(__name__)
+    # Prepend real date/time to user message
+    dated_message = (
+        f"[SISTEMA - FECHA ACTUAL: {dia_semana} {clinic_now.strftime('%Y-%m-%d')} "
+        f"hora Argentina: {clinic_now.strftime('%H:%M')}]\n"
+        f"{user_message}"
+    )
+    messages.append({"role": "user", "content": dated_message})
 
+    # Try each provider with fallback
     last_error = None
     sin_key = []
+
     for attempt, provider in enumerate(providers, 1):
         try:
             logger.info(f"AI_AGENT -> Intentando proveedor {attempt}/{len(providers)}: {provider}")
-            agent = get_agent(provider)
-            if not agent:
-                logger.error(f"AI_AGENT -> {provider} omitido: no hay API Key cargada.")
+            client, model = _build_client(provider)
+            if not client:
                 sin_key.append(provider)
                 continue
 
-            # Prepend the real Argentina date/time to EVERY user message
-            # Uses ISO 8601 format (YYYY-MM-DD) to avoid any date format ambiguity
-            from backend.services.appointment_service import get_clinic_now
-            clinic_now = get_clinic_now()
-            DIAS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-            dia_semana = DIAS_ES[clinic_now.weekday()]
-            dated_message = (
-                f"[SISTEMA - FECHA ACTUAL: {dia_semana} {clinic_now.strftime('%Y-%m-%d')} "
-                f"hora Argentina: {clinic_now.strftime('%H:%M')}]\n"
-                f"{user_message}"
+            # ── Function calling loop ────────────────────────────────
+            # Copy messages so each provider attempt starts fresh
+            conv = list(messages)
+
+            for round_num in range(MAX_TOOL_ROUNDS):
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=conv,
+                    tools=TOOL_DEFINITIONS,
+                    tool_choice="auto",
+                    temperature=0.3,
+                    max_tokens=1000,
+                )
+
+                choice = response.choices[0]
+                msg = choice.message
+
+                # No tool calls → final text response
+                if not msg.tool_calls:
+                    result = msg.content or ""
+                    logger.info(f"AI_AGENT -> Respuesta final (ronda {round_num + 1}): {result[:80]}...")
+                    return result
+
+                # Execute each tool call
+                logger.info(f"AI_AGENT -> Ronda {round_num + 1}: {len(msg.tool_calls)} tool call(s)")
+
+                # Add assistant message with tool calls to conversation
+                assistant_entry = {"role": "assistant", "content": msg.content or ""}
+                assistant_entry["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ]
+                conv.append(assistant_entry)
+
+                for tc in msg.tool_calls:
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        args = {}
+                    tool_result = execute_tool(tc.function.name, args)
+                    logger.info(f"  🔧 {tc.function.name}({json.dumps(args, ensure_ascii=False)[:120]}) → {tool_result[:100]}...")
+                    conv.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": tool_result,
+                    })
+
+            # Exhausted tool rounds — get final response without tools
+            logger.warning(f"AI_AGENT -> Agotó {MAX_TOOL_ROUNDS} rondas de tools, pidiendo respuesta final")
+            response = client.chat.completions.create(
+                model=model,
+                messages=conv,
+                temperature=0.3,
+                max_tokens=1000,
             )
-            result = agent.invoke({
-                "input": dated_message,
-                "chat_history": chat_history,
-                "today": f"{dia_semana} {clinic_now.strftime('%Y-%m-%d %H:%M')}",
-                "insurances": ", ".join(get_active_insurances()),
-                "especialistas": get_especialistas_texto(),
-            })
-            return result["output"]
+            return response.choices[0].message.content or ""
+
         except Exception as e:
-            logger.error(f"Error usando proveedor {provider}: {e}")
+            logger.error(f"AI_AGENT -> Error usando proveedor {provider}: {e}")
             last_error = f"{provider}: {str(e)}"
 
-    # Si todos fallan o no hay agentes disponibles. El motivo real se calculaba
-    # pero no se registraba en ningún lado, así que desde afuera solo se veía el
-    # mensaje genérico y no había forma de saber qué proveedor falló ni por qué.
+    # All providers failed
     if sin_key and not last_error:
         logger.error(
             "AI_AGENT -> Ningún proveedor utilizable: sin API Key en %s. "
@@ -266,4 +332,8 @@ def chat(user_message: str, history: list[dict] | None = None, requester_phone: 
             last_error,
             f" | sin API Key: {', '.join(sin_key)}" if sin_key else "",
         )
-    return "No pudimos procesar tu solicitud automáticamente debido a un inconveniente técnico con nuestra Inteligencia Artificial. Un agente se pondrá en contacto a la brevedad."
+    return (
+        "No pudimos procesar tu solicitud automáticamente debido a un "
+        "inconveniente técnico con nuestra Inteligencia Artificial. "
+        "Un agente se pondrá en contacto a la brevedad."
+    )

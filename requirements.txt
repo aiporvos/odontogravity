@@ -9,10 +9,7 @@ bcrypt==4.0.1
 python-multipart>=0.0.6
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
-langchain==0.1.20
-langchain-openai==0.1.1
-langchain-community==0.0.38
-langchain-core==0.1.52
+# LangChain eliminado — se usa OpenAI function calling nativo (openai>=1.12.0)
 aiogram>=3.3.0
 python-dotenv>=1.0.0
 httpx>=0.25.0
