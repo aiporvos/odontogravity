@@ -4,11 +4,16 @@ from datetime import datetime, timedelta
 from fastapi import Body, APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 import os
 import logging
 
 from backend.database import get_db
-from backend.services.appointment_service import create_appointment_logic, get_available_slots, route_professional
+from backend.services.appointment_service import (
+    create_appointment_logic, get_available_slots, route_professional,
+    find_professionals_for_reason, motivo_no_agendable, duracion_para_motivo,
+    get_clinic_now,
+)
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
@@ -16,6 +21,8 @@ from backend.schemas.schemas import (
     BotAppointmentRequest, BotCancelRequest, BotRescheduleRequest, BotQueryRequest,
     BotAvailabilityRequest, AppointmentRead, PatientRead,
 )
+
+from backend.services.whatsapp import ofuscar_telefono as _ofuscar
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/bot", tags=["Bot"])
@@ -149,7 +156,10 @@ def ficha_para_el_bot(db: Session, paciente) -> dict:
     proximo = db.query(Appointment).filter(
         Appointment.patient_id == paciente.id,
         Appointment.is_deleted == False,  # noqa: E712
-        Appointment.start_time >= datetime.utcnow(),
+        # get_clinic_now y no utcnow: start_time se guarda en hora local de
+        # Argentina, asi que comparar contra UTC corria el corte 3 horas y los
+        # turnos de las proximas 3 horas no figuraban como "proximo turno".
+        Appointment.start_time >= get_clinic_now(),
         Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
     ).order_by(Appointment.start_time).first()
 
@@ -461,9 +471,9 @@ async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(g
         for number in numbers:
             try:
                 await send_whatsapp_message(number, msg_text)
-                print(f"Admin notificado de cancelación: {number}")
+                logger.info(f"Admin notificado de cancelación: {_ofuscar(number)}")
             except Exception as e:
-                print(f"Error notifying admin {number} of cancellation: {e}")
+                logger.error(f"No se pudo notificar al admin {_ofuscar(number)}: {e}", exc_info=True)
 
     return {"status": "ok", "message": "Turno cancelado exitosamente", "appointment_id": str(appt.id)}
 
@@ -483,11 +493,31 @@ def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends
     if not appt:
         raise HTTPException(404, "Turno no encontrado")
 
+    # Mismas reglas que al agendar. Antes esto escribia la fecha nueva sin
+    # mirar nada, asi que se podia reprogramar encima de otro turno, a un
+    # feriado o a un horario fuera de atencion.
+    candidatos = find_professionals_for_reason(appt.reason or "", db)
+    motivo = motivo_no_agendable(
+        db,
+        data.new_start_time,
+        appt.duration_minutes or duracion_para_motivo(appt.reason or ""),
+        appt.location,
+        appt.insurance_name,
+        candidatos,
+        exclude_id=appt.id,   # el propio turno no se cuenta como conflicto
+    )
+    if motivo:
+        raise HTTPException(409, f"{motivo} Ofrecele otro horario al paciente.")
+
     appt.start_time = data.new_start_time
     # Se mantiene confirmado: si volvia a "pending" el recordatorio dejaba de
     # dispararse, porque el loop solo notifica turnos confirmados.
     appt.status = AppointmentStatus.confirmed
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Ese horario acaba de ser tomado. Ofrecele otro al paciente.")
     return {"status": "ok", "message": f"Turno reprogramado para {data.new_start_time}", "appointment_id": str(appt.id)}
 
 

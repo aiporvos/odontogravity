@@ -29,50 +29,25 @@ logger.info("🚀 Silprodent Backend Starting...")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run Alembic migrations programmatically
-    try:
-        from alembic.config import Config
-        from alembic import command
-        logger.info("Running database migrations (Alembic upgrade head)...")
-        alembic_cfg = Config("alembic.ini")
-        command.upgrade(alembic_cfg, "head")
-        logger.info("✅ Database migrations applied successfully.")
-    except Exception as e:
-        logger.error(f"❌ Failed to run database migrations: {e}")
-
-    # Create tables on startup (in dev; Alembic for production)
+    # ── Esquema de la base ───────────────────────────────────────────────────
+    # El orden importa y antes no se respetaba. create_all() PRIMERO: crea las
+    # tablas que falten (base nueva) y no toca las que ya estan. Alembic
+    # DESPUES, para los cambios incrementales sobre tablas existentes.
+    #
+    # Antes Alembic corria primero y chocaba contra columnas que create_all ya
+    # habia creado, abortaba, y el error quedaba en un log que nadie miraba:
+    # de ahi salieron los ALTER TABLE a mano que habia mas abajo. Ahora las
+    # migraciones son idempotentes (chequean antes de tocar) y un fallo real
+    # CORTA el arranque en vez de dejar la app corriendo con un esquema que no
+    # es el que el codigo espera.
     Base.metadata.create_all(bind=engine)
-    
-    # Ensure new enum values exist (PostgreSQL doesn't update them automatically)
-    with engine.connect() as conn:
-        try:
-            # Check for PostgreSQL
-            if "postgresql" in str(engine.url):
-                new_symbols = ["sff", "fracture", "bridge"]
-                for symbol in new_symbols:
-                    # PostgreSQL requires ALTER TYPE outside of a transaction or with check
-                    conn.execute(text(f"ALTER TYPE toothsymbol ADD VALUE IF NOT EXISTS '{symbol}'"))
-                conn.commit()
-        except Exception:
-            pass # Swallow if already exists or not PG
 
-    # Columnas agregadas despues de que la tabla ya existia. create_all() crea
-    # tablas nuevas pero NO agrega columnas a las que ya estan, y las
-    # migraciones de Alembic vienen fallando en este deploy (la primera choca
-    # con una columna que create_all ya habia creado). Sin esto habria que
-    # correr el ALTER a mano en produccion despues de cada deploy.
-    columnas_nuevas = [
-        ("chat_sessions", "paused_until", "TIMESTAMP"),
-    ]
-    with engine.connect() as conn:
-        for tabla, columna, tipo in columnas_nuevas:
-            try:
-                conn.execute(text(
-                    f"ALTER TABLE {tabla} ADD COLUMN IF NOT EXISTS {columna} {tipo}"
-                ))
-                conn.commit()
-            except Exception as e:
-                logger.warning(f"No se pudo asegurar {tabla}.{columna}: {e}")
+    from alembic.config import Config
+    from alembic import command
+    logger.info("Aplicando migraciones (alembic upgrade head)...")
+    alembic_cfg = Config("alembic.ini")
+    command.upgrade(alembic_cfg, "head")
+    logger.info("✅ Migraciones aplicadas.")
 
     # Seed initial data
     db = SessionLocal()

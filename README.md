@@ -1,6 +1,6 @@
 # 🦷 Silprodent
 
-> Sistema de gestión integral para consultorios odontológicos con DentiBot (IA autónoma para gestión de turnos vía Telegram).
+> Sistema de gestión integral para consultorios odontológicos con DentiBot (IA autónoma para gestión de turnos por WhatsApp).
 
 ## 🚀 Stack Tecnológico
 
@@ -9,7 +9,8 @@
 | **Backend** | Python + FastAPI |
 | **Base de Datos** | PostgreSQL 16 + SQLAlchemy 2.0 + Alembic |
 | **Frontend** | HTML5 + CSS3 Nativo (SPA) + JavaScript Vanilla |
-| **IA / Bot** | LangChain + OpenAI GPT-4o-mini + Aiogram 3 |
+| **Canal** | WhatsApp vía YCloud (webhook firmado) |
+| **IA / Bot** | OpenAI function calling nativo (GPT-4o-mini) · cascada OpenRouter/Groq |
 | **Deploy** | Docker + Docker Compose + Dokploy |
 
 ## 📦 Estructura del Proyecto
@@ -25,19 +26,33 @@ dentibot/
 │   ├── routers/clinic/    # Rutas operativas
 │   ├── models/            # SQLAlchemy models
 │   └── schemas/           # Pydantic schemas
-├── bot/                   # DentiBot (LangChain + Telegram)
+├── bot/                   # DentiBot (agente IA + canal Telegram, hoy apagado)
 │   └── tools/             # Tools del agente IA
 ├── database/migrations/   # Alembic
 ├── docker-compose.yml     # Despliegue
 └── Dockerfile             # Build
 ```
 
-## 🔐 Credenciales por defecto
+## 🔐 Primer acceso
 
-| Rol | Email | Password |
-|-----|-------|----------|
-| Admin | admin@dentalstudio.com | admin123 |
-| Recepcionista | recepcion@dentalstudio.com | recepcion123 |
+El seed crea dos usuarios: `admin@dentalstudio.com` (admin) y
+`recepcion@dentalstudio.com` (recepción).
+
+**Las passwords no están fijadas en el código.** Se toman de las variables
+`ADMIN_PASSWORD` y `RECEPCION_PASSWORD`; si no están definidas, el arranque
+genera una al azar y la escribe **una sola vez** en el log del contenedor:
+
+```bash
+docker compose logs backend | grep "🔑"
+```
+
+En una instalación anterior a este cambio las cuentas quedaron con las
+passwords de ejemplo. Rotalas una vez:
+
+```bash
+python scripts/cambiar_password.py --listar          # marca las que siguen débiles
+python scripts/cambiar_password.py --email admin@dentalstudio.com
+```
 
 ## 🐳 Deploy en Dokploy
 
@@ -84,7 +99,7 @@ docker compose up --build -d
 - **Agenda**: CRUD de turnos con timeline, filtros por profesional/sede/estado
 - **Pacientes**: CRUD con búsqueda, soft-delete
 - **Odontograma Digital**: notación FDI (11-48), 5 caras por diente, colores rojo/azul, símbolos X/O/Corona/Prótesis
-- **DentiBot**: agente IA autónomo para agendar/cancelar/reprogramar/consultar turnos por Telegram
+- **DentiBot**: agente IA autónomo para agendar/cancelar/reprogramar/consultar turnos por WhatsApp
 - **Admin**: gestión de usuarios (RBAC), profesionales, sedes, obras sociales
 
 ## 🤖 DentiBot - Flujo de conversación

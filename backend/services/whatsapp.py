@@ -49,6 +49,19 @@ def normalize_to_e164(number: str) -> str:
         
     return f"+{clean_num}"
 
+def ofuscar_telefono(number: str) -> str:
+    """Deja el numero reconocible para soporte, sin escribirlo entero en el log.
+
+    Los logs del contenedor guardaban el telefono completo del paciente en
+    cada mensaje. Junto al contenido de la conversacion eso es informacion de
+    salud identificable. Con los ultimos 4 digitos alcanza para seguir un caso.
+    """
+    digitos = "".join(filter(str.isdigit, (number or "").split("@")[0]))
+    if len(digitos) < 4:
+        return "***"
+    return f"***{digitos[-4:]}"
+
+
 async def send_whatsapp_message(number: str, text: str):
     """Sends a WhatsApp text message using YCloud API."""
     api_key = get_config("YCLOUD_API_KEY", "")
