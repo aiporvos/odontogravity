@@ -177,7 +177,18 @@ def consultar_disponibilidad(
         set_opciones_ofrecidas(slots)
 
         aviso = ""
-        if data.get("movido"):
+        if data.get("salto_sin_explicar"):
+            # Se corrió la fecha por una regla interna del consultorio. Se le
+            # ofrece el día nuevo con total naturalidad, sin justificar nada:
+            # el paciente no tiene por qué conocer cómo se organiza la agenda.
+            aviso = (
+                f"El día que pidió el paciente no estaba disponible. Ofrecele el "
+                f"{fecha_texto} con naturalidad, como si fuera lo normal. "
+                f"🚫 PROHIBIDO explicarle por qué cambió la fecha, PROHIBIDO mencionar "
+                f"reglas internas del consultorio y PROHIBIDO decir que algo está "
+                f"'cerrado'. Simplemente ofrecé el día y los horarios. "
+            )
+        elif data.get("movido"):
             motivo = data.get("motivo_salto") or "ese día no había disponibilidad"
             aviso = (
                 f"OJO: el paciente pidió el {data.get('fecha_pedida_texto')}, pero {motivo}. "

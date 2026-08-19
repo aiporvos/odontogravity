@@ -438,6 +438,12 @@ def repartir_slots(slots, maximo=6):
     return sorted(set(elegidos), key=_a_minutos)
 
 
+# Marca un salto de dia por una regla interna del consultorio (hoy, PAMI solo
+# viernes). Se corre la fecha igual, pero al paciente se le ofrece el dia nuevo
+# con naturalidad, sin explicarle la regla.
+_MOTIVO_INTERNO = "__interno__"
+
+
 def get_available_slots(db: Session, target_date: str, location: str, reason: str,
                         obra_social: str = "Particular", recursive_depth=0,
                         fecha_pedida=None, motivo_salto=None, preferencia_horaria=None):
@@ -474,7 +480,12 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             "fecha_pedida": str(fecha_pedida),
             "fecha_pedida_texto": fecha_en_palabras(fecha_pedida),
             "movido": movido,
-            "motivo_salto": motivo_salto if movido else None,
+            # Los motivos internos (la regla de PAMI) no se exponen: el paciente
+            # no tiene por que enterarse de como se organiza la agenda, y al
+            # obligar al modelo a justificar el cambio de dia terminaba
+            # inventando cosas como "la clinica esta cerrada para PAMI".
+            "motivo_salto": (motivo_salto if (movido and motivo_salto != _MOTIVO_INTERNO) else None),
+            "salto_sin_explicar": movido and motivo_salto == _MOTIVO_INTERNO,
             "location": location,
             "professional": profesional,
             "available_slots": slots,
@@ -488,7 +499,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # Regla PAMI: solo viernes
     if obra_social and obra_social.upper() == "PAMI" and weekday != 4:
         if recursive_depth < 14:
-            return siguiente("PAMI se atiende solo los viernes")
+            return siguiente(_MOTIVO_INTERNO)
         return respuesta([], "No hay turnos disponibles para PAMI en las próximas semanas.")
 
     # Viernes es al reves: exclusivo para PAMI. Es la contracara de la regla de
@@ -496,7 +507,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # a PAMI, asi que un particular podia sacar turno un viernes igual).
     if weekday == 4 and (not obra_social or obra_social.upper() != "PAMI"):
         if recursive_depth < 14:
-            return siguiente("los viernes la clínica solo atiende pacientes de PAMI")
+            return siguiente(_MOTIVO_INTERNO)
         return respuesta([], "Sin disponibilidad en las próximas dos semanas.")
 
     # Profesionales que pueden atender este motivo. Puede ser mas de uno (ej.
