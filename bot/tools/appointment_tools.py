@@ -228,6 +228,62 @@ def verificar_obra_social(obra_social: str) -> str:
 
 # ── Tool registry ────────────────────────────────────────────────────────────
 
+# ── Estado de la conversacion ────────────────────────────────────────────────
+# El flujo vivia solo en el prompt: el modelo tenia que releer el historial en
+# cada mensaje y deducir en que paso estaba. De ahi salian las re-preguntas y
+# los mensajes seguidos que se contradicen. Ahora los datos que se van
+# juntando quedan guardados, y el codigo puede decir con certeza que falta.
+
+DATOS_DEL_TURNO = ("obra_social", "motivo", "fecha_hora", "paciente")
+
+
+def recordar_dato(campo: str, valor: str) -> str:
+    """Guarda un dato que el paciente ya dio, para no volver a preguntarlo.
+
+    Se llama apenas el paciente lo menciona, aunque sea de pasada y fuera de
+    orden: "turno para mi mama, ya hicimos el tramite del PAMI" deja registrada
+    la obra social antes de que el bot la pregunte.
+    """
+    campo = (campo or "").strip().lower()
+    if campo not in DATOS_DEL_TURNO:
+        return f"❌ Campo desconocido: {campo}. Válidos: {', '.join(DATOS_DEL_TURNO)}"
+    if not (valor or "").strip():
+        return f"❌ Falta el valor para {campo}"
+
+    estado = dict(_estado_conversacion.get() or {})
+    estado[campo] = valor.strip()
+    _estado_conversacion.set(estado)
+
+    faltan = [c for c in DATOS_DEL_TURNO if not estado.get(c)]
+    if faltan:
+        return f"✅ Anotado {campo}='{valor.strip()}'. Todavía falta: {', '.join(faltan)}."
+    return f"✅ Anotado {campo}='{valor.strip()}'. Ya tenés todos los datos para agendar."
+
+
+_estado_conversacion: contextvars.ContextVar = contextvars.ContextVar("estado_conv", default=None)
+
+
+def set_estado_conversacion(estado: dict | None):
+    _estado_conversacion.set(dict(estado) if estado else {})
+
+
+def get_estado_conversacion() -> dict:
+    return dict(_estado_conversacion.get() or {})
+
+
+def resumen_estado(estado: dict) -> str:
+    """Texto para el prompt: que ya se sabe y que falta."""
+    estado = estado or {}
+    tenemos = {c: v for c, v in estado.items() if c in DATOS_DEL_TURNO and v}
+    faltan = [c for c in DATOS_DEL_TURNO if not estado.get(c)]
+    if not tenemos:
+        return "Todavía no tenés ningún dato de este paciente en esta conversación."
+    ya = "; ".join(f"{c}={v}" for c, v in tenemos.items())
+    if faltan:
+        return f"YA SABÉS: {ya}. TE FALTA: {', '.join(faltan)}. No vuelvas a preguntar lo que ya sabés."
+    return f"YA SABÉS TODO: {ya}. Podés agendar."
+
+
 _TOOL_MAP = {
     "agendar_turno": agendar_turno,
     "cancelar_turno": cancelar_turno,
@@ -235,6 +291,7 @@ _TOOL_MAP = {
     "consultar_mis_turnos": consultar_mis_turnos,
     "consultar_disponibilidad": consultar_disponibilidad,
     "verificar_obra_social": verificar_obra_social,
+    "recordar_dato": recordar_dato,
 }
 
 
@@ -254,6 +311,33 @@ def execute_tool(name: str, arguments: dict) -> str:
 # ── OpenAI Function Definitions (JSON Schema) ────────────────────────────────
 
 TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "recordar_dato",
+            "description": (
+                "Guarda un dato que el paciente YA dijo, para no volver a preguntárselo. "
+                "Llamala APENAS el paciente menciona algo, aunque sea de pasada y fuera de orden. "
+                "Ejemplo: si dice 'turno para mi mamá, ya hicimos el trámite del PAMI', "
+                "guardá obra_social='PAMI' en ese mismo momento."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "campo": {
+                        "type": "string",
+                        "enum": ["obra_social", "motivo", "fecha_hora", "paciente"],
+                        "description": "Qué dato es.",
+                    },
+                    "valor": {
+                        "type": "string",
+                        "description": "El dato, tal como lo dijo el paciente.",
+                    },
+                },
+                "required": ["campo", "valor"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {

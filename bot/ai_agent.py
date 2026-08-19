@@ -10,6 +10,7 @@ from openai import OpenAI
 
 from bot.tools.appointment_tools import (
     TOOL_DEFINITIONS, execute_tool, set_requester_phone, tomar_opciones_ofrecidas,
+    set_estado_conversacion, get_estado_conversacion, resumen_estado,
 )
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
@@ -165,6 +166,14 @@ Llamá a `consultar_mis_turnos` directamente, SIN pedir el DNI.
 En ambos casos, si el sistema responde que no reconoce el número o que hay varias
 personas registradas, recién ahí preguntá lo que haga falta.
 
+### 🧠 NO VUELVAS A PREGUNTAR LO QUE YA SABÉS:
+Apenas el paciente mencione un dato —aunque sea de pasada y fuera de orden—
+llamá a `recordar_dato` en ese mismo momento.
+Ejemplo: "turno para mi mamá, ya hicimos el trámite del PAMI" → guardá
+obra_social='PAMI' enseguida, y NO se lo preguntes después.
+Al principio de cada mensaje vas a ver ESTADO DE ESTA CONVERSACIÓN con lo que
+ya está registrado: fijate ahí antes de preguntar cualquier cosa.
+
 ### 📋 REGLAS GENERALES:
 - **Negritas:** Fechas y horarios siempre en negrita con *asteriscos* e incluí el año.
 - **NO calcules el día de la semana:** `consultar_disponibilidad` te devuelve la fecha en palabras. Copiala tal cual.
@@ -223,7 +232,8 @@ def _get_providers() -> list[str]:
 # ── Main chat function ───────────────────────────────────────────────────────
 
 def chat(user_message: str, history: list[dict] | None = None,
-         requester_phone: str | None = None) -> tuple[str, list | None]:
+         requester_phone: str | None = None,
+         estado: dict | None = None) -> tuple[str, list | None, dict]:
     """Process a user message and return agent response.
 
     requester_phone: número real del canal (ej. WhatsApp) de quien escribe.
@@ -233,6 +243,10 @@ def chat(user_message: str, history: list[dict] | None = None,
     logger.info(f"AI_AGENT_IN -> Msg: '{user_message}', HistLen: {len(history) if history else 0}")
 
     set_requester_phone(requester_phone)
+    # Datos que el paciente ya dio en esta conversacion. Viajan por parametro y
+    # no por contextvar: chat() corre en un executor (otro hilo) y el webhook
+    # no veria lo que se setea adentro.
+    set_estado_conversacion(estado)
 
     providers = _get_providers()
     clinic_now = get_clinic_now()
@@ -242,6 +256,8 @@ def chat(user_message: str, history: list[dict] | None = None,
     system_content = SYSTEM_PROMPT.format(
         especialistas=get_especialistas_texto(),
     )
+    # Lo que ya se sabe de este paciente, para que no lo vuelva a preguntar.
+    system_content += f"\n\n### 📌 ESTADO DE ESTA CONVERSACIÓN:\n{resumen_estado(estado or {})}"
 
     # Build messages array (OpenAI format)
     messages = [{"role": "system", "content": system_content}]
@@ -296,7 +312,7 @@ def chat(user_message: str, history: list[dict] | None = None,
                 if not msg.tool_calls:
                     result = msg.content or ""
                     logger.info(f"AI_AGENT -> Respuesta final (ronda {round_num + 1}): {result[:80]}...")
-                    return result, tomar_opciones_ofrecidas()
+                    return result, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
                 # Execute each tool call
                 logger.info(f"AI_AGENT -> Ronda {round_num + 1}: {len(msg.tool_calls)} tool call(s)")
@@ -337,7 +353,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                 temperature=0.3,
                 max_tokens=1000,
             )
-            return response.choices[0].message.content or "", tomar_opciones_ofrecidas()
+            return (response.choices[0].message.content or "",
+                    tomar_opciones_ofrecidas(), get_estado_conversacion())
 
         except Exception as e:
             logger.error(f"AI_AGENT -> Error usando proveedor {provider}: {e}")
@@ -361,4 +378,4 @@ def chat(user_message: str, history: list[dict] | None = None,
         "No pudimos procesar tu solicitud automáticamente debido a un "
         "inconveniente técnico con nuestra Inteligencia Artificial. "
         "Un agente se pondrá en contacto a la brevedad."
-    ), None
+    ), None, get_estado_conversacion()

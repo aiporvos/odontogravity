@@ -240,6 +240,31 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
     logger.warning(f"⚠️ Tipo de mensaje no soportado: {message_type}")
     return {"status": "ignored_unsupported_type"}
 
+def _cargar_estado(session) -> dict:
+    """Datos que el paciente ya dio en esta conversación.
+
+    Se guardan en context_data (que ya existía en el modelo para esto) para que
+    el modelo no tenga que re-deducirlos leyendo el historial en cada mensaje.
+    """
+    if not session.context_data:
+        return {}
+    try:
+        datos = json.loads(session.context_data)
+        return datos if isinstance(datos, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _guardar_estado(db: Session, session, estado: dict | None):
+    if estado is None:
+        return
+    try:
+        session.context_data = json.dumps(estado, ensure_ascii=False)
+        db.commit()
+    except Exception as e:
+        logger.error(f"No se pudo guardar el estado de la conversación: {e}")
+
+
 # Cuánto se calla el bot cuando una persona toma la conversación.
 PAUSA_INTERVENCION_HUMANA = timedelta(minutes=30)
 
@@ -362,11 +387,13 @@ async def handle_text_message(remote_jid: str, text: str):
             requester_phone = normalize_to_e164(remote_jid)
             # chat is sync, run in executor to not block event loop
             loop = asyncio.get_event_loop()
-            response, opciones = await loop.run_in_executor(
-                None, chat, text, history, requester_phone
+            estado_previo = _cargar_estado(session)
+            response, opciones, estado_nuevo = await loop.run_in_executor(
+                None, chat, text, history, requester_phone, estado_previo
             )
             logger.info(f"🤖 IA respondió: {response[:50]}...")
 
+            _guardar_estado(db, session, estado_nuevo)
             save_message(db, session.id, MessageRole.assistant, response)
             await _responder(remote_jid, response, opciones)
         except Exception as e:
