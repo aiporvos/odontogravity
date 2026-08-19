@@ -185,10 +185,46 @@ ya está registrado: fijate ahí antes de preguntar cualquier cosa.
 - **Pedir otro día:** Si el paciente quiere otro día, llamá a `consultar_disponibilidad` con esa fecha sin drama.
 - **Fecha corrida:** Si la herramienta avisa que se movió la fecha, explicalo naturalmente.
 - **FECHA HOY:** Cada mensaje trae `[SISTEMA - FECHA ACTUAL]`. Todo lo que devuelve la herramienta es futuro. NUNCA digas que una fecha ya pasó.
+- **SALUDO Y DESPEDIDA SEGÚN LA HORA:** el bloque [SISTEMA] te dice con qué fórmula saludar y despedirte. Usá esa, tal cual. PROHIBIDO decir "buen día" a la noche o "buenas noches" a la mañana: quedás como un robot descuidado.
 - **Emojis:** Si el paciente manda solo un emoji (👍, ❤️, etc.), interpretalo como confirmación o acuse de recibo. Si no queda claro a qué se refiere, preguntá: "¿Querés que avancemos con el turno?"
 - **NO inventar:** Si no tenés la información, usá las herramientas. No inventes fechas ni horarios.
 - **Mensajes cortos:** Respondé siempre de forma concisa. No repitas info que ya dijiste.
 """
+
+
+def saludo_segun_hora(hora: int) -> tuple[str, str]:
+    """Devuelve (saludo, despedida) correctos para esa hora.
+
+    El modelo tenía la hora en el mensaje y aun así despedía con "que tengas un
+    buen día" a las 23. Calcularlo acá y decírselo textual es más confiable que
+    esperar que lo deduzca.
+    """
+    # La madrugada (00:00-05:59) sigue siendo "buenas noches": a las 2 AM nadie
+    # saluda con "buen día".
+    if hora < 6 or hora >= 20:
+        return "buenas noches", "que tengas una buena noche"
+    if hora < 13:
+        return "buen día", "que tengas un buen día"
+    return "buenas tardes", "que tengas una buena tarde"
+
+
+def clinica_abierta_ahora(db_now) -> bool:
+    """Si la clínica está atendiendo en este preciso momento."""
+    from backend.database import SessionLocal
+    from backend.models.schedule import ClinicSchedule
+
+    db = SessionLocal()
+    try:
+        bloques = db.query(ClinicSchedule).filter(
+            ClinicSchedule.weekday == db_now.weekday(),
+            ClinicSchedule.is_active == True,  # noqa: E712
+        ).all()
+        ahora = db_now.time()
+        return any(b.start_time <= ahora < b.end_time for b in bloques)
+    except Exception:
+        return True   # ante la duda, no afirmar que está cerrada
+    finally:
+        db.close()
 
 
 # ── Provider client builder ──────────────────────────────────────────────────
@@ -276,10 +312,21 @@ def chat(user_message: str, history: list[dict] | None = None,
     # el modelo y ante la duda se presentaba, hasta a alguien que solo queria
     # cancelar un turno.
     marca_nueva = "[CONVERSACIÓN NUEVA]\n" if not history else ""
+    saludo, despedida = saludo_segun_hora(clinic_now.hour)
+    abierta = clinica_abierta_ahora(clinic_now)
+    estado_clinica = (
+        "La clínica está ATENDIENDO en este momento."
+        if abierta else
+        "La clínica está CERRADA en este momento (fuera del horario de atención). "
+        "Podés agendar turnos igual, pero no le digas al paciente que venga ahora."
+    )
     dated_message = (
         f"{marca_nueva}"
         f"[SISTEMA - FECHA ACTUAL: {dia_semana} {clinic_now.strftime('%Y-%m-%d')} "
-        f"hora Argentina: {clinic_now.strftime('%H:%M')}]\n"
+        f"hora Argentina: {clinic_now.strftime('%H:%M')}. "
+        f"Saludá diciendo \"{saludo}\" y despedite con \"{despedida}\" — "
+        f"usá EXACTAMENTE esas fórmulas, no inventes otra. "
+        f"{estado_clinica}]\n"
         f"{user_message}"
     )
     messages.append({"role": "user", "content": dated_message})
