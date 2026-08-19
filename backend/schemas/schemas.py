@@ -325,6 +325,9 @@ class BotAvailabilityRequest(BaseModel):
     dni: Optional[str] = "ignore"
     date: Optional[str] = "" # YYYY-MM-DD or empty for today
     obra_social: Optional[str] = "Particular"
+    # Franja que pidio el paciente: "manana", "tarde" o una hora ("18:45").
+    # Sin esto el bot no tenia por donde pasar "necesito despues de las 18:45".
+    preferencia_horaria: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════

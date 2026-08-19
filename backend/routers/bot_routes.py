@@ -292,4 +292,5 @@ def bot_get_availability(data: BotAvailabilityRequest, db: Session = Depends(get
     from backend.services.appointment_service import get_clinic_now
     argentina_now = get_clinic_now()
     target_date = data.date if data.date else argentina_now.date().isoformat()
-    return get_available_slots(db, target_date, data.location, data.reason, data.obra_social)
+    return get_available_slots(db, target_date, data.location, data.reason,
+                              data.obra_social, preferencia_horaria=data.preferencia_horaria)

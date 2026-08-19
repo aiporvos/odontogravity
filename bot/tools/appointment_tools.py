@@ -127,6 +127,7 @@ def consultar_disponibilidad(
     location: str = "San Rafael",
     date: str = "",
     obra_social: str = "Particular",
+    preferencia_horaria: str = "",
 ) -> str:
     """Consulta los horarios disponibles para una sede, especialidad y fecha."""
     try:
@@ -135,6 +136,7 @@ def consultar_disponibilidad(
             "reason": motivo_confirmado_por_paciente,
             "date": date,
             "obra_social": obra_social,
+            "preferencia_horaria": preferencia_horaria or None,
         }
         r = httpx.post(f"{API_BASE}/api/bot/availability", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
@@ -344,6 +346,16 @@ TOOL_DEFINITIONS = [
                         "type": "string",
                         "description": "Obra social del paciente (ej: Particular, PAMI, OSDE)",
                         "default": "Particular",
+                    },
+                    "preferencia_horaria": {
+                        "type": "string",
+                        "description": (
+                            "Franja u hora que pidió el paciente, tal como la dijo. "
+                            "Ejemplos: 'mañana', 'tarde', '18:45' (para 'después de las 18:45'), "
+                            "'antes de las 11'. Dejar vacío si no expresó ninguna preferencia. "
+                            "SIEMPRE pasarlo si el paciente mencionó un horario: sin esto se le "
+                            "ofrecen horarios que no le sirven."
+                        ),
                     },
                 },
                 "required": ["motivo_confirmado_por_paciente"],

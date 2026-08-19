@@ -372,9 +372,75 @@ def _franjas_del_profesional(db: Session, professional_id, weekday: int, clinic_
     return _intersectar_franjas(clinic_shifts, del_dia)
 
 
+def interpretar_preferencia(preferencia):
+    """Traduce lo que pidio el paciente a un rango (desde, hasta) en minutos.
+
+    Acepta "manana"/"tarde" o una hora suelta ("18:45", "18"). Devuelve None
+    si no hay preferencia o no se entiende, y en ese caso no se filtra nada.
+    """
+    if not preferencia:
+        return None
+    p = _sin_acentos(str(preferencia)).strip()
+    if not p:
+        return None
+    if "manana" in p or "temprano" in p:
+        return (0, 12 * 60 + 30)
+    if "tarde" in p or "noche" in p:
+        return (12 * 60 + 30, 24 * 60)
+
+    # "despues de las 18:45", "18:45", "18hs", "a las 18"
+    import re as _re
+    m = _re.search(r"(\d{1,2})(?:[:.](\d{2}))?", p)
+    if not m:
+        return None
+    hora = int(m.group(1))
+    minuto = int(m.group(2) or 0)
+    if hora > 23 or minuto > 59:
+        return None
+    desde = hora * 60 + minuto
+    if "antes" in p:
+        return (0, desde)
+    return (desde, 24 * 60)
+
+
+def _a_minutos(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def repartir_slots(slots, maximo=6):
+    """Elige hasta `maximo` horarios repartidos a lo largo del dia.
+
+    Antes se devolvian los primeros 4 (`available_slots[:4]`), que son siempre
+    los mas tempranos: el bot nunca veia la franja de la tarde y terminaba
+    afirmandole al paciente que no habia turnos que en realidad si existian.
+    Ahora se toman de forma pareja entre manana y tarde.
+    """
+    if len(slots) <= maximo:
+        return slots
+
+    manana = [s for s in slots if _a_minutos(s) < 12 * 60 + 30]
+    tarde = [s for s in slots if _a_minutos(s) >= 12 * 60 + 30]
+
+    def muestrear(lista, cuantos):
+        if cuantos <= 0 or not lista:
+            return []
+        if len(lista) <= cuantos:
+            return lista
+        paso = (len(lista) - 1) / (cuantos - 1) if cuantos > 1 else 0
+        return [lista[round(i * paso)] for i in range(cuantos)]
+
+    if manana and tarde:
+        mitad = maximo // 2
+        elegidos = muestrear(manana, mitad) + muestrear(tarde, maximo - mitad)
+    else:
+        elegidos = muestrear(manana or tarde, maximo)
+    return sorted(set(elegidos), key=_a_minutos)
+
+
 def get_available_slots(db: Session, target_date: str, location: str, reason: str,
                         obra_social: str = "Particular", recursive_depth=0,
-                        fecha_pedida=None, motivo_salto=None):
+                        fecha_pedida=None, motivo_salto=None, preferencia_horaria=None):
     """Calculate free slots for a given date and location based on clinic schedule.
 
     fecha_pedida y motivo_salto se arrastran entre llamadas recursivas para poder
@@ -391,11 +457,13 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     if fecha_pedida is None:
         fecha_pedida = day
 
+    rango = interpretar_preferencia(preferencia_horaria)
+
     def siguiente(motivo):
         """Prueba el dia siguiente, recordando por que se salteo el primero."""
         return get_available_slots(
             db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social,
-            recursive_depth + 1, fecha_pedida, motivo_salto or motivo,
+            recursive_depth + 1, fecha_pedida, motivo_salto or motivo, preferencia_horaria,
         )
 
     def respuesta(slots, mensaje=None, profesional=None):
@@ -411,6 +479,8 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             "professional": profesional,
             "available_slots": slots,
             "message": mensaje,
+            "preferencia_horaria": preferencia_horaria,
+            "preferencia_respetada": rango is None or bool(slots),
         }
 
     weekday = day.weekday() # 0=Mon, 2=Wed
@@ -500,8 +570,21 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             
             current += timedelta(minutes=duration_minutes)
     
-    # If no slots found for today, auto-search next available day
+    # Filtrar por la franja que pidio el paciente ("a la tarde", "despues de
+    # las 18:45"). Si con el filtro no queda nada pero el dia SI tenia turnos,
+    # se salta al dia siguiente aclarando el motivo, en vez de decirle al
+    # paciente que no hay nada.
+    habia_sin_filtrar = bool(available_slots)
+    if rango:
+        desde, hasta = rango
+        available_slots = [h for h in available_slots if desde <= _a_minutos(h) < hasta]
+
     if not available_slots and recursive_depth < 14:
-        return siguiente(f"el {fecha_en_palabras(day)} ya no quedaban horarios libres")
-        
-    return respuesta(available_slots[:4], profesional=prof_name)
+        if habia_sin_filtrar and rango:
+            motivo = (f"el {fecha_en_palabras(day)} no quedaban horarios en la franja "
+                     f"que pediste ({preferencia_horaria})")
+        else:
+            motivo = f"el {fecha_en_palabras(day)} ya no quedaban horarios libres"
+        return siguiente(motivo)
+
+    return respuesta(repartir_slots(available_slots), profesional=prof_name)
