@@ -288,10 +288,13 @@ class SearchResult(BaseModel):
 # BOT SCHEMAS
 # ═══════════════════════════════════════════════════════
 class BotAppointmentRequest(BaseModel):
-    patient_name: str
-    patient_last_name: str
-    dni: str
-    phone: str
+    # Todos opcionales: si el numero de WhatsApp ya identifica al paciente, el
+    # bot no tiene que pedirle ningun dato. Solo hacen falta para dar de alta
+    # a alguien nuevo.
+    patient_name: Optional[str] = None
+    patient_last_name: Optional[str] = None
+    dni: Optional[str] = None
+    phone: Optional[str] = None
     insurance_name: Optional[str] = None
     reason: str
     location: Optional[str] = "San Rafael"
@@ -303,7 +306,9 @@ class BotAppointmentRequest(BaseModel):
 
 
 class BotCancelRequest(BaseModel):
-    dni: str
+    # DNI opcional: si el numero de WhatsApp ya identifica al paciente no hace
+    # falta pedirselo. Queda como respaldo para quien cambio de telefono.
+    dni: Optional[str] = None
     appointment_id: Optional[UUID] = None
     requester_phone: Optional[str] = None
 
@@ -316,7 +321,7 @@ class BotRescheduleRequest(BaseModel):
 
 
 class BotQueryRequest(BaseModel):
-    dni: str
+    dni: Optional[str] = None  # ver BotCancelRequest.dni
     requester_phone: Optional[str] = None
 
 class BotAvailabilityRequest(BaseModel):

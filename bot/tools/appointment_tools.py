@@ -27,12 +27,12 @@ def _current_requester_phone():
 # ── Tool implementations ─────────────────────────────────────────────────────
 
 def agendar_turno(
-    patient_name: str,
-    patient_last_name: str,
-    dni: str,
-    phone: str,
     reason: str,
     preferred_date: str,
+    patient_name: str = "",
+    patient_last_name: str = "",
+    dni: str = "",
+    phone: str = "",
     location: str = "San Rafael",
     insurance_name: str = "Particular",
     duration_minutes: int = 30,
@@ -70,9 +70,9 @@ def agendar_turno(
         return f"❌ Error al agendar: {str(e)}"
 
 
-def cancelar_turno(dni: str, appointment_id: str = "") -> str:
+def cancelar_turno(dni: str = "", appointment_id: str = "") -> str:
     """Cancela un turno existente del paciente."""
-    payload = {"dni": dni, "requester_phone": _current_requester_phone()}
+    payload = {"dni": dni or None, "requester_phone": _current_requester_phone()}
     if appointment_id:
         payload["appointment_id"] = appointment_id
     try:
@@ -85,10 +85,10 @@ def cancelar_turno(dni: str, appointment_id: str = "") -> str:
         return f"❌ Error: {str(e)}"
 
 
-def reprogramar_turno(dni: str, appointment_id: str, new_datetime: str) -> str:
+def reprogramar_turno(appointment_id: str, new_datetime: str, dni: str = "") -> str:
     """Reprograma un turno existente a una nueva fecha."""
     payload = {
-        "dni": dni,
+        "dni": dni or None,
         "appointment_id": appointment_id,
         "new_start_time": new_datetime,
         "requester_phone": _current_requester_phone(),
@@ -103,10 +103,10 @@ def reprogramar_turno(dni: str, appointment_id: str, new_datetime: str) -> str:
         return f"❌ Error: {str(e)}"
 
 
-def consultar_mis_turnos(dni: str) -> str:
+def consultar_mis_turnos(dni: str = "") -> str:
     """Consulta los turnos pendientes de un paciente."""
     try:
-        payload = {"dni": dni, "requester_phone": _current_requester_phone()}
+        payload = {"dni": dni or None, "requester_phone": _current_requester_phone()}
         r = httpx.post(f"{API_BASE}/api/bot/my-appointments", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
         data = r.json()
@@ -240,7 +240,7 @@ TOOL_DEFINITIONS = [
                     "patient_last_name": {"type": "string", "description": "Apellido del paciente"},
                     "dni": {
                         "type": "string",
-                        "description": "DNI del paciente, solo números, 7 u 8 dígitos (ej: 29759464). NO es el teléfono.",
+                        "description": "DNI del paciente. NO se lo pidas: el sistema lo identifica por su número de WhatsApp. Mandalo vacío. Solo completalo si el sistema te avisó que no reconoce el número y el paciente te dio el DNI.",
                     },
                     "phone": {
                         "type": "string",
@@ -263,7 +263,7 @@ TOOL_DEFINITIONS = [
                         "default": 30,
                     },
                 },
-                "required": ["patient_name", "patient_last_name", "dni", "phone", "reason", "preferred_date"],
+                "required": ["reason", "preferred_date"],
             },
         },
     },
@@ -275,13 +275,13 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "dni": {"type": "string", "description": "DNI del paciente"},
+                    "dni": {"type": "string", "description": "DNI del paciente. NO se lo pidas: el sistema lo identifica por su número de WhatsApp. Mandalo vacío. Solo completalo si el sistema te avisó que no reconoce el número y el paciente te dio el DNI."},
                     "appointment_id": {
                         "type": "string",
                         "description": "ID del turno a cancelar (opcional, cancela el próximo si no se indica)",
                     },
                 },
-                "required": ["dni"],
+                "required": [],
             },
         },
     },
@@ -293,14 +293,14 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "dni": {"type": "string", "description": "DNI del paciente"},
+                    "dni": {"type": "string", "description": "DNI del paciente. NO se lo pidas: el sistema lo identifica por su número de WhatsApp. Mandalo vacío. Solo completalo si el sistema te avisó que no reconoce el número y el paciente te dio el DNI."},
                     "appointment_id": {"type": "string", "description": "ID del turno a reprogramar"},
                     "new_datetime": {
                         "type": "string",
                         "description": "Nueva fecha y hora en formato ISO (ej: 2026-03-25T10:00:00)",
                     },
                 },
-                "required": ["dni", "appointment_id", "new_datetime"],
+                "required": ["appointment_id", "new_datetime"],
             },
         },
     },
@@ -312,9 +312,9 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "dni": {"type": "string", "description": "DNI del paciente"},
+                    "dni": {"type": "string", "description": "DNI del paciente. NO se lo pidas: el sistema lo identifica por su número de WhatsApp. Mandalo vacío. Solo completalo si el sistema te avisó que no reconoce el número y el paciente te dio el DNI."},
                 },
-                "required": ["dni"],
+                "required": [],
             },
         },
     },

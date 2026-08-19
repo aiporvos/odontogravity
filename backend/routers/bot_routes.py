@@ -73,6 +73,117 @@ def _ensure_owns_dni(patient, requester_phone: str | None):
 
 
 
+def buscar_pacientes_por_telefono(db: Session, requester_phone: str | None) -> list:
+    """Pacientes asociados a ese numero de WhatsApp.
+
+    Puede devolver varios: una familia comparte el telefono y el modelo de
+    datos lo permite (el DNI es unico, el telefono no). Es el caso real de
+    "turno para mi mama Estela Pardo".
+
+    Se busca primero por coincidencia exacta normalizada. Solo si eso no
+    encuentra nada se prueba la comparacion flexible (ultimos 8 digitos), y
+    unicamente si devuelve UNA persona: con mas de una no hay forma de saber
+    cual es y seria peor confundir fichas que pedir el DNI.
+    """
+    from backend.services.whatsapp import normalize_to_e164
+
+    if not requester_phone:
+        return []
+
+    objetivo = normalize_to_e164(requester_phone)
+    activos = db.query(Patient).filter(Patient.is_deleted == False).all()  # noqa: E712
+
+    exactos = [p for p in activos if p.phone and normalize_to_e164(p.phone) == objetivo]
+    if exactos:
+        return exactos
+
+    d_req = "".join(filter(str.isdigit, requester_phone))
+    if len(d_req) < 8:
+        return []
+    flexibles = [
+        p for p in activos
+        if p.phone and "".join(filter(str.isdigit, p.phone))[-8:] == d_req[-8:]
+    ]
+    return flexibles if len(flexibles) == 1 else []
+
+
+@router.post("/identificar", dependencies=[Depends(verify_bot_key)])
+def bot_identificar(data: dict = Body(...), db: Session = Depends(get_db)):
+    """Quien es el que escribe, segun su numero de WhatsApp.
+
+    Evita pedirle el DNI a alguien que ya es paciente. El telefono es ademas
+    la credencial mas fuerte: WhatsApp lo verifica, un DNI lo puede saber
+    cualquiera. De hecho el sistema ya confiaba mas en el telefono — pedia el
+    DNI y despues lo validaba contra el numero.
+    """
+    pacientes = buscar_pacientes_por_telefono(db, data.get("requester_phone"))
+    return {
+        "encontrados": len(pacientes),
+        "pacientes": [
+            {
+                "dni": p.dni,
+                "nombre": f"{p.first_name} {p.last_name}".strip(),
+                "obra_social": p.insurance_name or "Particular",
+            }
+            for p in pacientes
+        ],
+    }
+
+
+def resolver_paciente(db: Session, dni: str | None, requester_phone: str | None):
+    """Encuentra al paciente sin obligarlo a tipear el DNI.
+
+    Orden: (1) si vino DNI explicito, ese manda —cubre a quien cambio de
+    numero—; (2) si no, el telefono. Si el telefono tiene varios pacientes
+    asociados, se devuelve la lista para que el bot pregunte de quien se trata,
+    en vez de adivinar y tocar la ficha equivocada.
+
+    Devuelve (paciente, opciones). Si paciente es None y opciones tiene varios,
+    hay que preguntar; si ambos vienen vacios, no se lo pudo identificar.
+    """
+    if dni and dni.strip():
+        d = "".join(filter(str.isdigit, dni))
+        paciente = db.query(Patient).filter(
+            Patient.dni == d, Patient.is_deleted == False,  # noqa: E712
+        ).first()
+        if paciente and requester_phone:
+            if not (paciente.phone or "").strip():
+                # Ficha cargada desde el panel sin telefono (o con uno vacio):
+                # es el primer WhatsApp de este paciente. Se adopta el numero,
+                # no hay nadie a quien desplazar.
+                paciente.phone = requester_phone
+                db.commit()
+            elif not _phones_match(paciente.phone, requester_phone):
+                # El DNI NO es un secreto: esta impreso en el documento y lo
+                # sabe la familia. Dejar que un DNI solo de acceso a los turnos
+                # de otro desde un numero desconocido seria un agujero de
+                # privacidad en una clinica. El cambio de numero lo hace la
+                # clinica desde el panel, no el bot.
+                raise HTTPException(403, (
+                    "Ese DNI está registrado con otro número de teléfono. "
+                    "Por seguridad no puedo mostrar esos turnos desde acá. "
+                    "Escribinos desde el número de siempre o llamá a la clínica "
+                    "para que actualicen tu contacto."
+                ))
+        return paciente, []
+
+    candidatos = buscar_pacientes_por_telefono(db, requester_phone)
+    if len(candidatos) == 1:
+        return candidatos[0], []
+    return None, candidatos
+
+
+_NO_IDENTIFICADO = (
+    "No encuentro turnos asociados a este número. "
+    "¿Me pasás tu DNI así te busco?"
+)
+
+
+def _elegir_entre(candidatos) -> str:
+    nombres = ", ".join(f"{p.first_name} {p.last_name}".strip() for p in candidatos)
+    return f"Hay varias personas registradas con este número ({nombres}). ¿Para quién es?"
+
+
 # ── Agendar Turno ──────────────────────────────────────
 def _solo_digitos(valor):
     return "".join(c for c in (valor or "") if c.isdigit())
@@ -127,11 +238,31 @@ def _validar_dni_y_telefono(dni, phone, requester_phone):
 
 @router.post("/appointments", dependencies=[Depends(verify_bot_key)])
 def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(get_db)):
-    dni_normalizado = _validar_dni_y_telefono(data.dni, data.phone, data.requester_phone)
+    # Paciente que ya existe: no hace falta que tipee nada. Si el numero de
+    # WhatsApp identifica a una sola persona y no vino DNI, se usa el suyo.
+    # Con varias personas en el mismo numero (familia) hay que preguntar.
+    nombre = data.patient_name
+    apellido = data.patient_last_name
+    if not (data.dni or "").strip():
+        conocido, opciones = resolver_paciente(db, None, data.requester_phone)
+        if conocido:
+            dni_normalizado = conocido.dni
+            nombre = nombre or conocido.first_name
+            apellido = apellido or conocido.last_name
+        elif opciones:
+            raise HTTPException(400, _elegir_entre(opciones))
+        else:
+            raise HTTPException(400, (
+                "Es la primera vez que este número saca turno. "
+                "Pedile nombre, apellido y DNI para crear su ficha."
+            ))
+    else:
+        dni_normalizado = _validar_dni_y_telefono(data.dni, data.phone, data.requester_phone)
+
     result = create_appointment_logic(
         db=db,
-        patient_name=data.patient_name,
-        patient_last_name=data.patient_last_name,
+        patient_name=nombre,
+        patient_last_name=apellido,
         dni=dni_normalizado,
         phone=data.phone,
         reason=data.reason,
@@ -150,11 +281,9 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
 # ── Cancelar Turno ─────────────────────────────────────
 @router.post("/cancel", dependencies=[Depends(verify_bot_key)])
 async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)):
-    patient = db.query(Patient).filter(Patient.dni == data.dni, Patient.is_deleted == False).first()
+    patient, opciones = resolver_paciente(db, data.dni, data.requester_phone)
     if not patient:
-        raise HTTPException(404, "Paciente no encontrado")
-
-    _ensure_owns_dni(patient, data.requester_phone)
+        raise HTTPException(404, _elegir_entre(opciones) if opciones else _NO_IDENTIFICADO)
 
     query = db.query(Appointment).filter(
         Appointment.patient_id == patient.id,
@@ -209,11 +338,9 @@ async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(g
 # ── Reprogramar Turno ──────────────────────────────────
 @router.post("/reschedule", dependencies=[Depends(verify_bot_key)])
 def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends(get_db)):
-    patient = db.query(Patient).filter(Patient.dni == data.dni, Patient.is_deleted == False).first()
+    patient, opciones = resolver_paciente(db, data.dni, data.requester_phone)
     if not patient:
-        raise HTTPException(404, "Paciente no encontrado")
-
-    _ensure_owns_dni(patient, data.requester_phone)
+        raise HTTPException(404, _elegir_entre(opciones) if opciones else _NO_IDENTIFICADO)
 
     appt = db.query(Appointment).filter(
         Appointment.id == data.appointment_id,
@@ -234,11 +361,9 @@ def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends
 # ── Consultar Turnos ───────────────────────────────────
 @router.post("/my-appointments", dependencies=[Depends(verify_bot_key)])
 def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db)):
-    patient = db.query(Patient).filter(Patient.dni == data.dni, Patient.is_deleted == False).first()
+    patient, opciones = resolver_paciente(db, data.dni, data.requester_phone)
     if not patient:
-        raise HTTPException(404, "Paciente no encontrado con ese DNI")
-
-    _ensure_owns_dni(patient, data.requester_phone)
+        raise HTTPException(404, _elegir_entre(opciones) if opciones else _NO_IDENTIFICADO)
 
     appts = db.query(Appointment).filter(
         Appointment.patient_id == patient.id,
