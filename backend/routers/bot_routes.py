@@ -5,6 +5,7 @@ from fastapi import Body, APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 import os
+import logging
 
 from backend.database import get_db
 from backend.services.appointment_service import create_appointment_logic, get_available_slots, route_professional
@@ -16,6 +17,7 @@ from backend.schemas.schemas import (
     BotAvailabilityRequest, AppointmentRead, PatientRead,
 )
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/bot", tags=["Bot"])
 
 # BOT_API_KEY protege los endpoints que el bot usa para operar turnos.
@@ -130,6 +132,54 @@ def bot_identificar(data: dict = Body(...), db: Session = Depends(get_db)):
     }
 
 
+def _clave_persona(p) -> str:
+    """Identidad 'blanda' de un paciente, para detectar fichas duplicadas."""
+    return f"{(p.first_name or '').strip().lower()}|{(p.last_name or '').strip().lower()}"
+
+
+def deduplicar_pacientes(db: Session, pacientes: list) -> list:
+    """Colapsa las fichas que son la MISMA persona cargada dos veces.
+
+    En produccion aparecieron dos "Claudio Luna" con el mismo telefono y DNIs
+    distintos. Preguntarle al paciente cual de los dos "Claudio Luna" es su
+    turno es imposible de contestar: se quedaba en un loop sin salida.
+
+    Cuando varias fichas comparten nombre y apellido se toma una sola, la que
+    tenga turnos activos (y si empatan, la mas reciente). Solo se considera
+    "familia" —y por lo tanto se pregunta— cuando los nombres son distintos.
+    """
+    if len(pacientes) <= 1:
+        return pacientes
+
+    def turnos_activos(p):
+        return db.query(Appointment).filter(
+            Appointment.patient_id == p.id,
+            Appointment.is_deleted == False,  # noqa: E712
+            Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
+        ).count()
+
+    por_persona: dict[str, list] = {}
+    for p in pacientes:
+        por_persona.setdefault(_clave_persona(p), []).append(p)
+
+    elegidos = []
+    for clave, grupo in por_persona.items():
+        if len(grupo) == 1:
+            elegidos.append(grupo[0])
+            continue
+        mejor = max(grupo, key=lambda p: (turnos_activos(p), p.created_at or datetime.min))
+        logger.info(
+            f"Fichas duplicadas de '{clave}': {len(grupo)} registros, se usa DNI {mejor.dni}"
+        )
+        elegidos.append(mejor)
+    return elegidos
+
+
+def pacientes_del_numero(db: Session, requester_phone: str | None) -> list:
+    """Todos los pacientes de ese numero, ya sin duplicados."""
+    return deduplicar_pacientes(db, buscar_pacientes_por_telefono(db, requester_phone))
+
+
 def resolver_paciente(db: Session, dni: str | None, requester_phone: str | None):
     """Encuentra al paciente sin obligarlo a tipear el DNI.
 
@@ -167,7 +217,7 @@ def resolver_paciente(db: Session, dni: str | None, requester_phone: str | None)
                 ))
         return paciente, []
 
-    candidatos = buscar_pacientes_por_telefono(db, requester_phone)
+    candidatos = pacientes_del_numero(db, requester_phone)
     if len(candidatos) == 1:
         return candidatos[0], []
     return None, candidatos
@@ -281,16 +331,27 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
 # ── Cancelar Turno ─────────────────────────────────────
 @router.post("/cancel", dependencies=[Depends(verify_bot_key)])
 async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)):
-    patient, opciones = resolver_paciente(db, data.dni, data.requester_phone)
-    if not patient:
-        raise HTTPException(404, _elegir_entre(opciones) if opciones else _NO_IDENTIFICADO)
+    # Igual que al consultar: no se pregunta "¿de quién?". Se juntan los turnos
+    # de todas las fichas del número y, si hay más de uno, se le pide al
+    # paciente que elija EL TURNO (fecha y hora), que es algo que sí puede
+    # contestar, en vez de elegir entre fichas que pueden ser idénticas.
+    if (data.dni or "").strip():
+        patient, _ = resolver_paciente(db, data.dni, data.requester_phone)
+        if not patient:
+            raise HTTPException(404, _NO_IDENTIFICADO)
+        pacientes = [patient]
+    else:
+        pacientes = pacientes_del_numero(db, data.requester_phone)
+        if not pacientes:
+            raise HTTPException(404, _NO_IDENTIFICADO)
 
+    ids = [p.id for p in pacientes]
     query = db.query(Appointment).filter(
-        Appointment.patient_id == patient.id,
-        Appointment.is_deleted == False,
+        Appointment.patient_id.in_(ids),
+        Appointment.is_deleted == False,  # noqa: E712
         Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
     )
-    
+
     if data.appointment_id:
         appt = query.filter(Appointment.id == data.appointment_id).first()
         if not appt:
@@ -300,9 +361,16 @@ async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(g
         if not appts:
             raise HTTPException(404, "No se encontraron turnos activos para cancelar")
         if len(appts) > 1:
-            appts_list = ", ".join([f"ID: {a.id} el {a.start_time.strftime('%Y-%m-%d %H:%M')}" for a in appts])
-            raise HTTPException(400, f"Múltiples turnos encontrados. Por favor especifique cuál cancelar usando su ID: {appts_list}")
+            detalle = "; ".join(
+                f"{a.start_time.strftime('%d/%m a las %H:%M')} (id {a.id})" for a in appts
+            )
+            raise HTTPException(400, (
+                f"Hay {len(appts)} turnos activos: {detalle}. "
+                "Preguntale al paciente CUÁL quiere cancelar (por fecha y hora) "
+                "y volvé a llamar pasando el appointment_id de ese turno."
+            ))
         appt = appts[0]
+    patient = appt.patient
 
     appt.status = AppointmentStatus.cancelled
     db.commit()
@@ -361,29 +429,49 @@ def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends
 # ── Consultar Turnos ───────────────────────────────────
 @router.post("/my-appointments", dependencies=[Depends(verify_bot_key)])
 def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db)):
-    patient, opciones = resolver_paciente(db, data.dni, data.requester_phone)
-    if not patient:
-        raise HTTPException(404, _elegir_entre(opciones) if opciones else _NO_IDENTIFICADO)
+    """Turnos de quien escribe. Nunca pregunta "¿para quién?".
 
-    appts = db.query(Appointment).filter(
-        Appointment.patient_id == patient.id,
-        Appointment.is_deleted == False,
-        Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
-    ).order_by(Appointment.start_time).limit(10).all()
+    Antes, si el número tenía varias fichas, se le pedía al paciente que
+    eligiera de cuál quería ver los turnos. Con fichas duplicadas eso era
+    imposible de contestar ("¿Claudio Luna o Claudio Luna?") y la conversación
+    entraba en un loop. No hay motivo para preguntar: se muestran los turnos de
+    todos, aclarando de quién es cada uno cuando hay más de una persona.
+    """
+    if (data.dni or "").strip():
+        patient, _ = resolver_paciente(db, data.dni, data.requester_phone)
+        if not patient:
+            raise HTTPException(404, _NO_IDENTIFICADO)
+        pacientes = [patient]
+    else:
+        pacientes = pacientes_del_numero(db, data.requester_phone)
+        if not pacientes:
+            raise HTTPException(404, _NO_IDENTIFICADO)
 
-    return {
-        "patient": f"{patient.first_name} {patient.last_name}",
-        "appointments": [
-            {
+    varios = len(pacientes) > 1
+    turnos = []
+    for p in pacientes:
+        appts = db.query(Appointment).filter(
+            Appointment.patient_id == p.id,
+            Appointment.is_deleted == False,  # noqa: E712
+            Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
+        ).order_by(Appointment.start_time).limit(10).all()
+        for a in appts:
+            turnos.append({
                 "id": str(a.id),
                 "date": str(a.start_time),
                 "status": a.status.value,
                 "reason": a.reason,
                 "location": a.location,
                 "professional": a.professional.full_name if a.professional else "?",
-            }
-            for a in appts
-        ],
+                "paciente": f"{p.first_name} {p.last_name}".strip(),
+            })
+    turnos.sort(key=lambda t: t["date"])
+
+    nombres = ", ".join(f"{p.first_name} {p.last_name}".strip() for p in pacientes)
+    return {
+        "patient": nombres,
+        "varios_pacientes": varios,
+        "appointments": turnos,
     }
 
 

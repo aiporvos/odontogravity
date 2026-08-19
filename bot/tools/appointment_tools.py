@@ -350,7 +350,7 @@ TOOL_DEFINITIONS = [
                     "patient_last_name": {"type": "string", "description": "Apellido del paciente"},
                     "dni": {
                         "type": "string",
-                        "description": "DNI del paciente. NO se lo pidas: el sistema lo identifica por su número de WhatsApp. Mandalo vacío. Solo completalo si el sistema te avisó que no reconoce el número y el paciente te dio el DNI.",
+                        "description": "DNI del paciente. Normalmente va VACÍO: el sistema lo identifica por su número de WhatsApp. Completalo SOLO si el paciente te dio un DNI explícitamente (porque el sistema no reconoció el número, o para aclarar de quién se trata).",
                     },
                     "phone": {
                         "type": "string",
@@ -385,7 +385,7 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "dni": {"type": "string", "description": "DNI del paciente. NO se lo pidas: el sistema lo identifica por su número de WhatsApp. Mandalo vacío. Solo completalo si el sistema te avisó que no reconoce el número y el paciente te dio el DNI."},
+                    "dni": {"type": "string", "description": "DNI del paciente. Normalmente va VACÍO: el sistema lo identifica por su número de WhatsApp. Completalo SOLO si el paciente te dio un DNI explícitamente (porque el sistema no reconoció el número, o para aclarar de quién se trata)."},
                     "appointment_id": {
                         "type": "string",
                         "description": "ID del turno a cancelar (opcional, cancela el próximo si no se indica)",
@@ -403,7 +403,7 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "dni": {"type": "string", "description": "DNI del paciente. NO se lo pidas: el sistema lo identifica por su número de WhatsApp. Mandalo vacío. Solo completalo si el sistema te avisó que no reconoce el número y el paciente te dio el DNI."},
+                    "dni": {"type": "string", "description": "DNI del paciente. Normalmente va VACÍO: el sistema lo identifica por su número de WhatsApp. Completalo SOLO si el paciente te dio un DNI explícitamente (porque el sistema no reconoció el número, o para aclarar de quién se trata)."},
                     "appointment_id": {"type": "string", "description": "ID del turno a reprogramar"},
                     "new_datetime": {
                         "type": "string",
@@ -422,7 +422,7 @@ TOOL_DEFINITIONS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "dni": {"type": "string", "description": "DNI del paciente. NO se lo pidas: el sistema lo identifica por su número de WhatsApp. Mandalo vacío. Solo completalo si el sistema te avisó que no reconoce el número y el paciente te dio el DNI."},
+                    "dni": {"type": "string", "description": "DNI del paciente. Normalmente va VACÍO: el sistema lo identifica por su número de WhatsApp. Completalo SOLO si el paciente te dio un DNI explícitamente (porque el sistema no reconoció el número, o para aclarar de quién se trata)."},
                 },
                 "required": [],
             },
