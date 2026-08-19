@@ -1,5 +1,6 @@
 """YCloud WhatsApp Router - WhatsApp integration."""
 import os
+import re
 import json
 import logging
 import httpx
@@ -55,10 +56,20 @@ def get_or_create_session(db: Session, platform_user_id: str):
 HISTORY_LIMIT = 20
 
 
+# Los mensajes de hace muchas horas no son la misma conversación. Antes se
+# cargaban los últimos 20 sin mirar la fecha, así que el bot podía retomar a
+# mitad de camino una charla de hace semanas, como si el paciente nunca se
+# hubiera ido. La ficha del paciente (quien_me_escribe) da la continuidad que
+# de verdad importa; el hilo textual viejo solo confunde.
+VENTANA_CONVERSACION = timedelta(hours=6)
+
+
 def load_history(db: Session, session_id) -> list[dict]:
     # Fetch LATEST N messages, ordered oldest-to-newest for the LLM
+    corte = datetime.utcnow() - VENTANA_CONVERSACION
     subquery = db.query(ChatMessage).filter(
-        ChatMessage.session_id == session_id
+        ChatMessage.session_id == session_id,
+        ChatMessage.created_at >= corte,
     ).order_by(ChatMessage.created_at.desc()).limit(HISTORY_LIMIT).all()
     
     # Reverse them to be in chronological order
@@ -310,6 +321,61 @@ def _pide_humano(texto: str) -> bool:
     return any(f in t for f in _PEDIDOS_DE_HUMANO)
 
 
+# ── Garantías por código sobre lo que responde el modelo ─────────────────────
+# El prompt le pide al modelo que no se repita y que no se presente dos veces.
+# En producción no lo cumple: se presentaba en CADA mensaje ("¡Buenas noches!
+# Soy DentiBot...") y repetía la misma pregunta palabra por palabra cuando la
+# respuesta del paciente no le servía. Un prompt es un pedido; esto es una
+# garantía.
+
+_PRESENTACION = re.compile(
+    r"^[¡!]*\s*(hola|buen[oa]s?\s+(d[ií]as?|tardes|noches))?[!¡.,\s]*"
+    r"soy\s+dentibot[^.!?\n]*[.!?\n]+\s*",
+    re.IGNORECASE,
+)
+
+
+def quitar_presentacion(texto: str) -> str:
+    """Saca el "Soy DentiBot..." inicial cuando la charla ya venía empezada."""
+    limpio = _PRESENTACION.sub("", texto, count=1).lstrip()
+    # Si al sacarla no queda nada útil, se deja el original.
+    return limpio if len(limpio) > 15 else texto
+
+
+def _normalizar(texto: str) -> str:
+    return " ".join((texto or "").lower().split())
+
+
+def es_repeticion(nueva: str, anteriores: list[str]) -> bool:
+    """True si el bot está por decir casi lo mismo que ya dijo.
+
+    Compara contra sus últimas respuestas. Sin esto, si el paciente contesta
+    algo que el modelo no logra interpretar, se queda haciendo la misma
+    pregunta indefinidamente.
+    """
+    n = _normalizar(nueva)
+    if len(n) < 20:
+        return False
+    for previa in anteriores:
+        pv = _normalizar(previa)
+        if not pv:
+            continue
+        if n == pv:
+            return True
+        # Casi iguales: mismo arranque largo (reformulaciones mínimas).
+        corto = min(len(n), len(pv))
+        if corto > 60 and n[:60] == pv[:60]:
+            return True
+    return False
+
+
+SALIDA_DE_LOOP = (
+    "Perdón, me parece que no nos estamos entendiendo. 🙏\n"
+    "Le paso tu consulta a alguien del equipo para que te ayude directamente. "
+    "En un rato te escriben."
+)
+
+
 def _respuesta_ofrece(texto: str, opciones: list) -> list:
     """Las opciones que la respuesta realmente esta ofreciendo.
 
@@ -402,6 +468,18 @@ async def handle_text_message(remote_jid: str, text: str):
                 None, chat, text, history, requester_phone, estado_previo
             )
             logger.info(f"🤖 IA respondió: {response[:50]}...")
+
+            # 1) Si la charla ya venía empezada, no se vuelve a presentar.
+            if history:
+                response = quitar_presentacion(response)
+
+            # 2) Si está por repetir lo mismo que ya dijo, se corta y deriva.
+            ultimas = [m["content"] for m in history if m["role"] == "assistant"][-2:]
+            if es_repeticion(response, ultimas):
+                logger.warning(f"🔁 Respuesta repetida para {remote_jid}: se deriva a una persona.")
+                session.paused_until = datetime.utcnow() + PAUSA_INTERVENCION_HUMANA
+                db.commit()
+                response, opciones = SALIDA_DE_LOOP, None
 
             _guardar_estado(db, session, estado_nuevo)
             save_message(db, session.id, MessageRole.assistant, response)
