@@ -1,5 +1,6 @@
 
 from datetime import datetime, timedelta, time as py_time
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +9,8 @@ from backend.models.appointment import Appointment, AppointmentStatus, Appointme
 from backend.models.professional import Professional
 from backend.models.schedule import ClinicSchedule, ProfessionalSchedule, ProfessionalTimeOff, ClinicHoliday
 from backend.models.config import AppConfig
+
+logger = logging.getLogger(__name__)
 
 # El ruteo por motivo sale de las especialidades que cada profesional tiene
 # cargadas en su ficha (Profesionales -> Especialidades), no de un mapa fijo en
@@ -272,6 +275,37 @@ def slot_conflict(appointments, start: datetime, duration_minutes: int, chairs: 
     return None
 
 
+def _nombre_normalizado(nombre: str, apellido: str) -> str:
+    """'Claudio  LUNA' y 'claudio luna' son la misma persona."""
+    return " ".join(sorted(_palabras(f"{nombre or ''} {apellido or ''}")))
+
+
+def _misma_persona_ya_cargada(db: Session, telefono: str | None,
+                              nombre: str, apellido: str):
+    """La ficha existente que corresponde a esta persona, si la hay.
+
+    Se usa justo antes de crear una ficha nueva. Exige que coincidan el telefono
+    normalizado Y el nombre: en una familia el numero es el mismo, asi que
+    buscar solo por telefono uniria a la madre con el hijo.
+    """
+    from backend.services.whatsapp import normalize_to_e164
+
+    buscado = _nombre_normalizado(nombre, apellido)
+    if not telefono or not buscado:
+        return None
+
+    objetivo = normalize_to_e164(telefono)
+    if not objetivo:
+        return None
+
+    for p in db.query(Patient).filter(Patient.is_deleted == False).all():  # noqa: E712
+        if not p.phone or normalize_to_e164(p.phone) != objetivo:
+            continue
+        if _nombre_normalizado(p.first_name, p.last_name) == buscado:
+            return p
+    return None
+
+
 def duracion_para_motivo(reason: str) -> int:
     """Cuanto dura un turno segun el motivo.
 
@@ -427,6 +461,22 @@ def create_appointment_logic(
 
     # Find or create patient
     patient = db.query(Patient).filter(Patient.dni == dni, Patient.is_deleted == False).first()
+    if not patient:
+        # Antes de dar de alta una ficha nueva: ¿no sera la misma persona que ya
+        # esta cargada, con el DNI escrito distinto? Ese es el origen de los
+        # duplicados que limpia scripts/unificar_pacientes_duplicados.py: dos
+        # fichas de "Claudio Luna" con el mismo telefono y el historial partido.
+        # Se exige que coincidan telefono Y nombre: una familia comparte el
+        # numero, asi que el telefono solo no alcanza para decidir.
+        patient = _misma_persona_ya_cargada(
+            db, requester_phone or phone, patient_name, patient_last_name
+        )
+        if patient:
+            logger.warning(
+                "Ficha reutilizada para evitar un duplicado: %s %s ya existe con "
+                "DNI %s y se pidio dar de alta el DNI %s (mismo telefono y nombre).",
+                patient.first_name, patient.last_name, patient.dni, dni,
+            )
     if not patient:
         # Para pacientes nuevos preferimos el número real del canal (WhatsApp)
         # como teléfono: es la identidad verificada que luego usamos para
