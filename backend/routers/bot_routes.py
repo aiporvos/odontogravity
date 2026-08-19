@@ -109,6 +109,78 @@ def buscar_pacientes_por_telefono(db: Session, requester_phone: str | None) -> l
     return flexibles if len(flexibles) == 1 else []
 
 
+def _franja_preferida(db: Session, paciente) -> str | None:
+    """Si el paciente siempre saca turno en la misma franja, la devuelve.
+
+    Sale de sus turnos anteriores: no hace falta preguntarle algo que ya
+    demostro con sus elecciones. Se exige mayoria clara (>=70%) sobre al menos
+    2 turnos, para no inventar una preferencia con un solo dato.
+    """
+    turnos = db.query(Appointment).filter(
+        Appointment.patient_id == paciente.id,
+        Appointment.is_deleted == False,  # noqa: E712
+    ).order_by(Appointment.start_time.desc()).limit(10).all()
+    if len(turnos) < 2:
+        return None
+    manana = sum(1 for t in turnos if t.start_time.hour < 13)
+    tarde = len(turnos) - manana
+    if manana / len(turnos) >= 0.7:
+        return "mañana"
+    if tarde / len(turnos) >= 0.7:
+        return "tarde"
+    return None
+
+
+def ficha_para_el_bot(db: Session, paciente) -> dict:
+    """Lo que el bot deberia saber de un paciente conocido antes de hablarle.
+
+    Todo esto ya estaba en la base y no se estaba usando: el bot reconocia al
+    paciente por el telefono pero le hablaba como a un desconocido, volviendo a
+    preguntar la obra social y sin mencionar su tratamiento en curso.
+    """
+    from backend.models.odontogram import OdontogramEntry
+
+    ultimo = db.query(Appointment).filter(
+        Appointment.patient_id == paciente.id,
+        Appointment.is_deleted == False,  # noqa: E712
+        Appointment.status.in_([AppointmentStatus.completed, AppointmentStatus.confirmed]),
+    ).order_by(Appointment.start_time.desc()).first()
+
+    proximo = db.query(Appointment).filter(
+        Appointment.patient_id == paciente.id,
+        Appointment.is_deleted == False,  # noqa: E712
+        Appointment.start_time >= datetime.utcnow(),
+        Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
+    ).order_by(Appointment.start_time).first()
+
+    pendientes = db.query(OdontogramEntry).filter(
+        OdontogramEntry.patient_id == paciente.id,
+        OdontogramEntry.is_deleted == False,  # noqa: E712
+        OdontogramEntry.category == "treatment",
+    ).order_by(OdontogramEntry.created_at.desc()).limit(3).all()
+
+    return {
+        "nombre": paciente.first_name,
+        "nombre_completo": f"{paciente.first_name} {paciente.last_name}".strip(),
+        "obra_social": paciente.insurance_name or "Particular",
+        "ultimo_profesional": (
+            ultimo.professional.full_name if ultimo and ultimo.professional else None
+        ),
+        "ultima_visita": ultimo.start_time.strftime("%d/%m/%Y") if ultimo else None,
+        "proximo_turno": (
+            {
+                "fecha": proximo.start_time.strftime("%d/%m/%Y a las %H:%M"),
+                "profesional": proximo.professional.full_name if proximo.professional else None,
+                "motivo": proximo.reason,
+            } if proximo else None
+        ),
+        "tratamientos_pendientes": [
+            (e.description or f"pieza {e.tooth_number}") for e in pendientes
+        ],
+        "franja_preferida": _franja_preferida(db, paciente),
+    }
+
+
 @router.post("/identificar", dependencies=[Depends(verify_bot_key)])
 def bot_identificar(data: dict = Body(...), db: Session = Depends(get_db)):
     """Quien es el que escribe, segun su numero de WhatsApp.
@@ -118,17 +190,10 @@ def bot_identificar(data: dict = Body(...), db: Session = Depends(get_db)):
     cualquiera. De hecho el sistema ya confiaba mas en el telefono — pedia el
     DNI y despues lo validaba contra el numero.
     """
-    pacientes = buscar_pacientes_por_telefono(db, data.get("requester_phone"))
+    pacientes = pacientes_del_numero(db, data.get("requester_phone"))
     return {
         "encontrados": len(pacientes),
-        "pacientes": [
-            {
-                "dni": p.dni,
-                "nombre": f"{p.first_name} {p.last_name}".strip(),
-                "obra_social": p.insurance_name or "Particular",
-            }
-            for p in pacientes
-        ],
+        "pacientes": [dict(ficha_para_el_bot(db, p), dni=p.dni) for p in pacientes],
     }
 
 
