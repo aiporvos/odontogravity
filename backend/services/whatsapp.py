@@ -118,3 +118,102 @@ async def send_whatsapp_message(number: str, text: str):
             r.raise_for_status()
         except Exception as e:
             logger.error(f"❌ Failed to send WhatsApp message via YCloud: {e}")
+
+
+# ── Mensajes interactivos ────────────────────────────────────────────────────
+# Hasta ahora el bot solo mandaba texto plano, asi que el paciente tenia que
+# tipear la obra social, el motivo y el horario. De ahi salian cosas como
+# "Pami" cargado como motivo de consulta. Con listas y botones elige de
+# opciones cerradas y esos errores desaparecen.
+#
+# Limites de WhatsApp: 10 filas por lista (sumando todas las secciones), 3
+# botones, y 20 caracteres por titulo de fila o boton. Si se pasa, la API
+# rechaza el mensaje entero, asi que se recorta y se avisa en el log.
+
+MAX_FILAS_LISTA = 10
+MAX_BOTONES = 3
+MAX_TITULO = 20
+
+
+async def _enviar_interactivo(number: str, payload_interactivo: dict, texto_fallback: str) -> bool:
+    """Manda un mensaje interactivo. Si falla, cae a texto plano.
+
+    Devuelve True si se mando como interactivo. El fallback importa: si YCloud
+    rechaza el formato, es preferible que el paciente reciba el texto a que no
+    reciba nada.
+    """
+    api_key = get_config("YCLOUD_API_KEY", "")
+    from_phone = get_config("YCLOUD_FROM_PHONE", "")
+    to_phone = normalize_to_e164(number)
+    from_phone_norm = normalize_to_e164(from_phone)
+
+    if not (api_key and to_phone and from_phone_norm):
+        await send_whatsapp_message(number, texto_fallback)
+        return False
+
+    payload = {
+        "from": from_phone_norm,
+        "to": to_phone,
+        "type": "interactive",
+        "interactive": payload_interactivo,
+    }
+    async with httpx.AsyncClient() as client:
+        try:
+            r = await client.post(
+                "https://api.ycloud.com/v2/whatsapp/messages",
+                json=payload,
+                headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+            )
+            if r.status_code >= 400:
+                logger.error(f"❌ YCloud rechazó el interactivo ({r.status_code}): {r.text[:300]}")
+                await send_whatsapp_message(number, texto_fallback)
+                return False
+            logger.info(f"📤 Interactivo enviado a {to_phone}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error enviando interactivo: {e}")
+            await send_whatsapp_message(number, texto_fallback)
+            return False
+
+
+async def send_whatsapp_list(number: str, cuerpo: str, opciones: list[str],
+                             boton: str = "Ver opciones", titulo: str | None = None) -> bool:
+    """Lista tocable de una sola sección. `opciones` son los textos a elegir."""
+    filas = []
+    for i, op in enumerate(opciones[:MAX_FILAS_LISTA]):
+        filas.append({"id": f"op_{i}", "title": str(op)[:MAX_TITULO]})
+    if len(opciones) > MAX_FILAS_LISTA:
+        logger.warning(f"Lista recortada de {len(opciones)} a {MAX_FILAS_LISTA} opciones")
+    if not filas:
+        await send_whatsapp_message(number, cuerpo)
+        return False
+
+    interactivo = {
+        "type": "list",
+        "body": {"text": cuerpo},
+        "action": {
+            "button": boton[:MAX_TITULO],
+            "sections": [{"title": (titulo or "Opciones")[:24], "rows": filas}],
+        },
+    }
+    fallback = cuerpo + "\n\n" + "\n".join(f"• {o}" for o in opciones[:MAX_FILAS_LISTA])
+    return await _enviar_interactivo(number, interactivo, fallback)
+
+
+async def send_whatsapp_buttons(number: str, cuerpo: str, botones: list[str]) -> bool:
+    """Hasta 3 botones de respuesta rápida (ej: Sí / No)."""
+    acciones = [
+        {"type": "reply", "reply": {"id": f"btn_{i}", "title": str(b)[:MAX_TITULO]}}
+        for i, b in enumerate(botones[:MAX_BOTONES])
+    ]
+    if not acciones:
+        await send_whatsapp_message(number, cuerpo)
+        return False
+
+    interactivo = {
+        "type": "button",
+        "body": {"text": cuerpo},
+        "action": {"buttons": acciones},
+    }
+    fallback = cuerpo + "\n\n" + " / ".join(botones[:MAX_BOTONES])
+    return await _enviar_interactivo(number, interactivo, fallback)

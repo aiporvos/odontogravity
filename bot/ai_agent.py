@@ -8,7 +8,9 @@ import json
 import logging
 from openai import OpenAI
 
-from bot.tools.appointment_tools import TOOL_DEFINITIONS, execute_tool, set_requester_phone
+from bot.tools.appointment_tools import (
+    TOOL_DEFINITIONS, execute_tool, set_requester_phone, tomar_opciones_ofrecidas,
+)
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
 from backend.models.insurance import Insurance
@@ -220,7 +222,8 @@ def _get_providers() -> list[str]:
 
 # ── Main chat function ───────────────────────────────────────────────────────
 
-def chat(user_message: str, history: list[dict] | None = None, requester_phone: str | None = None) -> str:
+def chat(user_message: str, history: list[dict] | None = None,
+         requester_phone: str | None = None) -> tuple[str, list | None]:
     """Process a user message and return agent response.
 
     requester_phone: número real del canal (ej. WhatsApp) de quien escribe.
@@ -293,7 +296,7 @@ def chat(user_message: str, history: list[dict] | None = None, requester_phone: 
                 if not msg.tool_calls:
                     result = msg.content or ""
                     logger.info(f"AI_AGENT -> Respuesta final (ronda {round_num + 1}): {result[:80]}...")
-                    return result
+                    return result, tomar_opciones_ofrecidas()
 
                 # Execute each tool call
                 logger.info(f"AI_AGENT -> Ronda {round_num + 1}: {len(msg.tool_calls)} tool call(s)")
@@ -334,7 +337,7 @@ def chat(user_message: str, history: list[dict] | None = None, requester_phone: 
                 temperature=0.3,
                 max_tokens=1000,
             )
-            return response.choices[0].message.content or ""
+            return response.choices[0].message.content or "", tomar_opciones_ofrecidas()
 
         except Exception as e:
             logger.error(f"AI_AGENT -> Error usando proveedor {provider}: {e}")
@@ -358,4 +361,4 @@ def chat(user_message: str, history: list[dict] | None = None, requester_phone: 
         "No pudimos procesar tu solicitud automáticamente debido a un "
         "inconveniente técnico con nuestra Inteligencia Artificial. "
         "Un agente se pondrá en contacto a la brevedad."
-    )
+    ), None

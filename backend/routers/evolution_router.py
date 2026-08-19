@@ -12,7 +12,7 @@ from bot.ai_agent import chat
 from backend.database import get_db, SessionLocal
 from backend.models.chat_session import ChatSession, ChatMessage, ChatPlatform, MessageRole
 from backend.models.config import AppConfig
-from backend.services.whatsapp import send_whatsapp_message, normalize_to_e164
+from backend.services.whatsapp import send_whatsapp_message, send_whatsapp_list, normalize_to_e164
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/whatsapp", tags=["WhatsApp"])
@@ -222,6 +222,33 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
     logger.warning(f"⚠️ Tipo de mensaje no soportado: {message_type}")
     return {"status": "ignored_unsupported_type"}
 
+def _respuesta_ofrece(texto: str, opciones: list) -> list:
+    """Las opciones que la respuesta realmente esta ofreciendo.
+
+    La tool publica los horarios que encontro, pero el modelo puede haberlos
+    consultado y despues decir otra cosa (pedir un dato, aclarar algo). Mandar
+    una lista que no se corresponde con el texto seria peor que no mandarla,
+    asi que solo se ofrecen las opciones que aparecen mencionadas.
+    """
+    if not opciones:
+        return []
+    return [o for o in opciones if str(o) in texto]
+
+
+async def _responder(remote_jid: str, texto: str, opciones: list | None):
+    """Manda la respuesta como lista tocable si corresponde, o como texto."""
+    ofrecidas = _respuesta_ofrece(texto, opciones or [])
+    # Con una sola opcion una lista es mas incomoda que el texto.
+    if len(ofrecidas) >= 2:
+        enviado = await send_whatsapp_list(
+            remote_jid, texto, ofrecidas,
+            boton="Elegir horario", titulo="Horarios disponibles",
+        )
+        if enviado:
+            return
+    await send_whatsapp_message(remote_jid, texto)
+
+
 async def handle_text_message(remote_jid: str, text: str):
     # Acquire lock for this user
     if remote_jid not in user_locks:
@@ -252,11 +279,13 @@ async def handle_text_message(remote_jid: str, text: str):
             requester_phone = normalize_to_e164(remote_jid)
             # chat is sync, run in executor to not block event loop
             loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, chat, text, history, requester_phone)
+            response, opciones = await loop.run_in_executor(
+                None, chat, text, history, requester_phone
+            )
             logger.info(f"🤖 IA respondió: {response[:50]}...")
-            
+
             save_message(db, session.id, MessageRole.assistant, response)
-            await send_whatsapp_message(remote_jid, response)
+            await _responder(remote_jid, response, opciones)
         except Exception as e:
             logger.error(f"Error handling WA text: {e}")
             await send_whatsapp_message(remote_jid, "Lo siento, tuve un problema interno al procesar tu mensaje. Por favor, avisale al administrador que revise la configuración de la Inteligencia Artificial (API Keys o Modelos).")

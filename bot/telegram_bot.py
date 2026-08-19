@@ -135,7 +135,7 @@ async def process_text_message(message: types.Message, text: str):
         save_message(db, session.id, MessageRole.user, text)
 
         # Get AI response
-        response = chat(text, history)
+        response, _opciones = chat(text, history)  # Telegram no usa listas interactivas
 
         # Save AI response
         save_message(db, session.id, MessageRole.assistant, response)

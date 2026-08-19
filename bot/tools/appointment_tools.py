@@ -16,12 +16,35 @@ _requester_phone: contextvars.ContextVar = contextvars.ContextVar("requester_pho
 
 
 def set_requester_phone(phone):
-    """Registra el teléfono de quien envía el mensaje para la conversación actual."""
+    """Registra el teléfono de quien envía el mensaje para la conversación actual.
+
+    También limpia las opciones del mensaje anterior: se llama al inicio de
+    cada turno, así no se arrastran horarios viejos a una respuesta nueva.
+    """
     _requester_phone.set(phone or None)
+    _opciones_ofrecidas.set(None)
 
 
 def _current_requester_phone():
     return _requester_phone.get()
+
+
+# Opciones concretas que la ultima tool dejo sobre la mesa (ej: los horarios
+# disponibles). El webhook las lee despues de que el modelo respondio y, si la
+# respuesta efectivamente las esta ofreciendo, las manda como lista tocable en
+# vez de texto. Mismo patron que _requester_phone: contextvar por conversacion.
+_opciones_ofrecidas: contextvars.ContextVar = contextvars.ContextVar("opciones_ofrecidas", default=None)
+
+
+def set_opciones_ofrecidas(opciones):
+    _opciones_ofrecidas.set(list(opciones) if opciones else None)
+
+
+def tomar_opciones_ofrecidas():
+    """Devuelve las opciones pendientes y las limpia (se consumen una sola vez)."""
+    ops = _opciones_ofrecidas.get()
+    _opciones_ofrecidas.set(None)
+    return ops
 
 
 # ── Tool implementations ─────────────────────────────────────────────────────
@@ -149,6 +172,9 @@ def consultar_disponibilidad(
                 f"No hay turnos disponibles en {location} en las próximas dos semanas. "
                 f"Decíselo al paciente y ofrecele que deje sus datos para que lo contacten."
             )
+
+        # Se publican para que el webhook pueda ofrecerlos como lista tocable.
+        set_opciones_ofrecidas(slots)
 
         aviso = ""
         if data.get("movido"):
