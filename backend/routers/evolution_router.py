@@ -348,9 +348,19 @@ async def handle_text_message(remote_jid: str, text: str):
             session = get_or_create_session(db, remote_jid)
 
             if text.strip().lower() == "reset":
+                # Limpia TODO lo que arrastra la conversación, no solo los
+                # mensajes: si quedara el estado (obra social, motivo) el bot
+                # seguiría "recordando" datos y no sería un arranque de cero;
+                # y si quedara la pausa, no volvería a responder.
                 db.query(ChatMessage).filter(ChatMessage.session_id == session.id).delete()
+                session.context_data = None
+                session.paused_until = None
                 db.commit()
-                await send_whatsapp_message(remote_jid, "✅ Historial borrado. Empecemos de cero.")
+                await send_whatsapp_message(
+                    remote_jid,
+                    "✅ Listo, empezamos de cero: borré el historial, los datos que "
+                    "habías dado y reactivé el bot.",
+                )
                 return
 
             history = load_history(db, session.id)
