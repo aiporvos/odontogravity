@@ -56,6 +56,24 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass # Swallow if already exists or not PG
 
+    # Columnas agregadas despues de que la tabla ya existia. create_all() crea
+    # tablas nuevas pero NO agrega columnas a las que ya estan, y las
+    # migraciones de Alembic vienen fallando en este deploy (la primera choca
+    # con una columna que create_all ya habia creado). Sin esto habria que
+    # correr el ALTER a mano en produccion despues de cada deploy.
+    columnas_nuevas = [
+        ("chat_sessions", "paused_until", "TIMESTAMP"),
+    ]
+    with engine.connect() as conn:
+        for tabla, columna, tipo in columnas_nuevas:
+            try:
+                conn.execute(text(
+                    f"ALTER TABLE {tabla} ADD COLUMN IF NOT EXISTS {columna} {tipo}"
+                ))
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"No se pudo asegurar {tabla}.{columna}: {e}")
+
     # Seed initial data
     db = SessionLocal()
     try:
