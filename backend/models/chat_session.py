@@ -26,6 +26,11 @@ class ChatSession(Base):
     platform_user_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     patient_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("patients.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Hasta cuando el bot NO debe responder en esta conversacion. Se setea solo
+    # cuando el personal contesta a mano desde el WhatsApp de la clinica, o
+    # cuando el paciente pide hablar con una persona. Vence sola para que nadie
+    # quede sin bot para siempre por un descuido.
+    paused_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     context_data: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON con datos recolectados")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

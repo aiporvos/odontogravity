@@ -4,7 +4,7 @@ import json
 import logging
 import httpx
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Request, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 
@@ -157,6 +157,24 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
     # Evitar bucles: Ignorar si el mensaje proviene de nuestro propio número
     from_phone_norm = normalize_to_e164(get_config("YCLOUD_FROM_PHONE"))
     if from_phone_norm and normalize_to_e164(from_number) == from_phone_norm:
+        # Un mensaje "propio" puede ser el eco del bot o una respuesta que el
+        # personal tipeó a mano desde el WhatsApp de la clínica. En el segundo
+        # caso el bot no se enteraba y le seguía respondiendo al paciente por
+        # su cuenta, pisándose con lo que la persona ya le había dicho.
+        #
+        # Se distingue comparando con lo último que mandó el bot: si el texto
+        # no coincide, lo escribió una persona y el bot se calla un rato en esa
+        # conversación. Sin palabras clave que nadie tenga que recordar.
+        texto_propio = ""
+        if msg_data.get("type") == "text":
+            texto_propio = (msg_data.get("text", {}).get("body") or "").strip()
+        clean_to = "".join(filter(str.isdigit, to_number or ""))
+        if texto_propio and clean_to:
+            background_tasks.add_task(
+                _quizas_pausar_por_intervencion_humana,
+                f"{clean_to}@s.whatsapp.net",
+                texto_propio,
+            )
         logger.info("⏭️ Mensaje enviado por nosotros mismos (ignorado)")
         return {"status": "ignored_self"}
 
@@ -222,6 +240,51 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
     logger.warning(f"⚠️ Tipo de mensaje no soportado: {message_type}")
     return {"status": "ignored_unsupported_type"}
 
+# Cuánto se calla el bot cuando una persona toma la conversación.
+PAUSA_INTERVENCION_HUMANA = timedelta(minutes=30)
+
+
+async def _quizas_pausar_por_intervencion_humana(remote_jid: str, texto: str):
+    """Pausa el bot si el mensaje propio NO fue del bot, sino de una persona."""
+    db = SessionLocal()
+    try:
+        session = get_or_create_session(db, remote_jid)
+        ultimo_bot = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session.id,
+                    ChatMessage.role == MessageRole.assistant)
+            .order_by(ChatMessage.created_at.desc())
+            .first()
+        )
+        # Si coincide con lo último que dijo el bot, es su propio eco.
+        if ultimo_bot and ultimo_bot.content.strip()[:120] == texto[:120]:
+            return
+        session.paused_until = datetime.utcnow() + PAUSA_INTERVENCION_HUMANA
+        db.commit()
+        logger.info(
+            f"🔕 Una persona respondió a mano en {remote_jid}: el bot se calla "
+            f"{int(PAUSA_INTERVENCION_HUMANA.total_seconds() // 60)} minutos."
+        )
+    except Exception as e:
+        logger.error(f"Error evaluando intervención humana: {e}")
+    finally:
+        db.close()
+
+
+# Frases con las que el paciente pide hablar con una persona.
+_PEDIDOS_DE_HUMANO = (
+    "hablar con una persona", "hablar con alguien", "atencion humana",
+    "atención humana", "con un humano", "operador", "una persona real",
+    "no quiero el bot", "hablar con la clinica", "hablar con la clínica",
+    "quiero hablar con", "comunicarme con alguien",
+)
+
+
+def _pide_humano(texto: str) -> bool:
+    t = (texto or "").lower()
+    return any(f in t for f in _PEDIDOS_DE_HUMANO)
+
+
 def _respuesta_ofrece(texto: str, opciones: list) -> list:
     """Las opciones que la respuesta realmente esta ofreciendo.
 
@@ -270,7 +333,27 @@ async def handle_text_message(remote_jid: str, text: str):
             save_message(db, session.id, MessageRole.user, text)
             
             if get_config("BOT_IS_ACTIVE", "true") == "false":
-                logger.info(f"⏸️ Bot pausado. Mensaje de {remote_jid} guardado, pero no se responde.")
+                logger.info(f"⏸️ Bot pausado (global). Mensaje de {remote_jid} guardado, sin responder.")
+                return
+
+            # Alguien de la clínica está atendiendo esta conversación a mano.
+            if session.paused_until and session.paused_until > datetime.utcnow():
+                logger.info(
+                    f"⏸️ Conversación atendida por una persona hasta {session.paused_until}. "
+                    f"Mensaje de {remote_jid} guardado, sin responder."
+                )
+                return
+
+            # El paciente pide hablar con alguien: el bot se corre y avisa.
+            if _pide_humano(text):
+                session.paused_until = datetime.utcnow() + PAUSA_INTERVENCION_HUMANA
+                db.commit()
+                logger.info(f"🙋 {remote_jid} pidió hablar con una persona.")
+                await send_whatsapp_message(
+                    remote_jid,
+                    "Dale, aviso a la clínica para que te contacten. 😊 "
+                    "En breve te responde una persona del equipo.",
+                )
                 return
             
             logger.info(f"🧠 Consultando a la IA para {remote_jid}...")
