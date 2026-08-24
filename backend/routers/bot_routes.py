@@ -641,8 +641,14 @@ def bot_verificar_obra_social(data: dict = Body(...), db: Session = Depends(get_
     from backend.services.appointment_service import match_insurance
     from backend.models.insurance import Insurance
 
+    from backend.services.appointment_service import buscar_obras_sociales
+
     consultada = (data.get("obra_social") or "").strip()
     encontrada = match_insurance(consultada, db)
+    # Las que se PARECEN a lo consultado. Sirve cuando el paciente escribio un
+    # fragmento ("swi") o la escribio mal: en vez de decirle que no esta
+    # cubierta, se le ofrecen las candidatas.
+    parecidas = [] if encontrada else buscar_obras_sociales(db, consultada)
     activas = [
         i.name for i in db.query(Insurance).filter(Insurance.is_active == True).order_by(Insurance.name).all()
         if i.name.lower() != "particular"
@@ -651,6 +657,7 @@ def bot_verificar_obra_social(data: dict = Body(...), db: Session = Depends(get_
         "consultada": consultada,
         "cubierta": bool(encontrada),
         "nombre": encontrada.name if encontrada else "Particular",
+        "parecidas": parecidas,
         "activas": activas,
     }
 

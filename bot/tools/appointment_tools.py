@@ -29,6 +29,41 @@ def _current_requester_phone():
     return _requester_phone.get()
 
 
+# Lo ultimo que escribio el paciente, tal cual. Las tools lo necesitan porque el
+# modelo no siempre reenvia lo que le dijeron: se le pide que pase "sw" como
+# busqueda y llama a la herramienta sin parametros, mostrando la misma lista de
+# nuevo. Teniendo el mensaje original, el codigo lo resuelve igual.
+_ultimo_mensaje: contextvars.ContextVar = contextvars.ContextVar("ultimo_mensaje", default="")
+
+
+def set_ultimo_mensaje(texto: str):
+    _ultimo_mensaje.set(texto or "")
+
+
+# Palabras que son respuestas de conversacion, no el nombre de una obra social.
+_NO_ES_BUSQUEDA = {
+    "si", "no", "ok", "dale", "hola", "gracias", "bueno", "listo", "particular",
+    "obra", "social", "obrasocial", "dime", "cual", "cuales", "otra", "otro",
+    "dale si", "no la veo", "no esta", "dale gracias",
+}
+
+
+def _texto_parece_busqueda(texto: str) -> str:
+    """El fragmento que el paciente escribio buscando su obra social, o "".
+
+    "sw", "swi", "ospe", "swiss medical" son busquedas. "si", "hola" o una frase
+    larga, no.
+    """
+    limpio = " ".join((texto or "").strip().lower().split())
+    if not limpio or limpio in _NO_ES_BUSQUEDA:
+        return ""
+    if len(limpio) > 30 or len(limpio.split()) > 3:
+        return ""   # una frase, no el nombre de una obra social
+    if not any(c.isalpha() for c in limpio):
+        return ""
+    return limpio
+
+
 # Opciones concretas que la ultima tool dejo sobre la mesa (ej: los horarios
 # disponibles). El webhook las lee despues de que el modelo respondio y, si la
 # respuesta efectivamente las esta ofreciendo, las manda como lista tocable en
@@ -240,8 +275,26 @@ def verificar_obra_social(obra_social: str) -> str:
                 f"CUBIERTA. La clínica atiende {d['nombre']}. "
                 f"Seguí normalmente con el turno usando obra_social='{d['nombre']}'."
             )
-        # No cubierta: en vez de dejarlo adivinando, se le vuelve a mostrar la
-        # lista tocable con las que si se atienden, mas "Particular".
+        # No cubierta. Pero antes de darla por perdida: puede ser un fragmento
+        # ("swi") o estar mal escrita ("ospeysin"), asi que se buscan las que se
+        # parecen. El modelo llama a esta herramienta cuando deberia llamar a
+        # listar_obras_sociales con busqueda, y el paciente no tiene por que
+        # pagar ese error: se resuelve igual.
+        parecidas = list(d.get("parecidas") or [])
+        if parecidas:
+            set_opciones_ofrecidas(
+                parecidas + ["Particular"], siempre=True,
+                titulo="Obras sociales", boton="Elegir cobertura",
+            )
+            return (
+                f"'{d['consultada']}' no es exactamente el nombre de ninguna, pero "
+                f"encontré {len(parecidas)} que se le parecen y ya se las estás "
+                f"mostrando como lista tocable. Preguntale si alguna es la suya, en "
+                f"UNA frase corta. NO las enumeres en el texto. "
+                f"🚫 NO le digas todavía que no está cubierta ni le ofrezcas Particular: "
+                f"lo más probable es que la escribió incompleta."
+            )
+
         activas = list(d["activas"])
         if activas:
             set_opciones_ofrecidas(
@@ -249,7 +302,7 @@ def verificar_obra_social(obra_social: str) -> str:
                 titulo="Obras sociales", boton="Ver cuáles atendemos",
             )
         return (
-            f"NO CUBIERTA. La clínica no atiende '{d['consultada']}'. "
+            f"NO CUBIERTA. La clínica no atiende '{d['consultada']}' ni nada parecido. "
             f"Decile con amabilidad que no trabajamos con esa y que su atención sería "
             f"PARTICULAR. Ya le estás mostrando la lista de las que sí se atienden: "
             f"invitalo a elegir una de ahí, o Particular si prefiere. "
@@ -270,7 +323,15 @@ def listar_obras_sociales(busqueda: str = "") -> str:
 
     La clinica tiene ~45 cargadas y una lista de WhatsApp admite 10 filas, asi
     que sin `busqueda` se muestran las mas usadas y con `busqueda` se filtra.
+
+    Si el modelo no pasa `busqueda` pero el paciente acaba de escribir algo que
+    parece el nombre de una obra social, se usa eso. Sin esto el paciente
+    escribia "sw", el modelo llamaba a la herramienta sin parametros y le
+    aparecia la misma lista otra vez, como si no lo hubiera leido.
     """
+    if not (busqueda or "").strip():
+        busqueda = _texto_parece_busqueda(_ultimo_mensaje.get())
+
     try:
         r = httpx.get(f"{API_BASE}/api/bot/obras-sociales",
                       params={"q": busqueda} if busqueda else None,

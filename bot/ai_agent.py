@@ -11,6 +11,7 @@ from openai import OpenAI
 from bot.tools.appointment_tools import (
     TOOL_DEFINITIONS, execute_tool, set_requester_phone, tomar_opciones_ofrecidas,
     set_estado_conversacion, get_estado_conversacion, resumen_estado,
+    set_ultimo_mensaje,
 )
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
@@ -302,6 +303,9 @@ def chat(user_message: str, history: list[dict] | None = None,
     logger.info(f"AI_AGENT_IN -> Msg: '{user_message}', HistLen: {len(history) if history else 0}")
 
     set_requester_phone(requester_phone)
+    # El mensaje crudo del paciente, para las tools que lo necesitan cuando el
+    # modelo no reenvia lo que le dijeron (ej: buscar una obra social por "sw").
+    set_ultimo_mensaje(user_message)
     # Datos que el paciente ya dio en esta conversacion. Viajan por parametro y
     # no por contextvar: chat() corre en un executor (otro hilo) y el webhook
     # no veria lo que se setea adentro.
