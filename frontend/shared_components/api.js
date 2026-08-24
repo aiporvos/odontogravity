@@ -156,6 +156,13 @@ const API = {
     updateInsurance(id, data) { return this.put(`/clinic/insurances/${id}`, data); },
     deleteInsurance(id) { return this.del(`/clinic/insurances/${id}`); },
 
+    // Tipos de consulta: que dura cada motivo y que especialidad lo atiende.
+    // Vivia hardcodeado en el backend; ahora la clinica lo edita solo.
+    getTiposConsulta() { return this.get('/admin/tipos-consulta'); },
+    createTipoConsulta(data) { return this.post('/admin/tipos-consulta', data); },
+    updateTipoConsulta(id, data) { return this.put(`/admin/tipos-consulta/${id}`, data); },
+    deleteTipoConsulta(id) { return this.del(`/admin/tipos-consulta/${id}`); },
+
     getConfigs() { return this.get('/admin/configs'); },
     setConfig(key, value, description = '') { return this.post('/admin/configs', { key, value, description }); },
     setConfigsBulk(values) { return this.post('/admin/configs/bulk', values); },

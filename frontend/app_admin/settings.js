@@ -54,12 +54,15 @@ Router.register('settings', async (container) => {
 
     let locations = [];
     let insurances = [];
+    let tipos = [];
     let configs = [];
     try {
-        [locations, insurances, configs] = await Promise.all([
+        [locations, insurances, configs, tipos] = await Promise.all([
             API.getLocations(), 
             API.getInsurances(),
-            API.getConfigs()
+            API.getConfigs(),
+            // Si falla (base sin migrar todavia) no se rompe la pantalla entera.
+            API.getTiposConsulta().catch(() => [])
         ]);
     } catch (e) {
         // Antes esto se tragaba el error y se seguía renderizando el formulario
@@ -115,6 +118,19 @@ Router.register('settings', async (container) => {
                         <button class="btn btn-sm btn-primary" onclick="SettingsPage.showInsuranceForm()">+ Nueva</button>
                     </div>
                     <div id="obras-sociales-body">${SettingsPage.renderInsurances(insurances, 1)}</div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header" style="justify-content:space-between;display:flex;align-items:center;">
+                        <h2>🦷 Tipos de Consulta</h2>
+                        <button class="btn btn-sm btn-primary" onclick="SettingsPage.showTipoForm()">+ Nuevo</button>
+                    </div>
+                    <p style="font-size:.85rem;color:var(--slate-500);margin:.25rem 0 1rem;">
+                        Definen <strong>cuánto dura</strong> cada turno y <strong>qué profesional</strong> lo
+                        atiende. El bot usa los sinónimos para entender cómo lo dice el paciente
+                        ("sacar una muela" → Extracción).
+                    </p>
+                    <div id="tipos-consulta-body">${SettingsPage.renderTipos(tipos)}</div>
                 </div>
             </div>
 
@@ -262,6 +278,7 @@ Router.register('settings', async (container) => {
         </div>
     `;
     SettingsPage._insurances = insurances;
+    SettingsPage._tipos = tipos;
 });
 
 window.SettingsPage = {
@@ -452,6 +469,118 @@ window.SettingsPage = {
         if (await UI.confirm('¿Eliminar esta obra social?')) {
             try {
                 await API.deleteInsurance(id);
+                Router.reload();
+            } catch (err) { UI.toast(err.message, 'error'); }
+        }
+    },
+
+    // ── Tipos de consulta ───────────────────────────────
+    // Antes esto vivia hardcodeado en el backend: se podian cargar
+    // profesionales desde el panel, pero para decir cuanto dura una endodoncia
+    // habia que tocar el codigo y desplegar.
+    _tipos: [],
+
+    renderTipos(tipos) {
+        if (!tipos || !tipos.length) {
+            return `<div class="empty-state"><div class="empty-state-text">
+                No hay tipos de consulta cargados</div></div>`;
+        }
+        const filas = tipos.map(t => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:.6rem 0;border-bottom:1px solid var(--slate-100);">
+                <div style="min-width:0;">
+                    <strong>${t.nombre}</strong>
+                    <span class="badge badge-confirmed" style="margin-left:.4rem;">${t.duracion_minutos} min</span>
+                    <div style="font-size:.8rem;color:var(--slate-500);">
+                        ${t.especialidad ? `Atiende: ${t.especialidad}` : 'Cualquier profesional'}
+                        ${t.sinonimos && t.sinonimos.length ? ` · ${t.sinonimos.length} sinónimos` : ''}
+                    </div>
+                </div>
+                <div style="display:flex;gap:.4rem;align-items:center;flex-shrink:0;">
+                    <span class="badge badge-${t.is_active ? 'confirmed' : 'cancelled'}">${t.is_active ? 'Activo' : 'Inactivo'}</span>
+                    <button class="btn btn-icon" onclick="SettingsPage.showTipoForm('${t.id}')">✏️</button>
+                    <button class="btn btn-icon text-red" onclick="SettingsPage.deleteTipo('${t.id}')">🗑️</button>
+                </div>
+            </div>
+        `).join('');
+        return `<div>${filas}</div>`;
+    },
+
+    showTipoForm(id = null) {
+        const t = id ? (this._tipos || []).find(x => x.id === id) || {} : {};
+        const esNuevo = !id;
+
+        UI.modal(`
+            <h3>${esNuevo ? 'Nuevo Tipo de Consulta' : 'Editar Tipo de Consulta'}</h3>
+            <form id="modal-form-tipo" style="display:flex;flex-direction:column;gap:1rem;">
+                <div class="form-group">
+                    <label>Nombre</label>
+                    <input type="text" name="nombre" required placeholder="Ej: Extracción"
+                           value="${t.nombre || ''}">
+                </div>
+                <div class="form-group">
+                    <label>Duración (minutos)</label>
+                    <input type="number" name="duracion_minutos" required min="5" max="240" step="5"
+                           value="${t.duracion_minutos || 15}">
+                    <small style="color:var(--slate-500);">Cuánto ocupa en la agenda.</small>
+                </div>
+                <div class="form-group">
+                    <label>Especialidad que lo atiende</label>
+                    <input type="text" name="especialidad" placeholder="Ej: Extracción"
+                           value="${t.especialidad || ''}">
+                    <small style="color:var(--slate-500);">
+                        Tiene que coincidir con una especialidad cargada en la ficha del
+                        profesional. Vacío = lo puede atender cualquiera.
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label>Sinónimos</label>
+                    <input type="text" name="sinonimos" placeholder="sacar, muela, cordal"
+                           value="${(t.sinonimos || []).join(', ')}">
+                    <small style="color:var(--slate-500);">
+                        Cómo lo dicen los pacientes, separado por comas. Nadie escribe
+                        "Extracción" en WhatsApp.
+                    </small>
+                </div>
+                ${esNuevo ? '' : `
+                <div class="form-group">
+                    <label>Estado</label>
+                    <select name="is_active">
+                        <option value="true" ${t.is_active ? 'selected' : ''}>Activo</option>
+                        <option value="false" ${!t.is_active ? 'selected' : ''}>Inactivo</option>
+                    </select>
+                </div>`}
+                <button type="submit" class="btn btn-primary">${esNuevo ? 'Crear' : 'Guardar Cambios'}</button>
+            </form>
+        `);
+
+        document.getElementById('modal-form-tipo').onsubmit = async (e) => {
+            e.preventDefault();
+            const f = Object.fromEntries(new FormData(e.target));
+            const data = {
+                nombre: f.nombre.trim(),
+                duracion_minutos: parseInt(f.duracion_minutos, 10),
+                especialidad: f.especialidad.trim() || null,
+                sinonimos: f.sinonimos.split(',').map(x => x.trim().toLowerCase()).filter(Boolean),
+            };
+            if (f.is_active !== undefined) data.is_active = f.is_active === 'true';
+            try {
+                if (id) {
+                    await API.updateTipoConsulta(id, data);
+                    UI.toast('Tipo de consulta actualizado');
+                } else {
+                    await API.createTipoConsulta(data);
+                    UI.toast('Tipo de consulta creado');
+                }
+                UI.closeModal();
+                Router.reload();
+            } catch (err) { UI.toast(err.message, 'error'); }
+        };
+    },
+
+    async deleteTipo(id) {
+        if (await UI.confirm('¿Eliminar este tipo de consulta? Los turnos ya agendados no se tocan.')) {
+            try {
+                await API.deleteTipoConsulta(id);
                 Router.reload();
             } catch (err) { UI.toast(err.message, 'error'); }
         }
