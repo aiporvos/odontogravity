@@ -189,11 +189,34 @@ def _autenticar_webhook(raw: bytes, header: str | None):
             "origen. Cargalo en Configuración → Integraciones y en el panel de YCloud."
         )
         return
+    valida = _firma_valida(raw, header, secreto)
+
     if (get_config("YCLOUD_WEBHOOK_ENFORCE", "true") or "true").strip().lower() == "false":
-        logger.warning("🔓 Verificación de firma DESACTIVADA por configuración.")
+        # Modo ensayo: no rechaza nada, pero deja dicho en el log si la firma
+        # HABRIA pasado. Sirve para activar la verificacion sin arriesgarse a
+        # dejar el bot mudo: se despliega asi, se manda un WhatsApp de prueba,
+        # se mira el log y recien despues se pone ENFORCE en true.
+        if valida:
+            logger.warning(
+                "🧪 Verificación en modo ENSAYO (ENFORCE=false). La firma de este "
+                "mensaje es VÁLIDA ✅ — el secreto es correcto y ya podés poner "
+                "YCLOUD_WEBHOOK_ENFORCE=true."
+            )
+        else:
+            logger.error(
+                "🧪 Verificación en modo ENSAYO (ENFORCE=false). La firma de este "
+                "mensaje NO valida ❌ — si activaras ENFORCE ahora, el bot dejaría "
+                "de responder. Revisá que YCLOUD_WEBHOOK_SECRET sea el secreto del "
+                "endpoint en YCloud."
+            )
         return
-    if not _firma_valida(raw, header, secreto):
-        logger.error("🔒 Webhook rechazado: firma inválida o ausente.")
+
+    if not valida:
+        logger.error(
+            "🔒 Webhook rechazado: firma inválida o ausente. Si el bot dejó de "
+            "responder, poné YCLOUD_WEBHOOK_ENFORCE=false para volver al aire "
+            "mientras revisás el secreto."
+        )
         raise HTTPException(401, "Invalid signature")
 
 
