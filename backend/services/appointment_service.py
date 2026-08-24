@@ -152,6 +152,108 @@ def match_insurance(nombre: str, db: Session):
     return None
 
 
+def obras_sociales_frecuentes(db: Session, limite: int = 8) -> list[str]:
+    """Las obras sociales que mas aparecen en los turnos ya agendados.
+
+    Con 45 cargadas no entran en una lista de WhatsApp (el tope son 10 filas),
+    pero en la practica un puñado cubre a casi todos los pacientes. Se ordenan
+    por uso real en vez de alfabeticamente, asi el que busca la suya la
+    encuentra de una y el resto usa el buscador.
+    """
+    from backend.models.insurance import Insurance
+    from sqlalchemy import func
+
+    activas = {
+        _sin_acentos(i.name): i.name
+        for i in db.query(Insurance).filter(Insurance.is_active == True).all()  # noqa: E712
+        if i.name.lower() != "particular"
+    }
+    if not activas:
+        return []
+
+    usos = (
+        db.query(Appointment.insurance_name, func.count(Appointment.id).label("n"))
+        .filter(Appointment.insurance_name.isnot(None),
+                Appointment.is_deleted == False)  # noqa: E712
+        .group_by(Appointment.insurance_name)
+        .order_by(func.count(Appointment.id).desc())
+        .all()
+    )
+
+    ordenadas, vistas = [], set()
+    for nombre, _ in usos:
+        clave = _sin_acentos(nombre or "")
+        if clave in activas and clave not in vistas:
+            ordenadas.append(activas[clave])
+            vistas.add(clave)
+        if len(ordenadas) >= limite:
+            return ordenadas
+
+    # Se completa con el resto, alfabetico, hasta llegar al limite.
+    for clave, nombre in sorted(activas.items()):
+        if clave not in vistas:
+            ordenadas.append(nombre)
+            if len(ordenadas) >= limite:
+                break
+    return ordenadas
+
+
+def _puntaje_obra_social(buscado: str, candidato: str) -> int:
+    """Que tan bien matchea lo que escribio el paciente. 0 = no matchea.
+
+    El ranking privilegia el prefijo por sobre la distancia de edicion, porque
+    los errores reales no son de una letra: alguien escribe "ospeysin" buscando
+    "OSPELSYM" (tres sustituciones), pero acierta las primeras cuatro. Corregir
+    tipeos ahi no sirve; buscar por como empieza, si.
+    """
+    if not buscado or not candidato:
+        return 0
+    if buscado == candidato:
+        return 100
+    if candidato.startswith(buscado) or buscado.startswith(candidato):
+        return 90
+    if buscado in candidato or candidato in buscado:
+        return 70
+    # Alguna palabra del candidato empieza como lo buscado ("swiss" -> "Swiss Medical").
+    if any(p.startswith(buscado) or buscado.startswith(p)
+           for p in candidato.split() if len(p) >= 3):
+        return 60
+    # Prefijo compartido de al menos 4 letras: "ospe" une "ospeysin" y "ospelsym".
+    comun = 0
+    for a, b in zip(buscado, candidato):
+        if a != b:
+            break
+        comun += 1
+    if comun >= 4:
+        return 40 + comun
+    # Recien al final, un tipeo corto de verdad.
+    if len(buscado) >= 5 and _distancia(buscado, candidato, 2) <= 2:
+        return 30
+    return 0
+
+
+def buscar_obras_sociales(db: Session, texto: str, limite: int = 10) -> list[str]:
+    """Las obras sociales activas que se parecen a lo que escribio el paciente."""
+    from backend.models.insurance import Insurance
+
+    buscado = " ".join(_sin_acentos(texto or "").split())
+    if not buscado:
+        return []
+
+    puntuadas = []
+    for ins in db.query(Insurance).filter(Insurance.is_active == True).all():  # noqa: E712
+        if ins.name.lower() == "particular":
+            continue
+        puntaje = _puntaje_obra_social(buscado, " ".join(_sin_acentos(ins.name).split()))
+        if ins.code:
+            puntaje = max(puntaje, _puntaje_obra_social(buscado, _sin_acentos(ins.code).strip()))
+        if puntaje:
+            puntuadas.append((puntaje, ins.name))
+
+    puntuadas.sort(key=lambda x: (-x[0], x[1]))
+    return [nombre for _, nombre in puntuadas[:limite]]
+
+
 def find_professionals_for_reason(reason: str, db: Session) -> list[Professional]:
     """Profesionales que atienden ese motivo, segun sus especialidades cargadas.
 

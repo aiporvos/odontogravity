@@ -600,22 +600,35 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
 
 
 @router.get("/obras-sociales", dependencies=[Depends(verify_bot_key)])
-def bot_listar_obras_sociales(db: Session = Depends(get_db)):
-    """Las obras sociales que atiende la clinica, para ofrecerlas como lista.
+def bot_listar_obras_sociales(q: str = "", db: Session = Depends(get_db)):
+    """Obras sociales para ofrecerle al paciente como lista tocable.
 
     Escribir el nombre a mano es la peor forma de preguntar esto: son largos, se
     abrevian de mil maneras y se escriben mal. Un paciente que tipea "ospeysin"
     termina agendado como particular sin darse cuenta.
+
+    Pero la clinica tiene ~45 cargadas y una lista de WhatsApp admite 10 filas.
+    Por eso hay dos modos: sin `q` se devuelven las mas usadas (que en la
+    practica cubren a casi todos), y con `q` se busca entre todas.
     """
     from backend.models.insurance import Insurance
+    from backend.services.appointment_service import (
+        buscar_obras_sociales, obras_sociales_frecuentes,
+    )
 
-    activas = [
-        i.name for i in db.query(Insurance).filter(
-            Insurance.is_active == True  # noqa: E712
-        ).order_by(Insurance.name).all()
-        if i.name.lower() != "particular"
-    ]
-    return {"activas": activas}
+    total = db.query(Insurance).filter(
+        Insurance.is_active == True  # noqa: E712
+    ).count()
+
+    if (q or "").strip():
+        encontradas = buscar_obras_sociales(db, q)
+        return {"activas": encontradas, "total": total, "busqueda": q, "modo": "busqueda"}
+
+    return {
+        "activas": obras_sociales_frecuentes(db),
+        "total": total,
+        "modo": "frecuentes",
+    }
 
 
 @router.post("/verificar-obra-social", dependencies=[Depends(verify_bot_key)])

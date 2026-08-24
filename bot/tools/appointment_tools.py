@@ -261,35 +261,61 @@ def verificar_obra_social(obra_social: str) -> str:
         return f"Error verificando la obra social: {e}"
 
 
-def listar_obras_sociales() -> str:
-    """Le muestra al paciente las obras sociales como lista tocable.
+def listar_obras_sociales(busqueda: str = "") -> str:
+    """Le muestra al paciente obras sociales como lista tocable.
 
     Escribir el nombre a mano es la peor forma de preguntar esto: los nombres
-    son largos, se abrevian de mil maneras y se escriben mal ("ospeysin"), asi
-    que el paciente termina sin cobertura por un error de tipeo.
+    son largos, se abrevian de mil maneras y se escriben mal ("ospeysin" por
+    OSPELSYM), asi que el paciente termina sin cobertura por un error de tipeo.
+
+    La clinica tiene ~45 cargadas y una lista de WhatsApp admite 10 filas, asi
+    que sin `busqueda` se muestran las mas usadas y con `busqueda` se filtra.
     """
     try:
-        r = httpx.get(f"{API_BASE}/api/bot/obras-sociales", headers=HEADERS, timeout=15)
+        r = httpx.get(f"{API_BASE}/api/bot/obras-sociales",
+                      params={"q": busqueda} if busqueda else None,
+                      headers=HEADERS, timeout=15)
         r.raise_for_status()
-        activas = r.json().get("activas", [])
+        d = r.json()
     except Exception as e:
         return f"No pude traer la lista de obras sociales: {e}"
 
-    if not activas:
+    activas, total = d.get("activas", []), d.get("total", 0)
+
+    if not total:
         return ("La clínica no tiene obras sociales cargadas: la atención es PARTICULAR. "
                 "Decíselo y seguí con el turno usando obra_social='Particular'.")
+
+    if busqueda and not activas:
+        return (
+            f"Ninguna de las {total} obras sociales que atiende la clínica se parece a "
+            f"'{busqueda}'. Decile con amabilidad que no trabajamos con esa y que su "
+            f"atención sería PARTICULAR. Si te dice que la escribió mal, pedile que te "
+            f"pase las primeras letras y volvé a llamar a esta herramienta."
+        )
 
     set_opciones_ofrecidas(
         activas + ["Particular"], siempre=True,
         titulo="Obras sociales", boton="Elegir cobertura",
     )
+
+    if busqueda:
+        return (
+            f"Le estás mostrando {len(activas)} coincidencia(s) con '{busqueda}', más "
+            f"'Particular', como lista tocable. Pedile que elija la suya en UNA frase "
+            f"corta y NO las enumeres en el texto. Si ninguna es la suya, que te pase "
+            f"otras letras y volvés a buscar. Lo que elija de la lista ya está "
+            f"verificado: NO llames a verificar_obra_social."
+        )
+
     return (
-        "Ya le estás mostrando al paciente una lista tocable con las obras sociales "
-        "que atiende la clínica, más la opción 'Particular'. "
-        "Preguntale cuál es la suya en UNA frase corta y NO las enumeres en el texto: "
-        "la lista ya se las muestra y repetirlas hace el mensaje ilegible. "
-        "Cuando elija una de la lista, ya está verificada: NO llames a "
-        "verificar_obra_social para esa."
+        f"Le estás mostrando como lista tocable las obras sociales más frecuentes, más "
+        f"'Particular'. La clínica atiende {total} en total, así que la suya puede no "
+        f"estar ahí: decile en UNA frase corta que elija de la lista o que te escriba "
+        f"las primeras letras de la suya si no la ve. NO las enumeres en el texto. "
+        f"Cuando te pase esas letras, volvé a llamar a esta herramienta con el "
+        f"parámetro `busqueda`. Lo que elija de la lista ya está verificado: NO llames "
+        f"a verificar_obra_social."
     )
 
 
@@ -621,13 +647,26 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "listar_obras_sociales",
             "description": (
-                "Le muestra al paciente, como lista tocable, las obras sociales que "
-                "atiende la clínica. USALA EN CUANTO haya que hablar de cobertura, en "
-                "lugar de preguntarle que la escriba: los nombres se escriben mal y el "
-                "paciente termina sin cobertura por un error de tipeo. Si elige una de "
-                "la lista, ya está verificada."
+                "Le muestra al paciente obras sociales como lista tocable. USALA EN "
+                "CUANTO haya que hablar de cobertura, en lugar de pedirle que la "
+                "escriba: los nombres se escriben mal y el paciente termina sin "
+                "cobertura por un error de tipeo. Sin `busqueda` muestra las más "
+                "frecuentes; si el paciente dice que la suya no está, pedile las "
+                "primeras letras y volvé a llamarla pasándolas en `busqueda`. "
+                "Lo que elija de la lista ya está verificado."
             ),
-            "parameters": {"type": "object", "properties": {}},
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "busqueda": {
+                        "type": "string",
+                        "description": (
+                            "Las letras o el nombre que dijo el paciente, tal cual. "
+                            "Dejar vacío la primera vez, para mostrarle las frecuentes."
+                        ),
+                    },
+                },
+            },
         },
     },
     {
