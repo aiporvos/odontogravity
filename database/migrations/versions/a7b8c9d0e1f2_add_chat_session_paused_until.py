@@ -17,7 +17,10 @@ import sqlalchemy as sa
 
 
 revision: str = 'a7b8c9d0e1f2'
-down_revision: Union[str, None] = 'e5f0a1b2c3d4'
+# Cuelga de la lapida f6a1b2c3d4e5 y no de e5f0a1b2c3d4: produccion quedo
+# anclada en esa revision revertida, y encadenarla aca es lo que le permite
+# seguir avanzando. Si colgaran las dos de e5f0a1b2c3d4 habria dos cabezas.
+down_revision: Union[str, None] = 'f6a1b2c3d4e5'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
