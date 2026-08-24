@@ -270,17 +270,33 @@ def quien_me_escribe() -> str:
                 + (f" para {t['motivo']}" if t.get("motivo") else "")
             )
         if p_.get("ultimo_profesional"):
-            linea.append(f"la última vez lo atendió {p_['ultimo_profesional']}"
-                         + (f" el {p_['ultima_visita']}" if p_.get("ultima_visita") else ""))
+            ultima = f"la última vez lo atendió {p_['ultimo_profesional']}"
+            if p_.get("ultima_visita"):
+                ultima += f" el {p_['ultima_visita']}"
+            if p_.get("ultimo_motivo"):
+                ultima += f", por {p_['ultimo_motivo']}"
+            linea.append(ultima)
+        previas = [c for c in (p_.get("consultas_previas") or []) if c.get("motivo")]
+        if len(previas) > 1:
+            linea.append("antes vino por: " + ", ".join(
+                f"{c['motivo']} ({c['fecha']})" for c in previas[1:]
+            ))
         if p_.get("tratamientos_pendientes"):
             linea.append("tratamientos en curso: " + ", ".join(p_["tratamientos_pendientes"]))
         if p_.get("franja_preferida"):
             linea.append(f"suele venir a la {p_['franja_preferida']}")
+        if p_.get("es_paciente_nuevo"):
+            linea.append("nunca vino todavía (está en el sistema pero sin visitas)")
         partes.append(" | ".join(linea))
 
     encabezado = (
         "PACIENTE CONOCIDO. Saludalo por su nombre y NO le preguntes la obra social: "
         "ya la sabés. Si tiene un turno próximo, mencionalo antes de ofrecerle otro.\n"
+        "USÁ SU HISTORIA: si sabés por qué vino la última vez o qué tratamiento tiene "
+        "en curso, mencionalo con naturalidad ('¿seguimos con el conducto?', "
+        "'¿otra limpieza como la de marzo?'). Es la diferencia entre un asistente "
+        "que lo conoce y un formulario. PROHIBIDO inventar: si acá no dice el motivo, "
+        "no te lo imagines.\n"
     )
     return encabezado + "\n".join(f"- {x}" for x in partes)
 

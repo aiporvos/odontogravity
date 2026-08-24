@@ -519,7 +519,10 @@ async def handle_text_message(remote_jid: str, text: str):
         try:
             session = get_or_create_session(db, remote_jid)
 
-            if text.strip().lower() == "reset":
+            # Con barra o sin barra: cualquiera escribe "/reset" por
+            # costumbre de Telegram, y antes eso se procesaba como un mensaje
+            # normal y no reseteaba nada.
+            if text.strip().lower().lstrip("/") == "reset":
                 # Limpia TODO lo que arrastra la conversación, no solo los
                 # mensajes: si quedara el estado (obra social, motivo) el bot
                 # seguiría "recordando" datos y no sería un arranque de cero;

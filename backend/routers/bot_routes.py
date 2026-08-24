@@ -147,11 +147,27 @@ def ficha_para_el_bot(db: Session, paciente) -> dict:
     """
     from backend.models.odontogram import OdontogramEntry
 
+    # La ultima vez que VINO: tiene que ser un turno ya pasado. Sin el filtro de
+    # fecha, un turno futuro confirmado se colaba como "ultima visita" y el bot
+    # le hablaba al paciente de una consulta que todavia no ocurrio.
     ultimo = db.query(Appointment).filter(
         Appointment.patient_id == paciente.id,
         Appointment.is_deleted == False,  # noqa: E712
+        Appointment.start_time < get_clinic_now(),
         Appointment.status.in_([AppointmentStatus.completed, AppointmentStatus.confirmed]),
     ).order_by(Appointment.start_time.desc()).first()
+
+    # Las ultimas consultas, para poder decir "veniste por una limpieza y antes
+    # por un conducto". El motivo estaba en la base y no se le pasaba al bot:
+    # sabia QUIEN lo atendio y CUANDO, pero no DE QUE, que es lo que el paciente
+    # espera que recuerden de el.
+    historial = db.query(Appointment).filter(
+        Appointment.patient_id == paciente.id,
+        Appointment.is_deleted == False,  # noqa: E712
+        Appointment.start_time < get_clinic_now(),
+        Appointment.status.in_([AppointmentStatus.completed, AppointmentStatus.confirmed]),
+        Appointment.reason.isnot(None),
+    ).order_by(Appointment.start_time.desc()).limit(3).all()
 
     proximo = db.query(Appointment).filter(
         Appointment.patient_id == paciente.id,
@@ -177,6 +193,12 @@ def ficha_para_el_bot(db: Session, paciente) -> dict:
             ultimo.professional.full_name if ultimo and ultimo.professional else None
         ),
         "ultima_visita": ultimo.start_time.strftime("%d/%m/%Y") if ultimo else None,
+        "ultimo_motivo": ultimo.reason if ultimo else None,
+        "consultas_previas": [
+            {"fecha": a.start_time.strftime("%d/%m/%Y"), "motivo": a.reason}
+            for a in historial
+        ],
+        "es_paciente_nuevo": ultimo is None,
         "proximo_turno": (
             {
                 "fecha": proximo.start_time.strftime("%d/%m/%Y a las %H:%M"),
