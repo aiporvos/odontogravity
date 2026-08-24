@@ -36,8 +36,23 @@ def _current_requester_phone():
 _opciones_ofrecidas: contextvars.ContextVar = contextvars.ContextVar("opciones_ofrecidas", default=None)
 
 
-def set_opciones_ofrecidas(opciones):
-    _opciones_ofrecidas.set(list(opciones) if opciones else None)
+def set_opciones_ofrecidas(opciones, siempre: bool = False,
+                           titulo: str | None = None, boton: str | None = None):
+    """Publica opciones para que el webhook las mande como lista tocable.
+
+    `siempre=True` fuerza el envio aunque el texto del modelo no las nombre. Es
+    lo que hace falta para las obras sociales: la gracia es justamente que el
+    paciente NO tenga que leerlas ni escribirlas, asi que el modelo pregunta
+    "¿cual es tu obra social?" y la lista va igual.
+    """
+    _opciones_ofrecidas.set(
+        {
+            "opciones": list(opciones),
+            "siempre": siempre,
+            "titulo": titulo,
+            "boton": boton,
+        } if opciones else None
+    )
 
 
 def tomar_opciones_ofrecidas():
@@ -225,16 +240,57 @@ def verificar_obra_social(obra_social: str) -> str:
                 f"CUBIERTA. La clínica atiende {d['nombre']}. "
                 f"Seguí normalmente con el turno usando obra_social='{d['nombre']}'."
             )
-        activas = ", ".join(d["activas"]) or "ninguna"
+        # No cubierta: en vez de dejarlo adivinando, se le vuelve a mostrar la
+        # lista tocable con las que si se atienden, mas "Particular".
+        activas = list(d["activas"])
+        if activas:
+            set_opciones_ofrecidas(
+                activas + ["Particular"], siempre=True,
+                titulo="Obras sociales", boton="Ver cuáles atendemos",
+            )
         return (
             f"NO CUBIERTA. La clínica no atiende '{d['consultada']}'. "
-            f"Decile al paciente con amabilidad que no trabajamos con esa obra social y que "
-            f"su atención sería de forma PARTICULAR, y preguntale si desea avanzar así. "
-            f"Si acepta, usá obra_social='Particular'. Si pregunta cuáles se atienden: {activas}. "
+            f"Decile con amabilidad que no trabajamos con esa y que su atención sería "
+            f"PARTICULAR. Ya le estás mostrando la lista de las que sí se atienden: "
+            f"invitalo a elegir una de ahí, o Particular si prefiere. "
+            f"NO enumeres las obras sociales en el texto, la lista ya se las muestra. "
+            f"Si acepta particular, usá obra_social='Particular'. "
             f"PROHIBIDO agendar con '{d['consultada']}'."
         )
     except Exception as e:
         return f"Error verificando la obra social: {e}"
+
+
+def listar_obras_sociales() -> str:
+    """Le muestra al paciente las obras sociales como lista tocable.
+
+    Escribir el nombre a mano es la peor forma de preguntar esto: los nombres
+    son largos, se abrevian de mil maneras y se escriben mal ("ospeysin"), asi
+    que el paciente termina sin cobertura por un error de tipeo.
+    """
+    try:
+        r = httpx.get(f"{API_BASE}/api/bot/obras-sociales", headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        activas = r.json().get("activas", [])
+    except Exception as e:
+        return f"No pude traer la lista de obras sociales: {e}"
+
+    if not activas:
+        return ("La clínica no tiene obras sociales cargadas: la atención es PARTICULAR. "
+                "Decíselo y seguí con el turno usando obra_social='Particular'.")
+
+    set_opciones_ofrecidas(
+        activas + ["Particular"], siempre=True,
+        titulo="Obras sociales", boton="Elegir cobertura",
+    )
+    return (
+        "Ya le estás mostrando al paciente una lista tocable con las obras sociales "
+        "que atiende la clínica, más la opción 'Particular'. "
+        "Preguntale cuál es la suya en UNA frase corta y NO las enumeres en el texto: "
+        "la lista ya se las muestra y repetirlas hace el mensaje ilegible. "
+        "Cuando elija una de la lista, ya está verificada: NO llames a "
+        "verificar_obra_social para esa."
+    )
 
 
 # ── Tool registry ────────────────────────────────────────────────────────────
@@ -364,6 +420,7 @@ _TOOL_MAP = {
     "consultar_mis_turnos": consultar_mis_turnos,
     "consultar_disponibilidad": consultar_disponibilidad,
     "verificar_obra_social": verificar_obra_social,
+    "listar_obras_sociales": listar_obras_sociales,
     "recordar_dato": recordar_dato,
     "quien_me_escribe": quien_me_escribe,
 }
@@ -557,6 +614,20 @@ TOOL_DEFINITIONS = [
                 },
                 "required": ["motivo_confirmado_por_paciente"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "listar_obras_sociales",
+            "description": (
+                "Le muestra al paciente, como lista tocable, las obras sociales que "
+                "atiende la clínica. USALA EN CUANTO haya que hablar de cobertura, en "
+                "lugar de preguntarle que la escriba: los nombres se escriben mal y el "
+                "paciente termina sin cobertura por un error de tipeo. Si elige una de "
+                "la lista, ya está verificada."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {

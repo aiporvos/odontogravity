@@ -495,14 +495,23 @@ def _respuesta_ofrece(texto: str, opciones: list) -> list:
     return [o for o in opciones if str(o) in texto]
 
 
-async def _responder(remote_jid: str, texto: str, opciones: list | None):
+async def _responder(remote_jid: str, texto: str, publicadas: dict | None):
     """Manda la respuesta como lista tocable si corresponde, o como texto."""
-    ofrecidas = _respuesta_ofrece(texto, opciones or [])
+    if not publicadas:
+        await send_whatsapp_message(remote_jid, texto)
+        return
+
+    opciones = publicadas.get("opciones") or []
+    # Las obras sociales se ofrecen siempre: la gracia es que el paciente no
+    # tenga que escribirlas. Los horarios, solo si el texto los menciona.
+    ofrecidas = opciones if publicadas.get("siempre") else _respuesta_ofrece(texto, opciones)
+
     # Con una sola opcion una lista es mas incomoda que el texto.
     if len(ofrecidas) >= 2:
         enviado = await send_whatsapp_list(
             remote_jid, texto, ofrecidas,
-            boton="Elegir horario", titulo="Horarios disponibles",
+            boton=publicadas.get("boton") or "Elegir horario",
+            titulo=publicadas.get("titulo") or "Horarios disponibles",
         )
         if enviado:
             return

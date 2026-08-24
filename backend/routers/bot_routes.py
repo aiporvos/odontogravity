@@ -599,6 +599,25 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
     }
 
 
+@router.get("/obras-sociales", dependencies=[Depends(verify_bot_key)])
+def bot_listar_obras_sociales(db: Session = Depends(get_db)):
+    """Las obras sociales que atiende la clinica, para ofrecerlas como lista.
+
+    Escribir el nombre a mano es la peor forma de preguntar esto: son largos, se
+    abrevian de mil maneras y se escriben mal. Un paciente que tipea "ospeysin"
+    termina agendado como particular sin darse cuenta.
+    """
+    from backend.models.insurance import Insurance
+
+    activas = [
+        i.name for i in db.query(Insurance).filter(
+            Insurance.is_active == True  # noqa: E712
+        ).order_by(Insurance.name).all()
+        if i.name.lower() != "particular"
+    ]
+    return {"activas": activas}
+
+
 @router.post("/verificar-obra-social", dependencies=[Depends(verify_bot_key)])
 def bot_verificar_obra_social(data: dict = Body(...), db: Session = Depends(get_db)):
     """Dice si la clinica atiende esa obra social. Lo consulta el bot.
