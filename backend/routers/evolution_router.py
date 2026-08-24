@@ -16,7 +16,9 @@ from bot.ai_agent import chat
 from backend.database import get_db, SessionLocal
 from backend.models.chat_session import ChatSession, ChatMessage, ChatPlatform, MessageRole
 from backend.models.config import AppConfig
-from backend.services.whatsapp import send_whatsapp_message, send_whatsapp_list, normalize_to_e164
+from backend.services.whatsapp import (
+    send_whatsapp_message, send_whatsapp_list, normalize_to_e164, ofuscar_telefono,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/whatsapp", tags=["WhatsApp"])
@@ -238,6 +240,27 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
         return {"status": "error", "message": "Invalid JSON"}
 
     event_type = payload.get("type")
+
+    # La secretaria contestando desde el WhatsApp de la clínica. Este evento
+    # llega SOLO cuando el mensaje se escribió a mano desde la app (lo que sale
+    # por la API no lo dispara), asi que todo eco es una persona real tomando la
+    # conversacion y el bot tiene que correrse.
+    #
+    # Sin esto el bot no se enteraba y seguia respondiendo en paralelo: paso en
+    # vivo con pacientes, con la secretaria teniendo que aclarar "ESTA
+    # CONTESTANDO EL ASISTENTE VIRTUAL TAMBIEN JAJA".
+    if event_type == "whatsapp.smb.message.echoes":
+        eco = payload.get("whatsappMessage", {})
+        paciente = "".join(filter(str.isdigit, eco.get("to") or ""))
+        texto_humano = (eco.get("text", {}) or {}).get("body", "") or ""
+        if paciente:
+            background_tasks.add_task(
+                _pausar_por_intervencion_humana,
+                f"{paciente}@s.whatsapp.net",
+                texto_humano,
+            )
+        return {"status": "human_takeover"}
+
     if event_type != "whatsapp.inbound_message.received":
         logger.info(f"⏭️ Evento ignorado (no es inbound message): {event_type}")
         return {"status": "ignored"}
@@ -367,6 +390,43 @@ def _guardar_estado(db: Session, session, estado: dict | None):
 
 # Cuánto se calla el bot cuando una persona toma la conversación.
 PAUSA_INTERVENCION_HUMANA = timedelta(minutes=30)
+
+
+def _minutos_de_pausa() -> int:
+    """Cuanto se calla el bot cuando alguien de la clinica toma la conversacion.
+
+    Configurable desde el panel: media hora alcanza para una consulta puntual,
+    pero si la secretaria se queda atendiendo el caso entero conviene subirlo.
+    """
+    try:
+        return max(1, int((get_config("MINUTOS_PAUSA_HUMANA", "30") or "30").strip()))
+    except (TypeError, ValueError):
+        return 30
+
+
+async def _pausar_por_intervencion_humana(remote_jid: str, texto: str):
+    """Silencia el bot en esa conversacion y guarda lo que dijo la persona.
+
+    El texto se guarda como parte del historial para que, si el bot vuelve a
+    responder cuando venza la pausa, sepa lo que ya le dijeron al paciente en
+    vez de arrancar de cero y contradecir a la secretaria.
+    """
+    db = SessionLocal()
+    try:
+        session = get_or_create_session(db, remote_jid)
+        minutos = _minutos_de_pausa()
+        session.paused_until = datetime.utcnow() + timedelta(minutes=minutos)
+        db.commit()
+        if texto.strip():
+            save_message(db, session.id, MessageRole.assistant, texto.strip())
+        logger.info(
+            "🔕 Alguien de la clínica contestó a mano en %s: el bot se calla %d minutos.",
+            ofuscar_telefono(remote_jid), minutos,
+        )
+    except Exception as e:
+        logger.error(f"Error pausando por intervención humana: {e}", exc_info=True)
+    finally:
+        db.close()
 
 
 async def _quizas_pausar_por_intervencion_humana(remote_jid: str, texto: str):

@@ -203,6 +203,24 @@ def consultar_disponibilidad(
     preferencia_horaria: str = "",
 ) -> str:
     """Consulta los horarios disponibles para una sede, especialidad y fecha."""
+    # El motivo tiene que haberlo dicho el paciente, no deducirlo el modelo: de
+    # el sale la duracion del turno (control 15', extraccion 30', endodoncia
+    # 60'), asi que ofrecer horarios sin saberlo reserva el tiempo equivocado.
+    # Pedido explicito del consultorio: "los turnos no darlos sin preguntar para
+    # que son porque tienen una duracion diferente dependiendo para que es".
+    #
+    # El prompt ya lo pedia y el modelo igual inventaba un motivo, asi que se
+    # exige que este registrado en el estado de la conversacion via
+    # recordar_dato: eso solo pasa si el paciente lo dijo.
+    if not (_estado_conversacion.get() or {}).get("motivo"):
+        return (
+            "❌ Todavía no sabés para qué es la consulta, y de eso depende cuánto "
+            "dura el turno. Preguntale al paciente el motivo (limpieza, control, "
+            "extracción, conducto...), registralo con `recordar_dato` y recién "
+            "después volvé a llamar a esta herramienta. "
+            "🚫 PROHIBIDO deducirlo o darlo por supuesto."
+        )
+
     try:
         payload = {
             "location": location,
