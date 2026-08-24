@@ -40,6 +40,45 @@ def set_ultimo_mensaje(texto: str):
     _ultimo_mensaje.set(texto or "")
 
 
+# Todo lo que dijo el paciente en esta conversacion. Se usa para verificar que
+# un dato lo dijo EL y no lo invento el modelo.
+_dichos_por_el_paciente: contextvars.ContextVar = contextvars.ContextVar(
+    "dichos_paciente", default=()
+)
+
+
+def set_dichos_por_el_paciente(textos):
+    _dichos_por_el_paciente.set(tuple(t for t in (textos or []) if t))
+
+
+def _motivo_dicho_por_el_paciente(valor: str):
+    """(salio del paciente, nombre normalizado) para el motivo propuesto.
+
+    El modelo puede llamar a recordar_dato con un valor que nunca le dijeron
+    —dedujo "control" porque le parecio razonable— y eso alcanzaba para
+    saltearse la exigencia de preguntar. Pedido del consultorio: "de eso nunca
+    suponer, sino averiguar siempre primero que se va a tratar".
+
+    La comparacion la hace el backend contra los tipos de consulta y sus
+    sinonimos, no una busqueda literal: el paciente dice "sacarme una muela" y
+    el modelo lo registra como "Extraccion", que es exactamente lo que
+    corresponde. De paso vuelve el nombre canonico, asi el turno queda guardado
+    con el mismo texto siempre.
+    """
+    try:
+        r = httpx.post(
+            f"{API_BASE}/api/bot/resolver-motivo",
+            json={"motivo": valor, "dichos": list(_dichos_por_el_paciente.get())},
+            headers=HEADERS, timeout=15,
+        )
+        r.raise_for_status()
+        d = r.json()
+    except Exception:
+        # Si el backend no responde, no se bloquea al paciente por esto.
+        return True, valor
+    return bool(d.get("ok")), (d.get("motivo") or valor)
+
+
 # Palabras que son respuestas de conversacion, no el nombre de una obra social.
 _NO_ES_BUSQUEDA = {
     "si", "no", "ok", "dale", "hola", "gracias", "bueno", "listo", "particular",
@@ -483,6 +522,18 @@ def recordar_dato(campo: str, valor: str) -> str:
         return f"❌ Campo desconocido: {campo}. Válidos: {', '.join(DATOS_DEL_TURNO)}"
     if not (valor or "").strip():
         return f"❌ Falta el valor para {campo}"
+
+    # El motivo define la duracion del turno y a que profesional va, asi que no
+    # puede salir de una deduccion: tiene que haberlo dicho el paciente.
+    if campo == "motivo":
+        lo_dijo, normalizado = _motivo_dicho_por_el_paciente(valor)
+        if not lo_dijo:
+            return (
+                f"❌ El paciente nunca dijo '{valor}'. No lo deduzcas: preguntale "
+                f"explícitamente para qué sería la consulta y esperá su respuesta. "
+                f"De eso dependen la duración del turno y qué profesional lo atiende."
+            )
+        valor = normalizado
 
     estado = dict(_estado_conversacion.get() or {})
     estado[campo] = valor.strip()

@@ -599,6 +599,63 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
     }
 
 
+@router.post("/resolver-motivo", dependencies=[Depends(verify_bot_key)])
+def bot_resolver_motivo(data: dict = Body(...), db: Session = Depends(get_db)):
+    """Verifica que el motivo salga del paciente, y lo devuelve normalizado.
+
+    El motivo define la duracion del turno y a que profesional va, asi que no
+    puede salir de una deduccion del modelo: "de eso nunca suponer, sino
+    averiguar siempre primero que se va a tratar y luego le da el turno".
+
+    Pero tampoco alcanza con buscar la palabra literal: el paciente dice
+    "sacarme una muela" y el modelo lo registra como "Extraccion", que es lo
+    correcto. Por eso la comparacion se hace contra los tipos de consulta y sus
+    sinonimos, que la clinica edita desde el panel: los dos textos tienen que
+    caer en el mismo tipo.
+    """
+    from backend.services.appointment_service import _tipo_para_motivo
+
+    propuesto = (data.get("motivo") or "").strip()
+    dichos = [d for d in (data.get("dichos") or []) if d]
+    if not propuesto:
+        return {"ok": False, "motivo": None, "razon": "vacio"}
+
+    tipo_propuesto = _tipo_para_motivo(db, propuesto)
+
+    # Sin nada dicho por el paciente no hay con que comparar (Telegram, o el
+    # primer mensaje): se deja pasar, como hacia antes.
+    if not dichos:
+        return {
+            "ok": True,
+            "motivo": tipo_propuesto.nombre if tipo_propuesto else propuesto,
+            "duracion": tipo_propuesto.duracion_minutos if tipo_propuesto else None,
+        }
+
+    for dicho in dichos:
+        tipo_dicho = _tipo_para_motivo(db, dicho)
+        coincide_por_tipo = (
+            tipo_propuesto and tipo_dicho and tipo_dicho.id == tipo_propuesto.id
+        )
+        coincide_literal = _sin_acentos_simple(propuesto) in _sin_acentos_simple(dicho)
+        if coincide_por_tipo or coincide_literal:
+            nombre = tipo_propuesto.nombre if tipo_propuesto else propuesto
+            return {
+                "ok": True,
+                "motivo": nombre,
+                "duracion": tipo_propuesto.duracion_minutos if tipo_propuesto else None,
+            }
+
+    return {"ok": False, "motivo": None, "razon": "el paciente no lo dijo"}
+
+
+def _sin_acentos_simple(texto: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto or "")
+        if unicodedata.category(c) != "Mn"
+    ).lower()
+
+
 @router.get("/obras-sociales", dependencies=[Depends(verify_bot_key)])
 def bot_listar_obras_sociales(q: str = "", db: Session = Depends(get_db)):
     """Obras sociales para ofrecerle al paciente como lista tocable.
