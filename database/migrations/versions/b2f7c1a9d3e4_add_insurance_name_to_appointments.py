@@ -3,6 +3,10 @@
 Revision ID: b2f7c1a9d3e4
 Revises: 5bac17ca857c
 Create Date: 2026-07-24 10:30:00.000000
+
+Idempotente a proposito: la app crea el esquema con Base.metadata.create_all()
+en cada arranque, asi que Alembic se encontraba con objetos ya creados y
+abortaba con DuplicateColumn/DuplicateTable, cortando todo el encadenado.
 """
 from typing import Sequence, Union
 from alembic import op
@@ -15,7 +19,27 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _tiene_tabla(tabla: str) -> bool:
+    return tabla in sa.inspect(op.get_bind()).get_table_names()
+
+
+def _tiene_columna(tabla: str, columna: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    if tabla not in inspector.get_table_names():
+        return False
+    return columna in {c["name"] for c in inspector.get_columns(tabla)}
+
+
+def _tiene_indice(tabla: str, indice: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    if tabla not in inspector.get_table_names():
+        return False
+    return indice in {i["name"] for i in inspector.get_indexes(tabla)}
+
+
 def upgrade() -> None:
+    if _tiene_columna('appointments', 'insurance_name'):
+        return
     op.add_column('appointments', sa.Column('insurance_name', sa.String(length=200), nullable=True))
     # Backfill: para los turnos ya existentes, copiar la obra social de la
     # ficha del paciente. Subconsulta correlacionada (portable Postgres/SQLite).

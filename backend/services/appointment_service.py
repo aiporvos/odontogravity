@@ -1,12 +1,16 @@
 
 from datetime import datetime, timedelta, time as py_time
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
+from sqlalchemy.exc import IntegrityError
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
 from backend.models.schedule import ClinicSchedule, ProfessionalSchedule, ProfessionalTimeOff, ClinicHoliday
 from backend.models.config import AppConfig
+
+logger = logging.getLogger(__name__)
 
 # El ruteo por motivo sale de las especialidades que cada profesional tiene
 # cargadas en su ficha (Profesionales -> Especialidades), no de un mapa fijo en
@@ -28,10 +32,69 @@ def _palabras(texto: str) -> list[str]:
     return [p for p in limpio.split() if p not in _STOPWORDS and len(p) >= 3]
 
 
+def _distancia(a: str, b: str, tope: int = 2) -> int:
+    """Distancia de edicion acotada (cuantas letras hay que cambiar)."""
+    if abs(len(a) - len(b)) > tope:
+        return tope + 1
+    previa = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        actual = [i]
+        for j, cb in enumerate(b, 1):
+            actual.append(min(
+                previa[j] + 1,          # borrar
+                actual[j - 1] + 1,      # insertar
+                previa[j - 1] + (ca != cb),  # sustituir
+            ))
+        if min(actual) > tope:
+            return tope + 1
+        previa = actual
+    return previa[-1]
+
+
 def _misma_palabra(a: str, b: str) -> bool:
-    """Compara tolerando singular/plural: extraccion == extracciones."""
+    """True si son la misma palabra, tolerando plural y errores de tipeo.
+
+    Los pacientes escriben "estraccion", "extraciones" o "limpiesa" y antes
+    ninguna de esas coincidia, asi que el turno se ruteaba a cualquiera. Se
+    aceptan hasta 1-2 letras de diferencia segun el largo, que cubre los typos
+    comunes sin confundir palabras realmente distintas.
+    """
+    if a == b:
+        return True
+    # Prefijo comun largo: cubre singular/plural (extraccion / extracciones).
     n = min(len(a), len(b))
-    return n >= 4 and a[:n] == b[:n]
+    if n >= 5 and a[:n] == b[:n]:
+        return True
+    # Errores de tipeo: 1 letra en palabras cortas, 2 en las largas.
+    if n < 5:
+        return False
+    tope = 1 if n <= 7 else 2
+    return _distancia(a, b, tope) <= tope
+
+
+# Como dice el paciente lo que necesita, vs. como esta cargada la especialidad.
+# Es texto libre en WhatsApp: nadie escribe "Extraccion", escriben "sacar una
+# muela". Se puede ampliar sin tocar nada mas.
+SINONIMOS = {
+    "extraccion": ["sacar", "sacarme", "muela", "cordal", "extraer", "extraigan", "quitar"],
+    "limpieza": ["limpiar", "limpieza", "sarro", "profilaxis", "higiene", "blanquear"],
+    "arreglos": ["arreglo", "arreglar", "caries", "tapar", "empaste", "roto", "rotura"],
+    "conducto": ["conducto", "endodoncia", "nervio", "matar el nervio"],
+    "ortodoncia": ["ortodoncia", "brackets", "aparato", "alinear", "invisalign"],
+    "protesis": ["protesis", "placa", "dentadura", "puente", "implante"],
+    "control": ["control", "revision", "chequeo", "consulta", "ver", "duele", "dolor"],
+}
+
+
+def _expandir_con_sinonimos(palabras: list[str]) -> set[str]:
+    """Agrega el termino "canonico" cuando el paciente uso una forma coloquial."""
+    ampliado = set(palabras)
+    for canonico, variantes in SINONIMOS.items():
+        for v in variantes:
+            if any(_misma_palabra(_sin_acentos(v), p) for p in palabras):
+                ampliado.add(canonico)
+                break
+    return ampliado
 
 
 def _especialidad_coincide(especialidad: str, palabras_motivo: list[str]) -> bool:
@@ -43,8 +106,9 @@ def _especialidad_coincide(especialidad: str, palabras_motivo: list[str]) -> boo
     requeridas = _palabras(especialidad)
     if not requeridas:
         return False
+    disponibles = _expandir_con_sinonimos(palabras_motivo)
     return all(
-        any(_misma_palabra(req, pal) for pal in palabras_motivo)
+        any(_misma_palabra(req, pal) for pal in disponibles)
         for req in requeridas
     )
 
@@ -211,6 +275,143 @@ def slot_conflict(appointments, start: datetime, duration_minutes: int, chairs: 
     return None
 
 
+def _nombre_normalizado(nombre: str, apellido: str) -> str:
+    """'Claudio  LUNA' y 'claudio luna' son la misma persona."""
+    return " ".join(sorted(_palabras(f"{nombre or ''} {apellido or ''}")))
+
+
+def _misma_persona_ya_cargada(db: Session, telefono: str | None,
+                              nombre: str, apellido: str):
+    """La ficha existente que corresponde a esta persona, si la hay.
+
+    Se usa justo antes de crear una ficha nueva. Exige que coincidan el telefono
+    normalizado Y el nombre: en una familia el numero es el mismo, asi que
+    buscar solo por telefono uniria a la madre con el hijo.
+    """
+    from backend.services.whatsapp import normalize_to_e164
+
+    buscado = _nombre_normalizado(nombre, apellido)
+    if not telefono or not buscado:
+        return None
+
+    objetivo = normalize_to_e164(telefono)
+    if not objetivo:
+        return None
+
+    for p in db.query(Patient).filter(Patient.is_deleted == False).all():  # noqa: E712
+        if not p.phone or normalize_to_e164(p.phone) != objetivo:
+            continue
+        if _nombre_normalizado(p.first_name, p.last_name) == buscado:
+            return p
+    return None
+
+
+def duracion_para_motivo(reason: str) -> int:
+    """Cuanto dura un turno segun el motivo.
+
+    Fuente unica de verdad. Antes esto vivia solo adentro de get_available_slots
+    (para OFRECER horarios) mientras que al AGENDAR se guardaba lo que mandara
+    el bot, que lo elegia el modelo. Ofrecer un hueco de 15 minutos y despues
+    grabar un turno de 30 hace que el chequeo de solapamiento valide sobre
+    datos que no son los reales.
+    """
+    reason_lower = (reason or "").lower()
+    if any(x in reason_lower for x in ["extracc", "ortodoncia", "implante", "prótesis", "protesis"]):
+        return 30
+    if any(x in reason_lower for x in ["conducto", "endodoncia"]):
+        return 60
+    return 15
+
+
+def franjas_del_dia(db: Session, day, candidatos):
+    """Franjas horarias en las que hay alguien que pueda atender ese dia.
+
+    Extraido de get_available_slots para que la validacion del alta use
+    exactamente el mismo criterio con el que se ofrecieron los horarios.
+    """
+    weekday = day.weekday()
+    schedule_rows = db.query(ClinicSchedule).filter(
+        ClinicSchedule.weekday == weekday,
+        ClinicSchedule.is_active == True,  # noqa: E712
+    ).order_by(ClinicSchedule.start_time).all()
+    clinic_shifts = [(r.start_time, r.end_time) for r in schedule_rows]
+
+    if not candidatos:
+        return clinic_shifts
+
+    def _franjas_si_no_ausente(p):
+        ausente = db.query(ProfessionalTimeOff).filter(
+            ProfessionalTimeOff.professional_id == p.id,
+            ProfessionalTimeOff.date == day,
+        ).first()
+        if ausente:
+            return []
+        return _franjas_del_profesional(db, p.id, weekday, clinic_shifts)
+
+    return _unir_franjas([_franjas_si_no_ausente(p) for p in candidatos])
+
+
+def motivo_regla_obra_social(obra_social: str | None, when: datetime) -> str | None:
+    """La regla interna de PAMI, aplicada al momento de escribir.
+
+    Es la contracara de lo que hace get_available_slots al ofrecer: PAMI se
+    atiende solo los viernes y los viernes son exclusivos de PAMI. Se validaba
+    al sugerir horarios pero no al guardarlos, asi que un turno con una fecha
+    que el modelo hubiera armado por su cuenta entraba igual.
+    """
+    es_pami = bool(obra_social) and obra_social.strip().upper() == "PAMI"
+    es_viernes = when.weekday() == 4
+    if es_pami and not es_viernes:
+        return "Ese dia no hay atencion para esa cobertura."
+    if es_viernes and not es_pami:
+        return "Ese dia no hay atencion para esa cobertura."
+    return None
+
+
+def motivo_no_agendable(db: Session, start: datetime, duration_minutes: int,
+                        location: str | None, obra_social: str | None,
+                        candidatos=None, exclude_id=None,
+                        validar_pasado: bool = True) -> str | None:
+    """Motivo por el que ese horario NO se puede agendar, o None si se puede.
+
+    Es la misma regla con la que get_available_slots OFRECE horarios, aplicada
+    ahora al momento de ESCRIBIR. Sin esto, entre que el bot ofrece un horario
+    y el paciente termina de dar sus datos —varios mensajes de ida y vuelta—
+    nadie verificaba que el hueco siguiera libre, y dos pacientes distintos
+    podian quedar agendados en el mismo horario.
+    """
+    if motivo := motivo_regla_obra_social(obra_social, start):
+        return motivo
+
+    feriado = db.query(ClinicHoliday).filter(ClinicHoliday.date == start.date()).first()
+    if feriado:
+        detalle = f" ({feriado.description})" if feriado.description else ""
+        return (f"El {start.strftime('%d/%m/%Y')} es feriado{detalle} y la clinica "
+                f"esta cerrada.")
+
+    if validar_pasado and start <= get_clinic_now():
+        return "Ese horario ya paso. Hay que elegir uno futuro."
+
+    # Dentro del horario de atencion (y de la grilla del profesional, si tiene).
+    fin = (datetime.combine(start.date(), py_time(0, 0))
+           + timedelta(minutes=start.hour * 60 + start.minute + duration_minutes)).time()
+    franjas = franjas_del_dia(db, start.date(), candidatos or [])
+    if not franjas:
+        return "Ese dia no hay atencion."
+    dentro = any(
+        desde <= start.time() and (fin <= hasta or (fin == py_time(0, 0)))
+        for desde, hasta in franjas
+    )
+    if not dentro:
+        return "Ese horario esta fuera del horario de atencion."
+
+    del_dia = get_day_appointments(db, start.date(), location)
+    return slot_conflict(
+        del_dia, start, duration_minutes, get_chairs_per_location(db),
+        [p.id for p in candidatos] if candidatos else None, exclude_id,
+    )
+
+
 def create_appointment_logic(
     db: Session,
     patient_name: str,
@@ -233,8 +434,49 @@ def create_appointment_logic(
         encontrada = match_insurance(insurance_name, db)
         insurance_name = encontrada.name if encontrada else "Particular"
 
+    # ── Todo lo que puede fallar se valida ANTES de tocar la base ────────────
+    # Antes se creaba el paciente primero y se validaba (poco) despues, asi que
+    # un intento fallido dejaba una ficha a medio crear.
+    if not preferred_date or not preferred_date.strip():
+        return {"error": "Se requiere la fecha y hora del turno (preferred_date). El bot debe pasar la fecha exacta que eligió el paciente."}
+    try:
+        start = datetime.fromisoformat(preferred_date.strip())
+    except Exception:
+        return {"error": f"Formato de fecha inválido: '{preferred_date}'. Usar formato YYYY-MM-DD HH:MM."}
+
+    candidatos = find_professionals_for_reason(reason, db)
+    prof = candidatos[0] if candidatos else None
+    if not prof:
+        return {"error": "No hay profesionales disponibles"}
+
+    # La duracion la decide el motivo, no el modelo: es la misma con la que se
+    # calculo el hueco que se le ofrecio al paciente.
+    duration_minutes = duracion_para_motivo(reason)
+
+    motivo = motivo_no_agendable(
+        db, start, duration_minutes, location, insurance_name, candidatos,
+    )
+    if motivo:
+        return {"error": f"{motivo} Ofrecele otro horario al paciente."}
+
     # Find or create patient
     patient = db.query(Patient).filter(Patient.dni == dni, Patient.is_deleted == False).first()
+    if not patient:
+        # Antes de dar de alta una ficha nueva: ¿no sera la misma persona que ya
+        # esta cargada, con el DNI escrito distinto? Ese es el origen de los
+        # duplicados que limpia scripts/unificar_pacientes_duplicados.py: dos
+        # fichas de "Claudio Luna" con el mismo telefono y el historial partido.
+        # Se exige que coincidan telefono Y nombre: una familia comparte el
+        # numero, asi que el telefono solo no alcanza para decidir.
+        patient = _misma_persona_ya_cargada(
+            db, requester_phone or phone, patient_name, patient_last_name
+        )
+        if patient:
+            logger.warning(
+                "Ficha reutilizada para evitar un duplicado: %s %s ya existe con "
+                "DNI %s y se pidio dar de alta el DNI %s (mismo telefono y nombre).",
+                patient.first_name, patient.last_name, patient.dni, dni,
+            )
     if not patient:
         # Para pacientes nuevos preferimos el número real del canal (WhatsApp)
         # como teléfono: es la identidad verificada que luego usamos para
@@ -267,24 +509,11 @@ def create_appointment_logic(
         db.commit()
         db.refresh(patient)
 
-    # Route professional
-    prof = route_professional(reason, db)
-    if not prof:
-        return {"error": "No hay profesionales disponibles"}
-
-    # Parse date - preferred_date is required, never default to now
-    if not preferred_date or not preferred_date.strip():
-        return {"error": "Se requiere la fecha y hora del turno (preferred_date). El bot debe pasar la fecha exacta que eligió el paciente."}
-    try:
-        start = datetime.fromisoformat(preferred_date.strip())
-    except Exception:
-        return {"error": f"Formato de fecha inválido: '{preferred_date}'. Usar formato YYYY-MM-DD HH:MM."}
-
     appt = Appointment(
         patient_id=patient.id,
         professional_id=prof.id,
         start_time=start,
-        duration_minutes=duration_minutes if duration_minutes else 30,
+        duration_minutes=duration_minutes,
         reason=reason,
         location=location,
         insurance_name=insurance_name,
@@ -292,7 +521,14 @@ def create_appointment_logic(
         status=AppointmentStatus.confirmed,
     )
     db.add(appt)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Ultima barrera: el indice unico de la base. Si dos pacientes llegaron
+        # al mismo hueco al mismo tiempo, la validacion de arriba pudo ver el
+        # horario libre en ambos casos y aca gana uno solo.
+        db.rollback()
+        return {"error": "Ese horario acaba de ser tomado. Ofrecele otro al paciente."}
     db.refresh(appt)
 
     return {
@@ -526,26 +762,10 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             return siguiente(f"el {fecha_en_palabras(day)} es feriado{detalle} y la clínica está cerrada")
         return respuesta([], "No hay turnos disponibles (feriados).")
 
-    # Horario general de la clínica para ese día (configurable desde el panel)
-    schedule_rows = db.query(ClinicSchedule).filter(
-        ClinicSchedule.weekday == weekday,
-        ClinicSchedule.is_active == True,
-    ).order_by(ClinicSchedule.start_time).all()
-    clinic_shifts = [(r.start_time, r.end_time) for r in schedule_rows]
-
-    # Para cada candidato: su propia grilla (si la tiene cargada) acotada al
-    # horario general, salvo que ese día esté de ausencia puntual. La union de
-    # todos define cuándo hay alguien disponible para este motivo.
-    def _franjas_si_no_ausente(p):
-        ausente = db.query(ProfessionalTimeOff).filter(
-            ProfessionalTimeOff.professional_id == p.id,
-            ProfessionalTimeOff.date == day,
-        ).first()
-        if ausente:
-            return []
-        return _franjas_del_profesional(db, p.id, weekday, clinic_shifts)
-
-    shifts = _unir_franjas([_franjas_si_no_ausente(p) for p in candidatos]) if candidatos else clinic_shifts
+    # Horario general de la clínica para ese día, acotado a la grilla de cada
+    # candidato y descontando sus ausencias. Vive en franjas_del_dia para que la
+    # validacion del alta use exactamente el mismo criterio.
+    shifts = franjas_del_dia(db, day, candidatos)
 
     if not shifts:
         # Día cerrado, o ningún candidato trabaja/está disponible ese día.
@@ -560,13 +780,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     existing = get_day_appointments(db, day, location)
     chairs = get_chairs_per_location(db)
     
-    # Determine duration based on reason
-    duration_minutes = 15
-    reason_lower = reason.lower()
-    if any(x in reason_lower for x in ["extracc", "ortodoncia", "implante", "prótesis", "protesis"]):
-        duration_minutes = 30
-    elif any(x in reason_lower for x in ["conducto", "endodoncia"]):
-        duration_minutes = 60
+    duration_minutes = duracion_para_motivo(reason)
 
     available_slots = []
     for shift_start_time, shift_end_time in shifts:

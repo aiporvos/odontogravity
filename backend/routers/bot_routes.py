@@ -4,11 +4,16 @@ from datetime import datetime, timedelta
 from fastapi import Body, APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 import os
 import logging
 
 from backend.database import get_db
-from backend.services.appointment_service import create_appointment_logic, get_available_slots, route_professional
+from backend.services.appointment_service import (
+    create_appointment_logic, get_available_slots, route_professional,
+    find_professionals_for_reason, motivo_no_agendable, duracion_para_motivo,
+    get_clinic_now,
+)
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
 from backend.models.professional import Professional
@@ -16,6 +21,8 @@ from backend.schemas.schemas import (
     BotAppointmentRequest, BotCancelRequest, BotRescheduleRequest, BotQueryRequest,
     BotAvailabilityRequest, AppointmentRead, PatientRead,
 )
+
+from backend.services.whatsapp import ofuscar_telefono as _ofuscar
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/bot", tags=["Bot"])
@@ -109,6 +116,81 @@ def buscar_pacientes_por_telefono(db: Session, requester_phone: str | None) -> l
     return flexibles if len(flexibles) == 1 else []
 
 
+def _franja_preferida(db: Session, paciente) -> str | None:
+    """Si el paciente siempre saca turno en la misma franja, la devuelve.
+
+    Sale de sus turnos anteriores: no hace falta preguntarle algo que ya
+    demostro con sus elecciones. Se exige mayoria clara (>=70%) sobre al menos
+    2 turnos, para no inventar una preferencia con un solo dato.
+    """
+    turnos = db.query(Appointment).filter(
+        Appointment.patient_id == paciente.id,
+        Appointment.is_deleted == False,  # noqa: E712
+    ).order_by(Appointment.start_time.desc()).limit(10).all()
+    if len(turnos) < 2:
+        return None
+    manana = sum(1 for t in turnos if t.start_time.hour < 13)
+    tarde = len(turnos) - manana
+    if manana / len(turnos) >= 0.7:
+        return "mañana"
+    if tarde / len(turnos) >= 0.7:
+        return "tarde"
+    return None
+
+
+def ficha_para_el_bot(db: Session, paciente) -> dict:
+    """Lo que el bot deberia saber de un paciente conocido antes de hablarle.
+
+    Todo esto ya estaba en la base y no se estaba usando: el bot reconocia al
+    paciente por el telefono pero le hablaba como a un desconocido, volviendo a
+    preguntar la obra social y sin mencionar su tratamiento en curso.
+    """
+    from backend.models.odontogram import OdontogramEntry
+
+    ultimo = db.query(Appointment).filter(
+        Appointment.patient_id == paciente.id,
+        Appointment.is_deleted == False,  # noqa: E712
+        Appointment.status.in_([AppointmentStatus.completed, AppointmentStatus.confirmed]),
+    ).order_by(Appointment.start_time.desc()).first()
+
+    proximo = db.query(Appointment).filter(
+        Appointment.patient_id == paciente.id,
+        Appointment.is_deleted == False,  # noqa: E712
+        # get_clinic_now y no utcnow: start_time se guarda en hora local de
+        # Argentina, asi que comparar contra UTC corria el corte 3 horas y los
+        # turnos de las proximas 3 horas no figuraban como "proximo turno".
+        Appointment.start_time >= get_clinic_now(),
+        Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
+    ).order_by(Appointment.start_time).first()
+
+    pendientes = db.query(OdontogramEntry).filter(
+        OdontogramEntry.patient_id == paciente.id,
+        OdontogramEntry.is_deleted == False,  # noqa: E712
+        OdontogramEntry.category == "treatment",
+    ).order_by(OdontogramEntry.created_at.desc()).limit(3).all()
+
+    return {
+        "nombre": paciente.first_name,
+        "nombre_completo": f"{paciente.first_name} {paciente.last_name}".strip(),
+        "obra_social": paciente.insurance_name or "Particular",
+        "ultimo_profesional": (
+            ultimo.professional.full_name if ultimo and ultimo.professional else None
+        ),
+        "ultima_visita": ultimo.start_time.strftime("%d/%m/%Y") if ultimo else None,
+        "proximo_turno": (
+            {
+                "fecha": proximo.start_time.strftime("%d/%m/%Y a las %H:%M"),
+                "profesional": proximo.professional.full_name if proximo.professional else None,
+                "motivo": proximo.reason,
+            } if proximo else None
+        ),
+        "tratamientos_pendientes": [
+            (e.description or f"pieza {e.tooth_number}") for e in pendientes
+        ],
+        "franja_preferida": _franja_preferida(db, paciente),
+    }
+
+
 @router.post("/identificar", dependencies=[Depends(verify_bot_key)])
 def bot_identificar(data: dict = Body(...), db: Session = Depends(get_db)):
     """Quien es el que escribe, segun su numero de WhatsApp.
@@ -118,17 +200,10 @@ def bot_identificar(data: dict = Body(...), db: Session = Depends(get_db)):
     cualquiera. De hecho el sistema ya confiaba mas en el telefono — pedia el
     DNI y despues lo validaba contra el numero.
     """
-    pacientes = buscar_pacientes_por_telefono(db, data.get("requester_phone"))
+    pacientes = pacientes_del_numero(db, data.get("requester_phone"))
     return {
         "encontrados": len(pacientes),
-        "pacientes": [
-            {
-                "dni": p.dni,
-                "nombre": f"{p.first_name} {p.last_name}".strip(),
-                "obra_social": p.insurance_name or "Particular",
-            }
-            for p in pacientes
-        ],
+        "pacientes": [dict(ficha_para_el_bot(db, p), dni=p.dni) for p in pacientes],
     }
 
 
@@ -396,9 +471,9 @@ async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(g
         for number in numbers:
             try:
                 await send_whatsapp_message(number, msg_text)
-                print(f"Admin notificado de cancelación: {number}")
+                logger.info(f"Admin notificado de cancelación: {_ofuscar(number)}")
             except Exception as e:
-                print(f"Error notifying admin {number} of cancellation: {e}")
+                logger.error(f"No se pudo notificar al admin {_ofuscar(number)}: {e}", exc_info=True)
 
     return {"status": "ok", "message": "Turno cancelado exitosamente", "appointment_id": str(appt.id)}
 
@@ -418,11 +493,31 @@ def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends
     if not appt:
         raise HTTPException(404, "Turno no encontrado")
 
+    # Mismas reglas que al agendar. Antes esto escribia la fecha nueva sin
+    # mirar nada, asi que se podia reprogramar encima de otro turno, a un
+    # feriado o a un horario fuera de atencion.
+    candidatos = find_professionals_for_reason(appt.reason or "", db)
+    motivo = motivo_no_agendable(
+        db,
+        data.new_start_time,
+        appt.duration_minutes or duracion_para_motivo(appt.reason or ""),
+        appt.location,
+        appt.insurance_name,
+        candidatos,
+        exclude_id=appt.id,   # el propio turno no se cuenta como conflicto
+    )
+    if motivo:
+        raise HTTPException(409, f"{motivo} Ofrecele otro horario al paciente.")
+
     appt.start_time = data.new_start_time
     # Se mantiene confirmado: si volvia a "pending" el recordatorio dejaba de
     # dispararse, porque el loop solo notifica turnos confirmados.
     appt.status = AppointmentStatus.confirmed
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Ese horario acaba de ser tomado. Ofrecele otro al paciente.")
     return {"status": "ok", "message": f"Turno reprogramado para {data.new_start_time}", "appointment_id": str(appt.id)}
 
 

@@ -239,6 +239,52 @@ def verificar_obra_social(obra_social: str) -> str:
 
 # ── Tool registry ────────────────────────────────────────────────────────────
 
+def quien_me_escribe() -> str:
+    """Ficha del paciente que esta escribiendo, segun su numero de WhatsApp.
+
+    Evita tratarlo como un desconocido: el sistema ya sabe su nombre, su obra
+    social, quien lo atendio la ultima vez y si tiene un turno proximo. Todo
+    eso estaba en la base y no se estaba usando.
+    """
+    try:
+        r = httpx.post(f"{API_BASE}/api/bot/identificar",
+                       json={"requester_phone": _current_requester_phone()},
+                       headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        d = r.json()
+    except Exception as e:
+        return f"No pude consultar la ficha: {e}"
+
+    if d["encontrados"] == 0:
+        return ("PACIENTE NUEVO: este número no está registrado. Pedile nombre, "
+                "apellido y DNI recién cuando vayas a agendar, no antes.")
+
+    partes = []
+    for p_ in d["pacientes"]:
+        linea = [f"{p_['nombre_completo']} (obra social: {p_['obra_social']})"]
+        if p_.get("proximo_turno"):
+            t = p_["proximo_turno"]
+            linea.append(
+                f"YA TIENE UN TURNO: {t['fecha']}"
+                + (f" con {t['profesional']}" if t.get("profesional") else "")
+                + (f" para {t['motivo']}" if t.get("motivo") else "")
+            )
+        if p_.get("ultimo_profesional"):
+            linea.append(f"la última vez lo atendió {p_['ultimo_profesional']}"
+                         + (f" el {p_['ultima_visita']}" if p_.get("ultima_visita") else ""))
+        if p_.get("tratamientos_pendientes"):
+            linea.append("tratamientos en curso: " + ", ".join(p_["tratamientos_pendientes"]))
+        if p_.get("franja_preferida"):
+            linea.append(f"suele venir a la {p_['franja_preferida']}")
+        partes.append(" | ".join(linea))
+
+    encabezado = (
+        "PACIENTE CONOCIDO. Saludalo por su nombre y NO le preguntes la obra social: "
+        "ya la sabés. Si tiene un turno próximo, mencionalo antes de ofrecerle otro.\n"
+    )
+    return encabezado + "\n".join(f"- {x}" for x in partes)
+
+
 # ── Estado de la conversacion ────────────────────────────────────────────────
 # El flujo vivia solo en el prompt: el modelo tenia que releer el historial en
 # cada mensaje y deducir en que paso estaba. De ahi salian las re-preguntas y
@@ -303,6 +349,7 @@ _TOOL_MAP = {
     "consultar_disponibilidad": consultar_disponibilidad,
     "verificar_obra_social": verificar_obra_social,
     "recordar_dato": recordar_dato,
+    "quien_me_escribe": quien_me_escribe,
 }
 
 
@@ -322,6 +369,19 @@ def execute_tool(name: str, arguments: dict) -> str:
 # ── OpenAI Function Definitions (JSON Schema) ────────────────────────────────
 
 TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "quien_me_escribe",
+            "description": (
+                "Ficha del paciente que está escribiendo: nombre, obra social, si ya tiene "
+                "un turno, quién lo atendió la última vez y sus tratamientos en curso. "
+                "LLAMALA SIEMPRE al principio de una conversación nueva, ANTES de preguntar "
+                "nada. Evita pedirle datos que el sistema ya tiene."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
     {
         "type": "function",
         "function": {

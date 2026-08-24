@@ -1,11 +1,15 @@
 """YCloud WhatsApp Router - WhatsApp integration."""
 import os
+import re
 import json
+import hmac
+import time
+import hashlib
 import logging
 import httpx
 import asyncio
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Request, Depends, BackgroundTasks
+from fastapi import APIRouter, Request, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.orm import Session
 
 from bot.ai_agent import chat
@@ -55,19 +59,29 @@ def get_or_create_session(db: Session, platform_user_id: str):
 HISTORY_LIMIT = 20
 
 
+# Los mensajes de hace muchas horas no son la misma conversación. Antes se
+# cargaban los últimos 20 sin mirar la fecha, así que el bot podía retomar a
+# mitad de camino una charla de hace semanas, como si el paciente nunca se
+# hubiera ido. La ficha del paciente (quien_me_escribe) da la continuidad que
+# de verdad importa; el hilo textual viejo solo confunde.
+VENTANA_CONVERSACION = timedelta(hours=6)
+
+
 def load_history(db: Session, session_id) -> list[dict]:
     # Fetch LATEST N messages, ordered oldest-to-newest for the LLM
+    corte = datetime.utcnow() - VENTANA_CONVERSACION
     subquery = db.query(ChatMessage).filter(
-        ChatMessage.session_id == session_id
+        ChatMessage.session_id == session_id,
+        ChatMessage.created_at >= corte,
     ).order_by(ChatMessage.created_at.desc()).limit(HISTORY_LIMIT).all()
     
     # Reverse them to be in chronological order
     subquery.reverse()
     
-    print(f"DEBUG: History for {session_id}: {len(subquery)} msgs")
-    for m in subquery:
-        print(f"  - {m.role.value}: {m.content[:50]}... ({m.created_at})")
-        
+    # Antes esto hacia print() del contenido de cada mensaje: la conversacion
+    # entera del paciente quedaba en stdout del contenedor.
+    logger.debug("Historial de %s: %d mensajes", session_id, len(subquery))
+
     return [{"role": m.role.value, "content": m.content} for m in subquery]
 
 def save_message(db: Session, session_id, role: MessageRole, content: str):
@@ -127,12 +141,98 @@ async def transcribe_audio_url(url: str) -> str:
                 os.remove(file_path)
     return ""
 
+# ── Autenticacion del webhook ────────────────────────────────────────────────
+# Sin esto el endpoint aceptaba cualquier POST y creia el numero que viniera en
+# el campo "from". Todo el modelo de identidad del bot (que un paciente solo
+# pueda ver y cancelar SUS turnos) se apoya en ese dato, asi que cualquiera que
+# conociera la URL podia hacerse pasar por otro paciente.
+#
+# YCloud firma cada evento con HMAC-SHA256 sobre "{timestamp}.{body}" y lo manda
+# en el header YCloud-Signature con el formato "t=<unix>,s=<hex>".
+TOLERANCIA_FIRMA = 300  # segundos; descarta reenvios viejos (replay)
+
+
+def _firma_valida(raw: bytes, header: str | None, secreto: str) -> bool:
+    if not header:
+        return False
+    try:
+        partes = dict(p.split("=", 1) for p in header.split(","))
+        ts, firma = partes["t"], partes["s"]
+    except (ValueError, KeyError):
+        return False
+
+    try:
+        if abs(time.time() - int(ts)) > TOLERANCIA_FIRMA:
+            logger.warning("🔒 Webhook con timestamp fuera de tolerancia (posible replay).")
+            return False
+    except ValueError:
+        return False
+
+    esperada = hmac.new(
+        secreto.encode(), f"{ts}.".encode() + raw, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(firma, esperada)
+
+
+def _autenticar_webhook(raw: bytes, header: str | None):
+    """Corta el request si no viene firmado por YCloud.
+
+    Si no hay secreto configurado no se puede verificar nada: se deja pasar
+    pero se avisa fuerte en el log, para que no quede abierto por olvido.
+    ENFORCE existe para poder desactivarlo desde el panel en una emergencia
+    sin tener que redesplegar.
+    """
+    secreto = (get_config("YCLOUD_WEBHOOK_SECRET") or "").strip()
+    if not secreto:
+        logger.warning(
+            "🔓 YCLOUD_WEBHOOK_SECRET sin configurar: el webhook acepta cualquier "
+            "origen. Cargalo en Configuración → Integraciones y en el panel de YCloud."
+        )
+        return
+    valida = _firma_valida(raw, header, secreto)
+
+    if (get_config("YCLOUD_WEBHOOK_ENFORCE", "true") or "true").strip().lower() == "false":
+        # Modo ensayo: no rechaza nada, pero deja dicho en el log si la firma
+        # HABRIA pasado. Sirve para activar la verificacion sin arriesgarse a
+        # dejar el bot mudo: se despliega asi, se manda un WhatsApp de prueba,
+        # se mira el log y recien despues se pone ENFORCE en true.
+        if valida:
+            logger.warning(
+                "🧪 Verificación en modo ENSAYO (ENFORCE=false). La firma de este "
+                "mensaje es VÁLIDA ✅ — el secreto es correcto y ya podés poner "
+                "YCLOUD_WEBHOOK_ENFORCE=true."
+            )
+        else:
+            logger.error(
+                "🧪 Verificación en modo ENSAYO (ENFORCE=false). La firma de este "
+                "mensaje NO valida ❌ — si activaras ENFORCE ahora, el bot dejaría "
+                "de responder. Revisá que YCLOUD_WEBHOOK_SECRET sea el secreto del "
+                "endpoint en YCloud."
+            )
+        return
+
+    if not valida:
+        logger.error(
+            "🔒 Webhook rechazado: firma inválida o ausente. Si el bot dejó de "
+            "responder, poné YCLOUD_WEBHOOK_ENFORCE=false para volver al aire "
+            "mientras revisás el secreto."
+        )
+        raise HTTPException(401, "Invalid signature")
+
+
 @router.post("/webhook")
 async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
     """YCloud WhatsApp Webhook handler."""
+    raw = await request.body()
+    _autenticar_webhook(raw, request.headers.get("YCloud-Signature"))
+
     try:
-        payload = await request.json()
-        logger.info(f"📩 Webhook de YCloud recibido: {json.dumps(payload, indent=2)}")
+        payload = json.loads(raw)
+        # El payload trae el telefono y el texto del paciente. En INFO eso deja
+        # datos de salud en los logs del contenedor, asi que solo va el tipo de
+        # evento; el detalle completo queda en DEBUG.
+        logger.info(f"📩 Webhook de YCloud: {payload.get('type')}")
+        logger.debug(f"Payload completo: {json.dumps(payload, indent=2)}")
     except Exception:
         logger.error("❌ Error al parsear JSON del webhook")
         return {"status": "error", "message": "Invalid JSON"}
@@ -310,6 +410,61 @@ def _pide_humano(texto: str) -> bool:
     return any(f in t for f in _PEDIDOS_DE_HUMANO)
 
 
+# ── Garantías por código sobre lo que responde el modelo ─────────────────────
+# El prompt le pide al modelo que no se repita y que no se presente dos veces.
+# En producción no lo cumple: se presentaba en CADA mensaje ("¡Buenas noches!
+# Soy DentiBot...") y repetía la misma pregunta palabra por palabra cuando la
+# respuesta del paciente no le servía. Un prompt es un pedido; esto es una
+# garantía.
+
+_PRESENTACION = re.compile(
+    r"^[¡!]*\s*(hola|buen[oa]s?\s+(d[ií]as?|tardes|noches))?[!¡.,\s]*"
+    r"soy\s+dentibot[^.!?\n]*[.!?\n]+\s*",
+    re.IGNORECASE,
+)
+
+
+def quitar_presentacion(texto: str) -> str:
+    """Saca el "Soy DentiBot..." inicial cuando la charla ya venía empezada."""
+    limpio = _PRESENTACION.sub("", texto, count=1).lstrip()
+    # Si al sacarla no queda nada útil, se deja el original.
+    return limpio if len(limpio) > 15 else texto
+
+
+def _normalizar(texto: str) -> str:
+    return " ".join((texto or "").lower().split())
+
+
+def es_repeticion(nueva: str, anteriores: list[str]) -> bool:
+    """True si el bot está por decir casi lo mismo que ya dijo.
+
+    Compara contra sus últimas respuestas. Sin esto, si el paciente contesta
+    algo que el modelo no logra interpretar, se queda haciendo la misma
+    pregunta indefinidamente.
+    """
+    n = _normalizar(nueva)
+    if len(n) < 20:
+        return False
+    for previa in anteriores:
+        pv = _normalizar(previa)
+        if not pv:
+            continue
+        if n == pv:
+            return True
+        # Casi iguales: mismo arranque largo (reformulaciones mínimas).
+        corto = min(len(n), len(pv))
+        if corto > 60 and n[:60] == pv[:60]:
+            return True
+    return False
+
+
+SALIDA_DE_LOOP = (
+    "Perdón, me parece que no nos estamos entendiendo. 🙏\n"
+    "Le paso tu consulta a alguien del equipo para que te ayude directamente. "
+    "En un rato te escriben."
+)
+
+
 def _respuesta_ofrece(texto: str, opciones: list) -> list:
     """Las opciones que la respuesta realmente esta ofreciendo.
 
@@ -403,11 +558,23 @@ async def handle_text_message(remote_jid: str, text: str):
             )
             logger.info(f"🤖 IA respondió: {response[:50]}...")
 
+            # 1) Si la charla ya venía empezada, no se vuelve a presentar.
+            if history:
+                response = quitar_presentacion(response)
+
+            # 2) Si está por repetir lo mismo que ya dijo, se corta y deriva.
+            ultimas = [m["content"] for m in history if m["role"] == "assistant"][-2:]
+            if es_repeticion(response, ultimas):
+                logger.warning(f"🔁 Respuesta repetida para {remote_jid}: se deriva a una persona.")
+                session.paused_until = datetime.utcnow() + PAUSA_INTERVENCION_HUMANA
+                db.commit()
+                response, opciones = SALIDA_DE_LOOP, None
+
             _guardar_estado(db, session, estado_nuevo)
             save_message(db, session.id, MessageRole.assistant, response)
             await _responder(remote_jid, response, opciones)
         except Exception as e:
-            logger.error(f"Error handling WA text: {e}")
+            logger.error(f"Error handling WA text: {e}", exc_info=True)
             await send_whatsapp_message(remote_jid, "Lo siento, tuve un problema interno al procesar tu mensaje. Por favor, avisale al administrador que revise la configuración de la Inteligencia Artificial (API Keys o Modelos).")
         finally:
             db.close()

@@ -1,3 +1,6 @@
+import logging
+import os
+import secrets
 from datetime import datetime, timedelta, date as py_date
 from sqlalchemy.orm import Session
 from backend.models.user import User, UserRole
@@ -9,25 +12,54 @@ from backend.models.appointment import Appointment, AppointmentStatus
 from backend.models.odontogram import OdontogramEntry, ToothFace, EntryCategory, ToothSymbol
 from backend.security import hash_password
 
+logger = logging.getLogger(__name__)
+
+
+def _password_inicial(variable: str) -> tuple[str, bool]:
+    """La password del usuario semilla: la configurada, o uno al azar.
+
+    Antes esto sembraba "admin123" y "recepcion123", ademas publicadas en el
+    README. Detras de ese login hay historia clinica y odontogramas, o sea
+    datos de salud: alcanzaba con leer el repositorio para entrar.
+
+    Ahora sale de una variable de entorno y, si no esta, se genera una al azar
+    que se muestra UNA sola vez en el log del arranque. Nunca queda una
+    password conocida de antemano.
+    """
+    definida = (os.getenv(variable) or "").strip()
+    if definida:
+        return definida, False
+    return secrets.token_urlsafe(12), True
+
+
 def run_seed(db: Session):
     """Seed initial data if tables are empty."""
 
     # ── Admin users ─────────────────────────────────────
     if db.query(User).count() < 2:
-        if not db.query(User).filter(User.email == "admin@dentalstudio.com").first():
+        semillas = [
+            ("admin@dentalstudio.com", "ADMIN_PASSWORD",
+             "Dr. Sergio Silvestro (Admin)", UserRole.admin),
+            ("recepcion@dentalstudio.com", "RECEPCION_PASSWORD",
+             "Carla Reception", UserRole.receptionist),
+        ]
+        for email, variable, nombre, rol in semillas:
+            if db.query(User).filter(User.email == email).first():
+                continue
+            password, generada = _password_inicial(variable)
             db.add(User(
-                email="admin@dentalstudio.com",
-                hashed_password=hash_password("admin123"),
-                full_name="Dr. Sergio Silvestro (Admin)",
-                role=UserRole.admin,
+                email=email,
+                hashed_password=hash_password(password),
+                full_name=nombre,
+                role=rol,
             ))
-        if not db.query(User).filter(User.email == "recepcion@dentalstudio.com").first():
-            db.add(User(
-                email="recepcion@dentalstudio.com",
-                hashed_password=hash_password("recepcion123"),
-                full_name="Carla Reception",
-                role=UserRole.receptionist,
-            ))
+            if generada:
+                logger.warning(
+                    "🔑 Usuario %s creado con password generada: %s — anotala y "
+                    "cambiala desde el panel. No vuelve a aparecer. Para fijarla "
+                    "vos, definí %s en las variables de entorno.",
+                    email, password, variable,
+                )
         db.commit()
 
     # ── Professionals ───────────────────────────────────

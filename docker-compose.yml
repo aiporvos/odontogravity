@@ -40,12 +40,35 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
       API_BASE_URL: ${API_BASE_URL:-http://backend:8000}
       BOT_API_KEY: ${BOT_API_KEY:-dev-bot-key-change-in-prod}
+      # Password inicial de los usuarios del panel. Si no se definen, el seed
+      # genera una al azar y la muestra UNA vez en el log del arranque.
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      RECEPCION_PASSWORD: ${RECEPCION_PASSWORD:-}
+      # Cascada de proveedores de IA. El codigo la soporta hace rato pero estas
+      # variables no se pasaban, asi que en la practica solo funcionaba OpenAI:
+      # si fallaba, el paciente recibia el mensaje de disculpa y nada mas.
+      AI_PROVIDER: ${AI_PROVIDER:-openai}
+      AI_PROVIDER_2: ${AI_PROVIDER_2:-none}
+      AI_PROVIDER_3: ${AI_PROVIDER_3:-none}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
       EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
       EVOLUTION_INSTANCE_ID: ${EVOLUTION_INSTANCE_ID:-}
       YCLOUD_API_KEY: ${YCLOUD_API_KEY:-}
       YCLOUD_FROM_PHONE: ${YCLOUD_FROM_PHONE:-}
+      # Sin esto el webhook no puede verificar la firma de YCloud y acepta
+      # cualquier POST: alcanzaba con conocer la URL para hacerse pasar por
+      # cualquier paciente. Faltaba en este archivo, asi que el valor cargado en
+      # Dokploy nunca llegaba al contenedor.
+      YCLOUD_WEBHOOK_SECRET: ${YCLOUD_WEBHOOK_SECRET:-}
+      # Valvula de escape: ponerlo en "false" desactiva la verificacion sin
+      # redesplegar, por si algun dia el secreto queda desincronizado.
+      YCLOUD_WEBHOOK_ENFORCE: ${YCLOUD_WEBHOOK_ENFORCE:-true}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
