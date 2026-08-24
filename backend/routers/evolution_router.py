@@ -475,6 +475,36 @@ def es_repeticion(nueva: str, anteriores: list[str]) -> bool:
     return False
 
 
+# Que opciones se le ofrecieron en el mensaje anterior. Sirve para distinguir
+# "el bot se trabo repitiendo lo mismo" de "el bot repite la frase pero le esta
+# mostrando otra cosa", que es progreso legitimo.
+CLAVE_ULTIMAS_OPCIONES = "ultimas_opciones"
+
+
+def _firma_opciones(publicadas: dict | None) -> str:
+    if not publicadas:
+        return ""
+    return "|".join(str(o) for o in (publicadas.get("opciones") or []))
+
+
+def debe_derivar_por_loop(respuesta: str, anteriores: list[str],
+                          opciones: dict | None, estado_previo: dict | None) -> bool:
+    """Si el bot esta realmente trabado y conviene pasarle la charla a alguien.
+
+    Repetir el texto no alcanza como sintoma. Si ademas esta ofreciendo opciones
+    distintas de las del mensaje anterior, la conversacion avanzo aunque la
+    frase se parezca: es lo que pasa al buscar una obra social, donde primero se
+    muestran las frecuentes y despues las que matchean las letras que escribio
+    el paciente.
+    """
+    if not es_repeticion(respuesta, anteriores):
+        return False
+    firma = _firma_opciones(opciones)
+    if firma and firma != (estado_previo or {}).get(CLAVE_ULTIMAS_OPCIONES):
+        return False
+    return True
+
+
 SALIDA_DE_LOOP = (
     "Perdón, me parece que no nos estamos entendiendo. 🙏\n"
     "Le paso tu consulta a alguien del equipo para que te ayude directamente. "
@@ -592,13 +622,23 @@ async def handle_text_message(remote_jid: str, text: str):
                 response = quitar_presentacion(response)
 
             # 2) Si está por repetir lo mismo que ya dijo, se corta y deriva.
+            #
+            # Salvo que esté ofreciendo opciones DISTINTAS: ahí el texto se
+            # parece pero la conversación sí avanzó. Es el caso de las obras
+            # sociales, donde el bot primero muestra las frecuentes y después
+            # las filtradas por las letras que pasó el paciente: dos mensajes
+            # casi iguales con listas diferentes. Sin esta excepción, escribir
+            # "sw" para buscar Swiss Medical hacía que el bot se disculpara y
+            # se derivara solo a una persona.
             ultimas = [m["content"] for m in history if m["role"] == "assistant"][-2:]
-            if es_repeticion(response, ultimas):
+            if debe_derivar_por_loop(response, ultimas, opciones, estado_previo):
                 logger.warning(f"🔁 Respuesta repetida para {remote_jid}: se deriva a una persona.")
                 session.paused_until = datetime.utcnow() + PAUSA_INTERVENCION_HUMANA
                 db.commit()
                 response, opciones = SALIDA_DE_LOOP, None
 
+            estado_nuevo = dict(estado_nuevo or {})
+            estado_nuevo[CLAVE_ULTIMAS_OPCIONES] = _firma_opciones(opciones)
             _guardar_estado(db, session, estado_nuevo)
             save_message(db, session.id, MessageRole.assistant, response)
             await _responder(remote_jid, response, opciones)
