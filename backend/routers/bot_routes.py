@@ -404,6 +404,20 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
 
 
 # ── Cancelar Turno ─────────────────────────────────────
+# Un turno pasado no se cancela ni figura como pendiente. Ni el endpoint de
+# cancelar ni el de consultar filtraban por fecha: como nadie marca los turnos
+# viejos como completados, se quedaban en "confirmed" para siempre y el bot
+# ofrecia cancelar turnos de hace semanas. Le paso el 23/08 con uno del 18/08.
+def _turnos_cancelables(db: Session, patient_ids: list):
+    """Turnos vivos y todavia por venir de esos pacientes."""
+    return db.query(Appointment).filter(
+        Appointment.patient_id.in_(patient_ids),
+        Appointment.is_deleted == False,  # noqa: E712
+        Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
+        Appointment.start_time >= get_clinic_now(),
+    )
+
+
 @router.post("/cancel", dependencies=[Depends(verify_bot_key)])
 async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(get_db)):
     # Igual que al consultar: no se pregunta "¿de quién?". Se juntan los turnos
@@ -421,11 +435,7 @@ async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(g
             raise HTTPException(404, _NO_IDENTIFICADO)
 
     ids = [p.id for p in pacientes]
-    query = db.query(Appointment).filter(
-        Appointment.patient_id.in_(ids),
-        Appointment.is_deleted == False,  # noqa: E712
-        Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
-    )
+    query = _turnos_cancelables(db, ids)
 
     if data.appointment_id:
         appt = query.filter(Appointment.id == data.appointment_id).first()
@@ -545,11 +555,8 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
     varios = len(pacientes) > 1
     turnos = []
     for p in pacientes:
-        appts = db.query(Appointment).filter(
-            Appointment.patient_id == p.id,
-            Appointment.is_deleted == False,  # noqa: E712
-            Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
-        ).order_by(Appointment.start_time).limit(10).all()
+        appts = _turnos_cancelables(db, [p.id]).order_by(
+            Appointment.start_time).limit(10).all()
         for a in appts:
             turnos.append({
                 "id": str(a.id),

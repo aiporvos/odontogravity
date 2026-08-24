@@ -331,12 +331,27 @@ def chat(user_message: str, history: list[dict] | None = None,
         "La clínica está CERRADA en este momento (fuera del horario de atención). "
         "Podés agendar turnos igual, pero no le digas al paciente que venga ahora."
     )
+    # La instruccion de saludar solo va en el primer mensaje. Antes viajaba en
+    # TODOS, asi que el modelo abria con "¡Buenas noches, Claudio!" una y otra
+    # vez dentro de la misma charla: le estabamos pidiendo que saludara de nuevo
+    # en cada vuelta y despues nos quejabamos de que saludaba de nuevo.
+    if history:
+        instruccion_saludo = (
+            f"La conversación YA ESTÁ EMPEZADA: NO saludes de nuevo, no digas "
+            f"\"{saludo}\" ni vuelvas a nombrar al paciente como si recién llegara. "
+            f"Seguí la charla donde quedó. Si te despedís, usá \"{despedida}\". "
+        )
+    else:
+        instruccion_saludo = (
+            f"Saludá diciendo \"{saludo}\" y despedite con \"{despedida}\" — "
+            f"usá EXACTAMENTE esas fórmulas, no inventes otra. "
+        )
+
     dated_message = (
         f"{marca_nueva}"
         f"[SISTEMA - FECHA ACTUAL: {dia_semana} {clinic_now.strftime('%Y-%m-%d')} "
         f"hora Argentina: {clinic_now.strftime('%H:%M')}. "
-        f"Saludá diciendo \"{saludo}\" y despedite con \"{despedida}\" — "
-        f"usá EXACTAMENTE esas fórmulas, no inventes otra. "
+        f"{instruccion_saludo}"
         f"{estado_clinica}]\n"
         f"{user_message}"
     )

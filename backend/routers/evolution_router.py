@@ -418,16 +418,33 @@ def _pide_humano(texto: str) -> bool:
 # garantía.
 
 _PRESENTACION = re.compile(
-    r"^[¡!]*\s*(hola|buen[oa]s?\s+(d[ií]as?|tardes|noches))?[!¡.,\s]*"
+    r"^[¡!]*\s*(hola|buen[oa]?s?\s+(d[ií]as?|tardes|noches))?[!¡.,\s]*"
     r"soy\s+dentibot[^.!?\n]*[.!?\n]+\s*",
+    re.IGNORECASE,
+)
+
+# Saludo suelto al principio, con o sin el nombre del paciente detrás:
+# "¡Buenas noches, Claudio! 😊", "Hola Claudio,", "Buen día!".
+# El modelo lo repetía en cada mensaje de la misma conversación, y la regex
+# anterior solo cazaba el caso que además decía "soy DentiBot".
+_SALUDO_SUELTO = re.compile(
+    r"^[¡!]*\s*(hola|buen[oa]?s?\s+(d[ií]as?|tardes|noches))"
+    r"[^.!?\n]{0,40}?[!¡.,]+[\s\U0001F300-\U0001FAFF☀-➿]*",
     re.IGNORECASE,
 )
 
 
 def quitar_presentacion(texto: str) -> str:
-    """Saca el "Soy DentiBot..." inicial cuando la charla ya venía empezada."""
+    """Saca el saludo inicial cuando la charla ya venía empezada.
+
+    Primero el "Soy DentiBot...", después un saludo suelto si quedó. Se hace por
+    código y no por prompt porque el prompt ya lo pedía y el modelo igual
+    saludaba de nuevo: pedir no es garantizar.
+    """
     limpio = _PRESENTACION.sub("", texto, count=1).lstrip()
-    # Si al sacarla no queda nada útil, se deja el original.
+    if limpio == texto:
+        limpio = _SALUDO_SUELTO.sub("", texto, count=1).lstrip()
+    # Si al sacarlo no queda nada útil, se deja el original.
     return limpio if len(limpio) > 15 else texto
 
 
