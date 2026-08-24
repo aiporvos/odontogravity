@@ -12,12 +12,14 @@ from backend.models.professional import Professional
 from backend.models.clinic_location import ClinicLocation
 from backend.models.insurance import Insurance
 from backend.models.config import AppConfig
+from backend.models.tipo_consulta import TipoConsulta
 from backend.schemas.schemas import (
 # ... existing imports continue ...
     UserCreate, UserRead, UserUpdate,
     ProfessionalCreate, ProfessionalRead, ProfessionalUpdate,
     LocationCreate, LocationRead, InsuranceCreate, InsuranceRead, InsuranceUpdate,
     ConfigCreate, ConfigRead, ScheduleBlock, ProfessionalScheduleBlockRead,
+    TipoConsultaCreate, TipoConsultaUpdate, TipoConsultaRead,
 )
 from backend.models.schedule import ProfessionalSchedule
 
@@ -379,3 +381,65 @@ async def trigger_reminders_now(hours_override: float = 24, db: Session = Depend
         "proximos_turnos_confirmados": proximos,
     }
 
+
+
+# ── Tipos de consulta ───────────────────────────────────────────────────────
+# Lo que define cuanto dura un turno y quien lo atiende. Vivia hardcodeado en
+# appointment_service.py: la clinica podia dar de alta un profesional nuevo pero
+# no podia decir cuanto dura una endodoncia, ni agregar como lo dicen los
+# pacientes ("se me rompio un diente"), sin tocar el codigo.
+
+@router.get("/tipos-consulta", response_model=list[TipoConsultaRead])
+def list_tipos_consulta(db: Session = Depends(get_db)):
+    return db.query(TipoConsulta).filter(
+        TipoConsulta.is_deleted == False  # noqa: E712
+    ).order_by(TipoConsulta.nombre).all()
+
+
+@router.post("/tipos-consulta", response_model=TipoConsultaRead, status_code=201)
+def create_tipo_consulta(data: TipoConsultaCreate, db: Session = Depends(get_db)):
+    existente = db.query(TipoConsulta).filter(TipoConsulta.nombre.ilike(data.nombre)).first()
+    if existente:
+        if not existente.is_deleted:
+            raise HTTPException(400, "Ya existe un tipo de consulta con ese nombre")
+        # Restaurar en vez de duplicar: el nombre es unico en la base.
+        for campo, valor in data.model_dump().items():
+            setattr(existente, campo, valor)
+        existente.is_deleted = False
+        db.commit()
+        db.refresh(existente)
+        return existente
+
+    tipo = TipoConsulta(**data.model_dump())
+    db.add(tipo)
+    db.commit()
+    db.refresh(tipo)
+    return tipo
+
+
+@router.put("/tipos-consulta/{tipo_id}", response_model=TipoConsultaRead)
+def update_tipo_consulta(tipo_id: UUID, data: TipoConsultaUpdate, db: Session = Depends(get_db)):
+    tipo = db.query(TipoConsulta).filter(
+        TipoConsulta.id == tipo_id, TipoConsulta.is_deleted == False  # noqa: E712
+    ).first()
+    if not tipo:
+        raise HTTPException(404, "Tipo de consulta no encontrado")
+
+    for campo, valor in data.model_dump(exclude_unset=True).items():
+        setattr(tipo, campo, valor)
+    db.commit()
+    db.refresh(tipo)
+    return tipo
+
+
+@router.delete("/tipos-consulta/{tipo_id}", status_code=204)
+def delete_tipo_consulta(tipo_id: UUID, db: Session = Depends(get_db)):
+    tipo = db.query(TipoConsulta).filter(
+        TipoConsulta.id == tipo_id, TipoConsulta.is_deleted == False  # noqa: E712
+    ).first()
+    if not tipo:
+        raise HTTPException(404, "Tipo de consulta no encontrado")
+    # Borrado logico: los turnos ya agendados guardan el motivo como texto, pero
+    # conviene poder revertir un borrado hecho por error.
+    tipo.is_deleted = True
+    db.commit()

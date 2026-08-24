@@ -8,10 +8,12 @@ from backend.models.clinic_location import ClinicLocation
 from backend.models.insurance import Insurance
 from backend.models.config import AppConfig
 from backend.models.schedule import ClinicSchedule, ProfessionalSchedule, ProfessionalTimeOff, ClinicHoliday
+from backend.models.tipo_consulta import TipoConsulta
 
 __all__ = [
     "User", "Patient", "Professional", "Appointment",
     "OdontogramEntry", "ChatSession", "ChatMessage",
     "ClinicLocation", "Insurance", "AppConfig",
-    "ClinicSchedule", "ProfessionalSchedule", "ProfessionalTimeOff", "ClinicHoliday"
+    "ClinicSchedule", "ProfessionalSchedule", "ProfessionalTimeOff", "ClinicHoliday",
+    "TipoConsulta",
 ]

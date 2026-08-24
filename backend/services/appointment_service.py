@@ -270,6 +270,19 @@ def find_professionals_for_reason(reason: str, db: Session) -> list[Professional
     if not palabras:
         return activos
 
+    # Primero por la tabla de tipos: si el paciente dijo "sacar una muela", eso
+    # lleva a "Extraccion" y de ahi a quien tenga esa especialidad cargada. Es
+    # el puente que la clinica configura desde el panel.
+    tipo = _tipo_para_motivo(db, reason)
+    if tipo and tipo.especialidad:
+        del_tipo = [
+            p for p in activos
+            if any(_especialidad_coincide(e, _palabras(tipo.especialidad))
+                   for e in (p.specialties or []))
+        ]
+        if del_tipo:
+            return del_tipo
+
     coinciden = [
         p for p in activos
         if any(_especialidad_coincide(e, palabras) for e in (p.specialties or []))
@@ -408,14 +421,65 @@ def _misma_persona_ya_cargada(db: Session, telefono: str | None,
     return None
 
 
-def duracion_para_motivo(reason: str) -> int:
+# Cuanto dura un turno cuyo motivo no matchea ningun tipo cargado. Es el mismo
+# valor que tenia el codigo para lo generico (una consulta o control).
+DURACION_POR_DEFECTO = 15
+
+
+def tipos_consulta_activos(db: Session):
+    """Los tipos de consulta cargados en el panel, o [] si la tabla no existe.
+
+    Tolera que la tabla no este todavia (base vieja sin migrar): en ese caso el
+    codigo cae en los valores hardcodeados de siempre y nada se rompe.
+    """
+    from backend.models.tipo_consulta import TipoConsulta
+    try:
+        return db.query(TipoConsulta).filter(
+            TipoConsulta.is_deleted == False,  # noqa: E712
+            TipoConsulta.is_active == True,    # noqa: E712
+        ).all()
+    except Exception:
+        return []
+
+
+def _tipo_para_motivo(db: Session, reason: str):
+    """El tipo de consulta que corresponde a lo que dijo el paciente."""
+    palabras = _palabras(reason or "")
+    if not palabras:
+        return None
+
+    for tipo in tipos_consulta_activos(db):
+        candidatos = [tipo.nombre] + list(tipo.sinonimos or [])
+        for c in candidatos:
+            if any(_misma_palabra(_sin_acentos(c), p) for p in palabras):
+                return tipo
+    return None
+
+
+def duracion_para_motivo(reason: str, db: Session | None = None) -> int:
     """Cuanto dura un turno segun el motivo.
 
-    Fuente unica de verdad. Antes esto vivia solo adentro de get_available_slots
-    (para OFRECER horarios) mientras que al AGENDAR se guardaba lo que mandara
-    el bot, que lo elegia el modelo. Ofrecer un hueco de 15 minutos y despues
-    grabar un turno de 30 hace que el chequeo de solapamiento valide sobre
-    datos que no son los reales.
+    Sale de la tabla tipos_consulta, que la clinica edita desde el panel. Si no
+    se pasa `db` (o la tabla todavia no existe) se usan los valores que estaban
+    hardcodeados, para no cambiar el comportamiento de golpe.
+    """
+    if db is not None:
+        cargados = tipos_consulta_activos(db)
+        if cargados:
+            # La tabla manda: si la clinica cargo sus tipos, el codigo no puede
+            # contradecirla. Sin esto, desactivar un tipo desde el panel no
+            # tenia efecto —el respaldo hardcodeado devolvia la duracion vieja—
+            # y la configuracion del panel era decorativa.
+            tipo = _tipo_para_motivo(db, reason)
+            return tipo.duracion_minutos if tipo else DURACION_POR_DEFECTO
+    return _duracion_hardcodeada(reason)
+
+
+def _duracion_hardcodeada(reason: str) -> int:
+    """Respaldo por si la tabla tipos_consulta todavia no existe o no matchea.
+
+    Son los valores que vivieron en el codigo hasta que se hicieron
+    configurables. Se conservan para que una base sin migrar siga funcionando.
     """
     reason_lower = (reason or "").lower()
     if any(x in reason_lower for x in ["extracc", "ortodoncia", "implante", "prótesis", "protesis"]):
@@ -553,7 +617,7 @@ def create_appointment_logic(
 
     # La duracion la decide el motivo, no el modelo: es la misma con la que se
     # calculo el hueco que se le ofrecio al paciente.
-    duration_minutes = duracion_para_motivo(reason)
+    duration_minutes = duracion_para_motivo(reason, db)
 
     motivo = motivo_no_agendable(
         db, start, duration_minutes, location, insurance_name, candidatos,
@@ -882,7 +946,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     existing = get_day_appointments(db, day, location)
     chairs = get_chairs_per_location(db)
     
-    duration_minutes = duracion_para_motivo(reason)
+    duration_minutes = duracion_para_motivo(reason, db)
 
     available_slots = []
     for shift_start_time, shift_end_time in shifts:

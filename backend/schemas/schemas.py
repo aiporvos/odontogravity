@@ -383,3 +383,35 @@ class HolidayRead(BaseModel):
     description: Optional[str] = None
     created_at: datetime
     model_config = {"from_attributes": True}
+
+
+# ── Tipos de consulta ───────────────────────────────────────────────────────
+# Motivo -> duracion -> especialidad. Antes la duracion y los sinonimos estaban
+# hardcodeados: la clinica podia cargar profesionales pero no decir cuanto dura
+# una endodoncia sin tocar el codigo.
+
+class TipoConsultaCreate(BaseModel):
+    nombre: str
+    duracion_minutos: int = 15
+    especialidad: str | None = None
+    sinonimos: list[str] = []
+    is_active: bool = True
+
+
+class TipoConsultaUpdate(BaseModel):
+    nombre: str | None = None
+    duracion_minutos: int | None = None
+    especialidad: str | None = None
+    sinonimos: list[str] | None = None
+    is_active: bool | None = None
+
+
+class TipoConsultaRead(BaseModel):
+    id: UUID
+    nombre: str
+    duracion_minutos: int
+    especialidad: str | None = None
+    sinonimos: list[str] = []
+    is_active: bool
+
+    model_config = {"from_attributes": True}
