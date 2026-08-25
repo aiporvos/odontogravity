@@ -526,6 +526,41 @@ def franjas_del_dia(db: Session, day, candidatos):
     return _unir_franjas([_franjas_si_no_ausente(p) for p in candidatos])
 
 
+def profesional_libre(db: Session, candidatos, start: datetime,
+                      duration_minutes: int, location: str | None, exclude_id=None):
+    """El profesional que puede tomar ese turno, o None si estan todos ocupados.
+
+    Existe porque la asignacion y la validacion no se hacian la misma pregunta.
+    slot_conflict pregunta "¿estan ocupados TODOS los que pueden atenderlo?",
+    pero el alta despues hacia `prof = candidatos[0]`: siempre el primero de la
+    lista, que podia ser justo el ocupado.
+
+    Con un motivo que atienden los dos y mas de un sillon, eso daba turnos
+    encimados: Martin ocupado a las 10:00 y Elena libre, la validacion pasaba
+    —no estaban los dos ocupados— y el turno igual se le asignaba a Martin.
+
+    Entre los que estan libres se elige el que menos turnos tiene ese dia, para
+    no cargarle todo al primero alfabeticamente.
+    """
+    if not candidatos:
+        return None
+
+    del_dia = get_day_appointments(db, start.date(), location)
+    ocupados = {
+        a.professional_id
+        for a in overlapping_appointments(del_dia, start, duration_minutes, exclude_id)
+    }
+
+    libres = [p for p in candidatos if p.id not in ocupados]
+    if not libres:
+        return None
+
+    carga = {}
+    for a in del_dia:
+        carga[a.professional_id] = carga.get(a.professional_id, 0) + 1
+    return min(libres, key=lambda p: (carga.get(p.id, 0), p.full_name))
+
+
 def motivo_regla_obra_social(obra_social: str | None, when: datetime) -> str | None:
     """La regla interna de PAMI, aplicada al momento de escribir.
 
@@ -620,8 +655,7 @@ def create_appointment_logic(
         return {"error": f"Formato de fecha inválido: '{preferred_date}'. Usar formato YYYY-MM-DD HH:MM."}
 
     candidatos = find_professionals_for_reason(reason, db)
-    prof = candidatos[0] if candidatos else None
-    if not prof:
+    if not candidatos:
         return {"error": "No hay profesionales disponibles"}
 
     # La duracion la decide el motivo, no el modelo: es la misma con la que se
@@ -633,6 +667,13 @@ def create_appointment_logic(
     )
     if motivo:
         return {"error": f"{motivo} Ofrecele otro horario al paciente."}
+
+    # Quien lo atiende: uno que este LIBRE en ese horario, no el primero de la
+    # lista. Antes se tomaba candidatos[0] aunque estuviera ocupado, y ese es el
+    # origen de los turnos encimados.
+    prof = profesional_libre(db, candidatos, start, duration_minutes, location)
+    if not prof:
+        return {"error": "Ese horario ya está ocupado. Ofrecele otro al paciente."}
 
     # Find or create patient
     # Con DNI se busca por DNI. Sin DNI (paciente nuevo que solo dio su nombre)

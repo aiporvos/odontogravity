@@ -12,7 +12,7 @@ from backend.database import get_db
 from backend.services.appointment_service import (
     create_appointment_logic, get_available_slots, route_professional,
     find_professionals_for_reason, motivo_no_agendable, duracion_para_motivo,
-    get_clinic_now,
+    get_clinic_now, profesional_libre,
 )
 from backend.models.patient import Patient
 from backend.models.appointment import Appointment, AppointmentStatus, AppointmentChannel
@@ -542,17 +542,29 @@ def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends
     # mirar nada, asi que se podia reprogramar encima de otro turno, a un
     # feriado o a un horario fuera de atencion.
     candidatos = find_professionals_for_reason(appt.reason or "", db)
+    duracion = appt.duration_minutes or duracion_para_motivo(appt.reason or "", db)
     motivo = motivo_no_agendable(
-        db,
-        data.new_start_time,
-        appt.duration_minutes or duracion_para_motivo(appt.reason or ""),
-        appt.location,
-        appt.insurance_name,
+        db, data.new_start_time, duracion, appt.location, appt.insurance_name,
         candidatos,
         exclude_id=appt.id,   # el propio turno no se cuenta como conflicto
     )
     if motivo:
         raise HTTPException(409, f"{motivo} Ofrecele otro horario al paciente.")
+
+    # Reprogramar mantiene al mismo profesional, asi que no alcanza con que
+    # ALGUNO de los candidatos este libre: tiene que estarlo ESE. Sin esto se
+    # podia mover un turno encima de otro del mismo profesional, que es la misma
+    # asimetria que daba turnos encimados al agendar.
+    libre = profesional_libre(
+        db, [appt.professional], data.new_start_time, duracion, appt.location,
+        exclude_id=appt.id,
+    )
+    if not libre:
+        nombre = appt.professional.full_name if appt.professional else "el profesional"
+        raise HTTPException(
+            409, f"{nombre} ya tiene otro turno en ese horario. "
+                 f"Ofrecele otro al paciente."
+        )
 
     appt.start_time = data.new_start_time
     # Se mantiene confirmado: si volvia a "pending" el recordatorio dejaba de
