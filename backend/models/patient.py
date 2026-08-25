@@ -12,7 +12,11 @@ class Patient(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    dni: Mapped[str] = mapped_column(String(20), unique=True, nullable=False, index=True)
+    # Opcional a proposito: para agendar alcanza el numero de WhatsApp, que es
+    # una credencial mas fuerte (Meta lo verifica; un DNI lo sabe cualquiera).
+    # Pedirselo al paciente por chat era la mayor friccion del alta, y recepcion
+    # lo completa cuando llega. Una ficha sin DNI queda marcada como incompleta.
+    dni: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True, index=True)
     phone: Mapped[str] = mapped_column(String(30), nullable=False)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)

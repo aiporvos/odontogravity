@@ -60,7 +60,7 @@ const PatientsPage = {
                         ${patients.map(p => `
                             <tr>
                                 <td><strong>${p.last_name}, ${p.first_name}</strong></td>
-                                <td>${p.dni}</td>
+                                <td>${p.dni || '<span class="badge badge-cancelled" title="Lo cargó el bot: falta completar el DNI cuando venga">falta DNI</span>'}</td>
                                 <td>${p.phone}</td>
                                 <td>${p.insurance_name || '-'}</td>
                                 <td>
@@ -96,7 +96,7 @@ const PatientsPage = {
                 </div>
                 <div class="form-group">
                     <label>DNI *</label>
-                    <input type="text" name="dni" value="${patient.dni}" required ${id ? 'readonly' : ''}>
+                    <input type="text" name="dni" value="${patient.dni || ''}" ${id && patient.dni ? 'readonly' : ''} placeholder="Se completa cuando el paciente viene">
                 </div>
                 <div class="form-group">
                     <label>Teléfono *</label>
@@ -141,7 +141,7 @@ const PatientsPage = {
 
     async savePatient(id) {
         const data = UI.getFormData('form-patient');
-        if (!data.first_name || !data.last_name || !data.dni || !data.phone) {
+        if (!data.first_name || !data.last_name || !data.phone) {
             UI.toast('Completá los campos obligatorios', 'error');
             return;
         }

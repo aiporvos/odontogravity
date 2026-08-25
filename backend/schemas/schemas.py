@@ -54,7 +54,7 @@ class UserUpdate(BaseModel):
 class PatientCreate(BaseModel):
     first_name: str
     last_name: str
-    dni: str
+    dni: Optional[str] = None
     phone: str
     email: Optional[str] = None
     date_of_birth: Optional[date] = None
@@ -69,7 +69,9 @@ class PatientRead(BaseModel):
     id: UUID
     first_name: str
     last_name: str
-    dni: str
+    # Puede faltar: el bot da de alta con nombre + teléfono, y recepción
+    # completa el DNI cuando el paciente llega con el documento.
+    dni: Optional[str] = None
     phone: str
     email: Optional[str] = None
     date_of_birth: Optional[date] = None

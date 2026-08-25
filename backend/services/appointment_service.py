@@ -626,7 +626,18 @@ def create_appointment_logic(
         return {"error": f"{motivo} Ofrecele otro horario al paciente."}
 
     # Find or create patient
-    patient = db.query(Patient).filter(Patient.dni == dni, Patient.is_deleted == False).first()
+    # Con DNI se busca por DNI. Sin DNI (paciente nuevo que solo dio su nombre)
+    # NO se puede buscar por ese campo: en SQL `dni = NULL` no matchea nada, y
+    # peor aun, matchear "el que tampoco tiene DNI" mezclaria pacientes
+    # distintos. La identidad la resuelve _misma_persona_ya_cargada por
+    # telefono + nombre.
+    dni = (dni or "").strip() or None
+    patient = (
+        db.query(Patient).filter(
+            Patient.dni == dni, Patient.is_deleted == False  # noqa: E712
+        ).first()
+        if dni else None
+    )
     if not patient:
         # Antes de dar de alta una ficha nueva: ¿no sera la misma persona que ya
         # esta cargada, con el DNI escrito distinto? Ese es el origen de los

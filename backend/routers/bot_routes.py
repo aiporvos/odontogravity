@@ -398,10 +398,18 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
             apellido = apellido or conocido.last_name
         elif opciones:
             raise HTTPException(400, _elegir_entre(opciones))
+        elif (nombre or "").strip() and (apellido or "").strip():
+            # Paciente nuevo con nombre y apellido: alcanza para reservar. El
+            # DNI queda pendiente y lo completa recepcion cuando llega, con el
+            # documento en la mano. Pedirselo por chat era el mayor punto de
+            # abandono del alta, por un dato que no hace falta para agendar.
+            dni_normalizado = None
         else:
             raise HTTPException(400, (
                 "Es la primera vez que este número saca turno. "
-                "Pedile nombre, apellido y DNI para crear su ficha."
+                "Preguntale UNA sola cosa: a nombre de quién agendás el turno "
+                "(nombre y apellido). 🚫 NO le pidas DNI ni teléfono: no hacen "
+                "falta para reservar."
             ))
     else:
         dni_normalizado = _validar_dni_y_telefono(data.dni, data.phone, data.requester_phone)
