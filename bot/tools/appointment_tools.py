@@ -86,6 +86,52 @@ _NO_ES_BUSQUEDA = {
     "dale si", "no la veo", "no esta", "dale gracias",
 }
 
+# Palabras con las que el paciente dice QUE QUIERE HACER, no como se llama su
+# obra social. Un paciente escribe "agendar" y el sistema le contestaba "no
+# trabajamos con 'agendar' como obra social", tres veces seguidas. Es lo primero
+# que escribe cualquiera.
+_PALABRAS_DE_INTENCION = {
+    "agendar", "agenda", "turno", "turnos", "sacar", "pedir", "reservar",
+    "cancelar", "consultar", "reprogramar", "cambiar", "modificar", "anular",
+    "necesito", "quiero", "queria", "quisiera", "buenas", "buenos", "dias",
+    "tardes", "noches", "consulta", "hora", "horario", "atencion", "atender",
+    "ayuda", "informacion", "info", "precio", "precios", "costo", "cuanto",
+    "donde", "direccion", "ubicacion", "telefono",
+}
+
+
+def _parece_nombre_de_obra_social(texto: str) -> bool:
+    """Si eso puede ser el nombre de una obra social, y no otra cosa.
+
+    Se descarta lo que es claramente una intencion ("agendar un turno"), un
+    saludo o una pregunta. Ante la duda se acepta: hay obras sociales con
+    nombres rarisimos y es peor rechazar la verdadera que dejar pasar una
+    consulta que despues no matchea con ninguna.
+    """
+    limpio = _sin_tildes_simple(texto).strip()
+    if not limpio:
+        return False
+    if "?" in limpio or "¿" in limpio:
+        return False
+    palabras = [p for p in limpio.replace("/", " ").split() if p.isalnum() or p.isalpha()]
+    if not palabras:
+        return False
+    # Si TODAS son palabras de intencion o de relleno, no es una obra social.
+    relleno = _PALABRAS_DE_INTENCION | _NO_ES_BUSQUEDA | {
+        "un", "una", "unos", "unas", "el", "la", "los", "las", "de", "del",
+        "para", "por", "me", "mi", "mis", "tu", "tus", "su", "sus", "con",
+        "que", "y", "o", "en", "al", "lo", "es", "ser", "hay",
+    }
+    return any(p not in relleno for p in palabras)
+
+
+def _sin_tildes_simple(texto: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto or "")
+        if unicodedata.category(c) != "Mn"
+    ).lower()
+
 
 def _texto_parece_busqueda(texto: str) -> str:
     """El fragmento que el paciente escribio buscando su obra social, o "".
@@ -100,6 +146,8 @@ def _texto_parece_busqueda(texto: str) -> str:
         return ""   # una frase, no el nombre de una obra social
     if not any(c.isalpha() for c in limpio):
         return ""
+    if not _parece_nombre_de_obra_social(limpio):
+        return ""   # "agendar", "quiero un turno": es la intencion, no la cobertura
     return limpio
 
 
@@ -320,6 +368,19 @@ def consultar_disponibilidad(
 
 def verificar_obra_social(obra_social: str) -> str:
     """Verifica si la clínica atiende una obra social."""
+    # Antes de nada: ¿eso puede ser el nombre de una obra social? El paciente
+    # escribe "agendar" y el bot le contestaba "no trabajamos con 'agendar'
+    # como obra social", una y otra vez. Es lo primero que escribe cualquiera.
+    if not _parece_nombre_de_obra_social(obra_social):
+        return (
+            f"⚠️ '{obra_social}' NO es el nombre de una obra social: es lo que el "
+            f"paciente quiere hacer, o un saludo. 🚫 PROHIBIDO contestarle que no "
+            f"trabajamos con esa cobertura, no tiene ningún sentido y queda pésimo. "
+            f"Seguí la conversación normalmente: si pidió un turno, avanzá con el "
+            f"flujo y recién cuando corresponda preguntale la obra social con "
+            f"`listar_obras_sociales`."
+        )
+
     try:
         r = httpx.post(
             f"{API_BASE}/api/bot/verificar-obra-social",
