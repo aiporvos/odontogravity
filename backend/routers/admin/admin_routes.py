@@ -326,7 +326,8 @@ async def trigger_reminders_now(hours_override: float = 24, db: Session = Depend
     from backend.services.appointment_service import get_clinic_now
     from datetime import timedelta
 
-    public_url = get_cfg(db, "PUBLIC_APP_URL", "http://localhost:8000")
+    from backend.services.urls import url_publica
+    public_url = url_publica(db)
     now = get_clinic_now()
     target_time = now + timedelta(hours=hours_override)
     start_window = target_time

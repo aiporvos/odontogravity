@@ -34,7 +34,8 @@ async def check_reminders():
             db = SessionLocal()
             hours_val = get_config(db, "REMINDER_HOURS_BEFORE", "24")
             hours_before = int(hours_val) if hours_val else 24
-            public_url = get_config(db, "PUBLIC_APP_URL", "http://localhost:8000")
+            from backend.services.urls import url_publica
+            public_url = url_publica(db)
 
             # Appointments are stored in Argentina time (UTC-3), so compare in Argentina time
             from backend.services.appointment_service import get_clinic_now

@@ -422,6 +422,11 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
     )
     if "error" in result:
         raise HTTPException(404, result["error"])
+
+    # El link lo arma el backend, que es el unico que sabe el dominio publico.
+    # La tool lo tenia escrito a mano y podia quedar desincronizado.
+    from backend.services.urls import link_de_cancelacion
+    result["cancel_url"] = link_de_cancelacion(db, result["appointment_id"])
     return result
 
 

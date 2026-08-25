@@ -166,7 +166,9 @@ def agendar_turno(
         r = httpx.post(f"{API_BASE}/api/bot/appointments", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
         data = r.json()
-        cancel_url = f"https://odobot.aiporvos.com/api/public/cancel/{data['appointment_id']}"
+        # Lo arma el backend: es el unico que conoce el dominio publico, y
+        # tenerlo escrito aca lo dejaba desincronizado del resto del sistema.
+        cancel_url = data.get("cancel_url", "")
         return (
             f"✅ {data['message']}. Fecha: {data['datetime']}. ID: {data['appointment_id']}. "
             f"Aclarale al paciente que si desea cancelar el turno, puede escribir "

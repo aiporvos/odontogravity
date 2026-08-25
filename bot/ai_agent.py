@@ -6,6 +6,7 @@ function calling. Más confiable que LangChain AgentExecutor.
 import os
 import json
 import logging
+from urllib.parse import quote_plus
 from openai import OpenAI
 
 from bot.tools.appointment_tools import (
@@ -70,6 +71,41 @@ def get_especialistas_texto() -> str:
         db.close()
 
 
+def get_sedes_texto() -> str:
+    """Las sedes con su direccion, tal como estan cargadas en el panel.
+
+    Una paciente pregunto "¿en dónde queda Silprodent?" y el bot contesto "está
+    ubicada en San Rafael", que es la ciudad entera. La direccion estaba en la
+    base (clinic_locations.address) y no se le pasaba al modelo, asi que no
+    tenia con que contestar.
+    """
+    from backend.models.clinic_location import ClinicLocation
+    db = SessionLocal()
+    try:
+        sedes = db.query(ClinicLocation).filter(
+            ClinicLocation.is_deleted == False,  # noqa: E712
+            ClinicLocation.is_active == True,    # noqa: E712
+        ).order_by(ClinicLocation.name).all()
+        if not sedes:
+            return "San Rafael"
+
+        partes = []
+        for s in sedes:
+            linea = s.name
+            if s.address:
+                linea += f" — {s.address}"
+                mapa = "https://maps.google.com/?q=" + quote_plus(f"{s.address}, {s.name}")
+                linea += f" (mapa: {mapa})"
+            if s.phone:
+                linea += f" · tel {s.phone}"
+            partes.append(linea)
+        return " | ".join(partes)
+    except Exception:
+        return "San Rafael"
+    finally:
+        db.close()
+
+
 def get_active_insurances() -> list[str]:
     db = SessionLocal()
     try:
@@ -90,6 +126,7 @@ Sé BREVE y directo en cada respuesta — no más de 3-4 líneas salvo que sea n
 
 ### 🕒 DATOS DEL CONSULTORIO:
 - **Horarios**: Lunes a Viernes, mañana 09:00-12:30 y tarde 17:00-20:30. Miércoles a la tarde CERRADO.
+- **Dónde queda**: {sedes}
 - **Especialistas**: {especialistas}
 - **Duraciones**: Limpieza/Consulta=15min, Extracción/Ortodoncia=30min, Endodoncia=60min.
 
@@ -213,7 +250,12 @@ ya está registrado: fijate ahí antes de preguntar cualquier cosa.
 - **FECHA HOY:** Cada mensaje trae `[SISTEMA - FECHA ACTUAL]`. Todo lo que devuelve la herramienta es futuro. NUNCA digas que una fecha ya pasó.
 - **SALUDO Y DESPEDIDA SEGÚN LA HORA:** el bloque [SISTEMA] te dice con qué fórmula saludar y despedirte. Usá esa, tal cual. PROHIBIDO decir "buen día" a la noche o "buenas noches" a la mañana: quedás como un robot descuidado.
 - **Emojis:** Si el paciente manda solo un emoji (👍, ❤️, etc.), interpretalo como confirmación o acuse de recibo. Si no queda claro a qué se refiere, preguntá: "¿Querés que avancemos con el turno?"
+- **Dónde queda:** si preguntan la dirección, dala COMPLETA (calle y número) y pasales el
+  link del mapa que figura arriba. 🚫 PROHIBIDO contestar solo la ciudad ("estamos en San
+  Rafael"): eso no le sirve a nadie para llegar. Si hay más de una sede, preguntá a cuál va.
 - **NO inventar:** Si no tenés la información, usá las herramientas. No inventes fechas ni horarios.
+  Tampoco inventes la dirección: si arriba no dice la calle, decile que se la confirman desde
+  la clínica.
 - **Mensajes cortos:** Respondé siempre de forma concisa. No repitas info que ya dijiste.
 """
 
@@ -330,6 +372,7 @@ def chat(user_message: str, history: list[dict] | None = None,
     # Build system prompt with dynamic data
     system_content = SYSTEM_PROMPT.format(
         especialistas=get_especialistas_texto(),
+        sedes=get_sedes_texto(),
     )
     # Lo que ya se sabe de este paciente, para que no lo vuelva a preguntar.
     system_content += f"\n\n### 📌 ESTADO DE ESTA CONVERSACIÓN:\n{resumen_estado(estado or {})}"
