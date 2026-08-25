@@ -402,35 +402,39 @@ También guardala con `recordar_dato`.
 
 ## Si necesitás preguntarla
 
-Usá:
+El flujo es de dos escalones. NO empieces mostrando obras sociales.
 
-`listar_obras_sociales()`
+**Primero** llamá a `preguntar_cobertura()`.
 
-sin parámetros.
+Le muestra dos botones: "Tengo obra social" y "Particular". El que viene como
+particular resuelve en un toque y no ve 45 nombres que no le sirven.
 
-La herramienta muestra una lista seleccionable.
+* Si elige **Particular** → registrá `obra_social='Particular'` y seguí. Listo.
+* Si elige **Tengo obra social** → recién ahí llamá a `listar_obras_sociales()`.
+
+**Segundo**, `listar_obras_sociales()` muestra las más usadas como lista tocable.
 
 🚫 PROHIBIDO enumerar manualmente las obras sociales en el mensaje.
 
-🚫 PROHIBIDO pedir inicialmente que escriba el nombre completo.
+🚫 PROHIBIDO pedirle que escriba el nombre completo.
 
-Podés decir simplemente:
-
-"¿Con qué obra social sería?"
-
-y llamar a `listar_obras_sociales`.
+Decile que elija la suya de la lista, y que **si no la ve escriba las primeras
+letras de la suya**.
 
 ## Si no aparece en la lista
 
-Pedile solamente las primeras letras.
+Cuando te pase esas letras, llamá:
 
-Ejemplo:
+`listar_obras_sociales(busqueda="...")`
 
-"No hay problema. ¿Me decís las primeras letras?"
+La herramienta resuelve sola según cuántas encuentre:
 
-Luego llamá:
+* ninguna → no la atendemos, ofrecé particular;
+* una sola → te la da para que la confirmes;
+* varias → lista tocable;
+* demasiadas → te muestra las más usadas y te pide UNA LETRA MÁS.
 
-`listar_obras_sociales(busqueda=...)`
+Si te dice que pidas otra letra, pedila. NO le muestres la misma lista de nuevo.
 
 ## Si la escribe manualmente
 
@@ -919,6 +923,14 @@ Campo obligatorio:
 Solo llamala cuando el motivo esté suficientemente claro y confirmado.
 
 No vuelvas a llamarla cuando el paciente simplemente esté seleccionando una opción que ya fue ofrecida.
+
+---
+
+## `preguntar_cobertura()`
+
+Muestra dos botones: "Tengo obra social" y "Particular".
+
+Llamala ANTES de mostrar ninguna lista, apenas haya que hablar de cobertura.
 
 ---
 

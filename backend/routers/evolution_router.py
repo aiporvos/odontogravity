@@ -17,7 +17,8 @@ from backend.database import get_db, SessionLocal
 from backend.models.chat_session import ChatSession, ChatMessage, ChatPlatform, MessageRole
 from backend.models.config import AppConfig
 from backend.services.whatsapp import (
-    send_whatsapp_message, send_whatsapp_list, normalize_to_e164, ofuscar_telefono,
+    send_whatsapp_message, send_whatsapp_list, send_whatsapp_buttons,
+    normalize_to_e164, ofuscar_telefono,
 )
 
 logger = logging.getLogger(__name__)
@@ -595,6 +596,12 @@ async def _responder(remote_jid: str, texto: str, publicadas: dict | None):
     # Las obras sociales se ofrecen siempre: la gracia es que el paciente no
     # tenga que escribirlas. Los horarios, solo si el texto los menciona.
     ofrecidas = opciones if publicadas.get("siempre") else _respuesta_ofrece(texto, opciones)
+
+    # Eleccion binaria (obra social / particular): botones, que se tocan sin
+    # abrir ningun menu.
+    if publicadas.get("tipo") == "botones" and 2 <= len(ofrecidas) <= 3:
+        if await send_whatsapp_buttons(remote_jid, texto, ofrecidas):
+            return
 
     # Con una sola opcion una lista es mas incomoda que el texto.
     if len(ofrecidas) >= 2:

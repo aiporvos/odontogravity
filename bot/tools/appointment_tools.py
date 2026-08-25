@@ -159,7 +159,8 @@ _opciones_ofrecidas: contextvars.ContextVar = contextvars.ContextVar("opciones_o
 
 
 def set_opciones_ofrecidas(opciones, siempre: bool = False,
-                           titulo: str | None = None, boton: str | None = None):
+                           titulo: str | None = None, boton: str | None = None,
+                           tipo: str = "lista"):
     """Publica opciones para que el webhook las mande como lista tocable.
 
     `siempre=True` fuerza el envio aunque el texto del modelo no las nombre. Es
@@ -173,6 +174,10 @@ def set_opciones_ofrecidas(opciones, siempre: bool = False,
             "siempre": siempre,
             "titulo": titulo,
             "boton": boton,
+            # "botones" son hasta 3 respuestas rapidas que se tocan sin abrir
+            # nada; "lista" abre un menu. Para una eleccion binaria los botones
+            # son un toque contra tres.
+            "tipo": tipo,
         } if opciones else None
     )
 
@@ -434,22 +439,49 @@ def verificar_obra_social(obra_social: str) -> str:
         return f"Error verificando la obra social: {e}"
 
 
+# Frases con las que el paciente dice que su obra social no esta en la lista.
+_NO_LA_VEO = (
+    "no esta", "no está", "no la veo", "no aparece", "no la encuentro",
+    "ninguna", "no figura", "no sale", "no es ninguna", "no estan",
+)
+
+
+def preguntar_cobertura() -> str:
+    """Le pregunta al paciente si tiene obra social o es particular.
+
+    Va ANTES de mostrar ninguna lista. Dos botones que se tocan sin abrir nada:
+    el que viene como particular resuelve en un toque y nunca ve los 45 nombres
+    que no le sirven.
+
+    Ademas convierte "Particular" en una eleccion explicita del paciente. Antes
+    se asignaba en silencio por dos caminos —el default del parametro y el
+    fallback cuando el nombre no matcheaba— sin que nadie lo decidiera.
+    """
+    set_opciones_ofrecidas(
+        ["Tengo obra social", "Particular"], siempre=True, tipo="botones",
+    )
+    return (
+        "Le estás mostrando dos botones: 'Tengo obra social' y 'Particular'. "
+        "Preguntale en UNA frase corta cómo sería la atención. "
+        "NO enumeres obras sociales todavía. "
+        "Si elige Particular, registrá obra_social='Particular' con `recordar_dato` "
+        "y seguí. Si elige que tiene obra social, llamá a `listar_obras_sociales`."
+    )
+
+
 def listar_obras_sociales(busqueda: str = "") -> str:
-    """Le muestra al paciente obras sociales como lista tocable.
+    """Muestra obras sociales como lista tocable, en dos escalones.
 
-    Escribir el nombre a mano es la peor forma de preguntar esto: los nombres
-    son largos, se abrevian de mil maneras y se escriben mal ("ospeysin" por
-    OSPELSYM), asi que el paciente termina sin cobertura por un error de tipeo.
+    Sin `busqueda` muestra las mas usadas. Con `busqueda` filtra entre las ~45.
 
-    La clinica tiene ~45 cargadas y una lista de WhatsApp admite 10 filas, asi
-    que sin `busqueda` se muestran las mas usadas y con `busqueda` se filtra.
-
-    Si el modelo no pasa `busqueda` pero el paciente acaba de escribir algo que
-    parece el nombre de una obra social, se usa eso. Sin esto el paciente
-    escribia "sw", el modelo llamaba a la herramienta sin parametros y le
-    aparecia la misma lista otra vez, como si no lo hubiera leido.
+    El escalonado importa por un detalle del mercado argentino: casi todas
+    empiezan con "OS" (OSDE, OSEP, OSPE, OSPELSYM, OSPRERA, OSECAC...). En esta
+    clinica hay 12 con ese prefijo, y una lista de WhatsApp admite 10 filas, asi
+    que con dos letras el caso mas comun desborda. Por eso la respuesta depende
+    de cuantas coincidencias haya, y nunca deja al paciente sin salida.
     """
     if not (busqueda or "").strip():
+        # El modelo suele no reenviar lo que escribio el paciente.
         busqueda = _texto_parece_busqueda(_ultimo_mensaje.get())
 
     try:
@@ -461,44 +493,61 @@ def listar_obras_sociales(busqueda: str = "") -> str:
     except Exception as e:
         return f"No pude traer la lista de obras sociales: {e}"
 
-    activas, total = d.get("activas", []), d.get("total", 0)
+    activas = d.get("activas", [])
+    total = d.get("total", 0)
+    hay_mas = d.get("hay_mas", False)
 
     if not total:
         return ("La clínica no tiene obras sociales cargadas: la atención es PARTICULAR. "
                 "Decíselo y seguí con el turno usando obra_social='Particular'.")
 
-    if busqueda and not activas:
-        return (
-            f"Ninguna de las {total} obras sociales que atiende la clínica se parece a "
-            f"'{busqueda}'. Decile con amabilidad que no trabajamos con esa y que su "
-            f"atención sería PARTICULAR. Si te dice que la escribió mal, pedile que te "
-            f"pase las primeras letras y volvé a llamar a esta herramienta."
-        )
-
-    set_opciones_ofrecidas(
-        activas + ["Particular"], siempre=True,
-        titulo="Obras sociales", boton="Elegir cobertura",
-    )
-
+    # ── Con búsqueda ────────────────────────────────────────────────────────
     if busqueda:
+        if not activas:
+            return (
+                f"Ninguna de las {total} obras sociales que atiende la clínica empieza "
+                f"como '{busqueda}'. Decile con amabilidad que no trabajamos con esa y "
+                f"que su atención sería PARTICULAR, y preguntale si quiere avanzar así. "
+                f"Si te dice que la escribió mal, pedile que te la escriba de nuevo."
+            )
+
+        if len(activas) == 1:
+            # Una sola: se confirma de palabra, sin abrir ninguna lista.
+            unica = activas[0]
+            set_opciones_ofrecidas([unica, "No es esa"], siempre=True, tipo="botones")
+            return (
+                f"Hay una sola que coincide con '{busqueda}': {unica}. "
+                f"Preguntale si es esa, en una frase corta. Le estás mostrando dos "
+                f"botones para que confirme. Si dice que sí, registrala con "
+                f"`recordar_dato` y seguí; no hace falta verificarla aparte."
+            )
+
+        set_opciones_ofrecidas(activas, siempre=True,
+                               titulo="Obras sociales", boton="Elegir la mía")
+        if hay_mas:
+            return (
+                f"Hay más de {len(activas)} que empiezan como '{busqueda}'. Le estás "
+                f"mostrando las {len(activas)} más usadas como lista tocable. "
+                f"Decile en UNA frase que elija la suya, y que si no la ve te escriba "
+                f"UNA LETRA MÁS. NO las enumeres en el texto."
+            )
         return (
-            f"Le estás mostrando {len(activas)} coincidencia(s) con '{busqueda}', más "
-            f"'Particular', como lista tocable. Pedile que elija la suya en UNA frase "
-            f"corta y NO las enumeres en el texto. Si ninguna es la suya, que te pase "
-            f"otras letras y volvés a buscar. Lo que elija de la lista ya está "
-            f"verificado: NO llames a verificar_obra_social."
+            f"Le estás mostrando las {len(activas)} que coinciden con '{busqueda}', "
+            f"como lista tocable. Pedile que elija la suya en UNA frase corta. "
+            f"NO las enumeres en el texto. Lo que elija ya está verificado."
         )
 
+    # ── Primer listado, sin búsqueda ────────────────────────────────────────
+    set_opciones_ofrecidas(activas, siempre=True,
+                           titulo="Obras sociales", boton="Elegir la mía")
     return (
-        f"Le estás mostrando como lista tocable las obras sociales más frecuentes, más "
-        f"'Particular'. La clínica atiende {total} en total, así que la suya puede no "
-        f"estar ahí: decile en UNA frase corta que elija de la lista o que te escriba "
-        f"las primeras letras de la suya si no la ve. NO las enumeres en el texto. "
-        f"Cuando te pase esas letras, volvé a llamar a esta herramienta con el "
-        f"parámetro `busqueda`. Lo que elija de la lista ya está verificado: NO llames "
-        f"a verificar_obra_social."
+        f"Le estás mostrando las {len(activas)} obras sociales más usadas, como lista "
+        f"tocable. La clínica atiende {total} en total, así que la suya puede no estar. "
+        f"Decile en UNA frase corta que elija la suya de la lista, y que si NO la ve "
+        f"escriba las PRIMERAS LETRAS de la suya. NO las enumeres en el texto. "
+        f"Cuando te pase esas letras, volvé a llamar a esta herramienta con `busqueda`. "
+        f"Lo que elija de la lista ya está verificado: NO llames a verificar_obra_social."
     )
-
 
 # ── Tool registry ────────────────────────────────────────────────────────────
 
@@ -640,6 +689,7 @@ _TOOL_MAP = {
     "consultar_disponibilidad": consultar_disponibilidad,
     "verificar_obra_social": verificar_obra_social,
     "listar_obras_sociales": listar_obras_sociales,
+    "preguntar_cobertura": preguntar_cobertura,
     "recordar_dato": recordar_dato,
     "quien_me_escribe": quien_me_escribe,
 }
@@ -833,6 +883,21 @@ TOOL_DEFINITIONS = [
                 },
                 "required": ["motivo_confirmado_por_paciente"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "preguntar_cobertura",
+            "description": (
+                "Le muestra al paciente dos botones: 'Tengo obra social' y "
+                "'Particular'. USALA ANTES de mostrar ninguna lista de obras "
+                "sociales, apenas haya que hablar de cobertura. El que viene como "
+                "particular resuelve en un toque y no ve 45 nombres que no le "
+                "sirven, y 'Particular' pasa a ser una elección suya y no una "
+                "suposición del sistema."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
     },
     {

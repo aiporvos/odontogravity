@@ -691,12 +691,26 @@ def bot_listar_obras_sociales(q: str = "", db: Session = Depends(get_db)):
     ).count()
 
     if (q or "").strip():
-        encontradas = buscar_obras_sociales(db, q)
-        return {"activas": encontradas, "total": total, "busqueda": q, "modo": "busqueda"}
+        # Se piden 11 para saber si hay mas de las que entran en una lista de
+        # WhatsApp (tope 10). En esta clinica "os" da 12 coincidencias, asi que
+        # el caso "hay mas" es el mas frecuente, no un borde.
+        encontradas = buscar_obras_sociales(db, q, limite=11)
+        hay_mas = len(encontradas) > 10
+        return {
+            "activas": encontradas[:10],
+            "total": total,
+            "hay_mas": hay_mas,
+            "busqueda": q,
+            "modo": "busqueda",
+        }
 
+    # 6 y no 8: deja lugar visual y empuja al buscador, que con ~45 cargadas es
+    # el camino bueno. "Particular" ya no va mezclado aca: se elige antes, con
+    # botones, en preguntar_cobertura.
     return {
-        "activas": obras_sociales_frecuentes(db),
+        "activas": obras_sociales_frecuentes(db, limite=6),
         "total": total,
+        "hay_mas": total > 6,
         "modo": "frecuentes",
     }
 

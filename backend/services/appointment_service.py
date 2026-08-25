@@ -250,6 +250,15 @@ def buscar_obras_sociales(db: Session, texto: str, limite: int = 10) -> list[str
         if puntaje:
             puntuadas.append((puntaje, ins.name))
 
+    # Si alguna EMPIEZA con lo que escribio, se devuelven solo esas. Cada letra
+    # que agrega el paciente tiene que acotar la lista, no dejarla igual: con
+    # "ospel" buscando OSPELSYM, el ranking suelto devolvia tambien OSPE,
+    # OSPRERA y OSPACA, y la busqueda no servia para nada.
+    prefijo = [n for p, n in puntuadas if p >= 90 and
+               " ".join(_sin_acentos(n).split()).startswith(buscado)]
+    if prefijo:
+        return sorted(prefijo)[:limite]
+
     puntuadas.sort(key=lambda x: (-x[0], x[1]))
     return [nombre for _, nombre in puntuadas[:limite]]
 
