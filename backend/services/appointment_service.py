@@ -526,6 +526,40 @@ def franjas_del_dia(db: Session, day, candidatos):
     return _unir_franjas([_franjas_si_no_ausente(p) for p in candidatos])
 
 
+def _atiende_en(db: Session, profesional, start: datetime, duration_minutes: int) -> bool:
+    """Si ese profesional efectivamente trabaja ese dia y a esa hora.
+
+    Mira su grilla propia (ProfessionalSchedule) y sus ausencias puntuales, no
+    el horario general de la clinica. La diferencia importa cuando cada uno
+    tiene sus dias asignados y no atienden juntos: el dia figura como habil
+    porque atiende ALGUNO, pero eso no significa que atienda cualquiera.
+    """
+    ausente = db.query(ProfessionalTimeOff).filter(
+        ProfessionalTimeOff.professional_id == profesional.id,
+        ProfessionalTimeOff.date == start.date(),
+    ).first()
+    if ausente:
+        return False
+
+    weekday = start.weekday()
+    clinic_shifts = [
+        (r.start_time, r.end_time)
+        for r in db.query(ClinicSchedule).filter(
+            ClinicSchedule.weekday == weekday,
+            ClinicSchedule.is_active == True,  # noqa: E712
+        ).all()
+    ]
+    franjas = _franjas_del_profesional(db, profesional.id, weekday, clinic_shifts)
+    if not franjas:
+        return False
+
+    fin = (start + timedelta(minutes=duration_minutes)).time()
+    return any(
+        desde <= start.time() and (fin <= hasta or fin == py_time(0, 0))
+        for desde, hasta in franjas
+    )
+
+
 def profesional_libre(db: Session, candidatos, start: datetime,
                       duration_minutes: int, location: str | None, exclude_id=None):
     """El profesional que puede tomar ese turno, o None si estan todos ocupados.
@@ -545,13 +579,25 @@ def profesional_libre(db: Session, candidatos, start: datetime,
     if not candidatos:
         return None
 
+    # Primero: que ESE profesional trabaje ese dia y a esa hora. La validacion
+    # previa mira la UNION de los horarios de todos los candidatos, asi que un
+    # dia en el que solo atiende Elena figura como habil; sin este filtro el
+    # turno se le podia asignar igual a Martin, que ese dia no esta.
+    # En este consultorio no atienden nunca juntos: cada uno tiene sus dias.
+    trabajan = [
+        p for p in candidatos
+        if _atiende_en(db, p, start, duration_minutes)
+    ]
+    if not trabajan:
+        return None
+
     del_dia = get_day_appointments(db, start.date(), location)
     ocupados = {
         a.professional_id
         for a in overlapping_appointments(del_dia, start, duration_minutes, exclude_id)
     }
 
-    libres = [p for p in candidatos if p.id not in ocupados]
+    libres = [p for p in trabajan if p.id not in ocupados]
     if not libres:
         return None
 

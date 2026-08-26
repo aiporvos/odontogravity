@@ -157,8 +157,83 @@ def test_no_se_reprograma_encima_del_mismo_profesional(
         exclude_id=mover.id,
     ) is None, "Se lo dejó mover encima de su propia endodoncia"
 
-    # A un hueco libre de Silvestro sí se puede.
+    # A un hueco libre de Silvestro sí se puede. A la tarde, no a las 13:00:
+    # el consultorio cierra de 12:30 a 17:00 y ese corte también se respeta.
     assert profesional_libre(
-        db, [silvestro], manana + timedelta(hours=3), 15, "San Rafael",
+        db, [silvestro], manana.replace(hour=17), 15, "San Rafael",
         exclude_id=mover.id,
+    ) is not None
+
+
+# ── Cada profesional tiene sus días: no atienden nunca juntos ────────────────
+
+def test_no_se_le_asigna_un_turno_a_quien_no_trabaja_ese_dia(
+    db, clinica, silvestro, murad, paciente
+):
+    """El caso real del consultorio: un solo sillón y días asignados.
+
+    La validación mira la UNIÓN de los horarios de todos los candidatos, así que
+    un día en el que solo atiende Murad figura como hábil. Sin verificar quién
+    atiende, el turno se le asignaba igual a Silvestro, que ese día no está.
+    """
+    import uuid
+    from datetime import time as t
+    from backend.models.schedule import ProfessionalSchedule
+    from backend.services.appointment_service import profesional_libre
+
+    martes = proximo_dia_habil(weekday=1)     # solo Murad
+    jueves = proximo_dia_habil(weekday=3)     # solo Silvestro
+
+    db.add(ProfessionalSchedule(id=uuid.uuid4(), professional_id=murad.id,
+                                weekday=1, start_time=t(9, 0), end_time=t(12, 30),
+                                is_active=True))
+    db.add(ProfessionalSchedule(id=uuid.uuid4(), professional_id=silvestro.id,
+                                weekday=3, start_time=t(9, 0), end_time=t(12, 30),
+                                is_active=True))
+    db.commit()
+
+    elegido = profesional_libre(db, [silvestro, murad], martes, 15, "San Rafael")
+    assert elegido is not None, "Murad atiende los martes"
+    assert elegido.id == murad.id, "Se lo asignó a Silvestro, que los martes no está"
+
+    elegido = profesional_libre(db, [silvestro, murad], jueves, 15, "San Rafael")
+    assert elegido.id == silvestro.id, "Los jueves atiende Silvestro"
+
+
+def test_nadie_trabaja_ese_dia_no_se_agenda(db, clinica, silvestro, murad, paciente):
+    import uuid
+    from datetime import time as t
+    from backend.models.schedule import ProfessionalSchedule
+    from backend.services.appointment_service import profesional_libre
+
+    db.add(ProfessionalSchedule(id=uuid.uuid4(), professional_id=murad.id,
+                                weekday=1, start_time=t(9, 0), end_time=t(12, 30),
+                                is_active=True))
+    db.add(ProfessionalSchedule(id=uuid.uuid4(), professional_id=silvestro.id,
+                                weekday=1, start_time=t(9, 0), end_time=t(12, 30),
+                                is_active=True))
+    db.commit()
+
+    jueves = proximo_dia_habil(weekday=3)
+    assert profesional_libre(db, [silvestro, murad], jueves, 15, "San Rafael") is None
+
+
+def test_una_ausencia_puntual_tambien_lo_saca(db, clinica, silvestro, paciente):
+    from backend.models.schedule import ProfessionalTimeOff
+    from backend.services.appointment_service import profesional_libre
+
+    cuando = proximo_dia_habil()
+    assert profesional_libre(db, [silvestro], cuando, 15, "San Rafael") is not None
+
+    db.add(ProfessionalTimeOff(professional_id=silvestro.id, date=cuando.date(),
+                               reason="Congreso"))
+    db.commit()
+    assert profesional_libre(db, [silvestro], cuando, 15, "San Rafael") is None
+
+
+def test_sin_grilla_cargada_sigue_disponible(db, clinica, silvestro, paciente):
+    """Quien todavía no configuró sus días atiende en el horario general."""
+    from backend.services.appointment_service import profesional_libre
+    assert profesional_libre(
+        db, [silvestro], proximo_dia_habil(), 15, "San Rafael"
     ) is not None
