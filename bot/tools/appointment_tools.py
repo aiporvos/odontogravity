@@ -133,6 +133,39 @@ def _sin_tildes_simple(texto: str) -> str:
     ).lower()
 
 
+
+# Como pide el paciente una franja horaria. El modelo tiene instruccion de
+# pasarla en preferencia_horaria y no siempre lo hace: mismo patron que ya
+# fallo con la obra social ("sw") y con el motivo. Si no la reenvia, se saca
+# del mensaje del paciente, que es el unico lugar donde de verdad esta.
+_PALABRAS_DE_FRANJA = (
+    "manana", "tarde", "noche", "temprano", "mediodia",
+    "despues de", "antes de", "a partir de", "pasadas las", "cerca de",
+    "al mediodia", "a la salida", "despues del trabajo", "antes del trabajo",
+)
+
+
+def _franja_en_el_texto(texto: str) -> str:
+    """El pedido de horario que hizo el paciente, o "" si no pidio ninguno.
+
+    Devuelve el texto tal cual: interpretar_preferencia (en el backend) ya sabe
+    traducir "a la tarde", "despues de las 18:45" o "temprano" a un rango.
+    """
+    limpio = _sin_tildes_simple(texto).strip()
+    if not limpio:
+        return ""
+
+    import re
+    # "despues de las 18", "a partir de las 9:30", "antes de las 12"
+    m = re.search(r"(despues|antes|a partir|pasadas?)\s+(?:de\s+)?(?:las?\s+)?(\d{1,2})(?:[:.](\d{2}))?", limpio)
+    if m:
+        return texto.strip()
+
+    if any(f in limpio for f in _PALABRAS_DE_FRANJA):
+        return texto.strip()
+    return ""
+
+
 def _texto_parece_busqueda(texto: str) -> str:
     """El fragmento que el paciente escribio buscando su obra social, o "".
 
@@ -306,6 +339,16 @@ def consultar_disponibilidad(
     # El prompt ya lo pedia y el modelo igual inventaba un motivo, asi que se
     # exige que este registrado en el estado de la conversacion via
     # recordar_dato: eso solo pasa si el paciente lo dijo.
+    # Si el modelo no reenvio la franja que pidio el paciente, se la saca del
+    # mensaje. Sin esto le ofrecia horarios de la manana a alguien que pidio
+    # "despues de las 17", que es un pedido explicito del consultorio:
+    # "si piden para la tarde, buscar el dia que tenga libre a la tarde".
+    if not (preferencia_horaria or "").strip():
+        for dicho in reversed(_dichos_por_el_paciente.get() or (_ultimo_mensaje.get(),)):
+            if franja := _franja_en_el_texto(dicho):
+                preferencia_horaria = franja
+                break
+
     if not (_estado_conversacion.get() or {}).get("motivo"):
         return (
             "❌ Todavía no sabés para qué es la consulta, y de eso depende cuánto "
