@@ -332,7 +332,9 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
         return {"status": "ignored_reaction"}
     elif message_type in ("image", "video", "document"):
         # Imágenes, videos, documentos — avisar que no se pueden procesar
-        logger.info(f"📎 Archivo {message_type} recibido de {remote_jid}")
+        logger.info(f"📎 Archivo {message_type} recibido de {ofuscar_telefono(remote_jid)}")
+        if bot_silenciado(remote_jid):
+            return {"status": "silenciado"}
         background_tasks.add_task(
             send_whatsapp_message,
             remote_jid,
@@ -344,10 +346,12 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
         return {"status": "replied_unsupported_media"}
     elif message_type == "sticker":
         # Stickers — ignorar silenciosamente (no aportan info)
-        logger.info(f"⏭️ Sticker recibido de {remote_jid}, ignorado")
+        logger.info(f"⏭️ Sticker recibido de {ofuscar_telefono(remote_jid)}, ignorado")
         return {"status": "ignored_sticker"}
     elif message_type in ("location", "contacts"):
-        logger.info(f"⏭️ {message_type} recibido de {remote_jid}")
+        logger.info(f"⏭️ {message_type} recibido de {ofuscar_telefono(remote_jid)}")
+        if bot_silenciado(remote_jid):
+            return {"status": "silenciado"}
         background_tasks.add_task(
             send_whatsapp_message,
             remote_jid,
@@ -391,6 +395,40 @@ def _guardar_estado(db: Session, session, estado: dict | None):
 
 # Cuánto se calla el bot cuando una persona toma la conversación.
 PAUSA_INTERVENCION_HUMANA = timedelta(minutes=30)
+
+
+def bot_silenciado(remote_jid: str) -> bool:
+    """Si el bot NO debe responder nada en esa conversacion, ni siquiera un aviso.
+
+    La pausa se verificaba solo dentro de handle_text_message, asi que las
+    respuestas automaticas a archivos, ubicaciones y contactos se disparaban
+    igual desde el webhook. Un paciente mando un PDF con el bot pausado y le
+    contesto "solo puedo procesar texto y audio", pisandose con la secretaria
+    que estaba atendiendo esa conversacion a mano.
+
+    Cubre las dos formas de silencio: el interruptor global del panel y la pausa
+    por intervencion humana en esta conversacion puntual.
+    """
+    if (get_config("BOT_IS_ACTIVE", "true") or "true").strip().lower() == "false":
+        logger.info("⏸️ Bot pausado (global): no se responde a %s.",
+                    ofuscar_telefono(remote_jid))
+        return True
+
+    db = SessionLocal()
+    try:
+        session = get_or_create_session(db, remote_jid)
+        if session.paused_until and session.paused_until > datetime.utcnow():
+            logger.info(
+                "⏸️ Conversación atendida por una persona hasta %s: no se responde a %s.",
+                session.paused_until, ofuscar_telefono(remote_jid),
+            )
+            return True
+        return False
+    except Exception as e:
+        logger.error(f"Error verificando si el bot está pausado: {e}", exc_info=True)
+        return False   # ante la duda, responder: peor es dejar al paciente sin nada
+    finally:
+        db.close()
 
 
 def _minutos_de_pausa() -> int:
@@ -719,5 +757,9 @@ async def handle_audio_message(remote_jid: str, url: str):
     text = await transcribe_audio_url(url)
     if text:
         await handle_text_message(remote_jid, f"[Audio Transcrito]: {text}")
-    else:
-        await send_whatsapp_message(remote_jid, "No pude procesar tu audio. ¿Podrías escribir o intentar de nuevo?")
+    elif not bot_silenciado(remote_jid):
+        # El aviso de "no pude procesar tu audio" tambien es una respuesta del
+        # bot: si esta pausado, tampoco corresponde mandarlo.
+        await send_whatsapp_message(
+            remote_jid, "No pude procesar tu audio. ¿Podrías escribir o intentar de nuevo?"
+        )
