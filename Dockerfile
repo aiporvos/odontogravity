@@ -19,6 +19,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application
 COPY . .
 
+# Que version quedo adentro. Sirve para verificar despues de un deploy que el
+# contenedor tomo el codigo nuevo: los arreglos internos no cambian nada visible
+# desde afuera, y sin esto no habia forma de saberlo. Es opcional: si el build
+# no pasa el arg, /api/health igual informa la fecha del codigo.
+ARG GIT_COMMIT=""
+ENV GIT_COMMIT=$GIT_COMMIT
+
 # Expose port
 EXPOSE 8000
 

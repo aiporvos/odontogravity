@@ -3,6 +3,7 @@ import re
 import hashlib
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -113,9 +114,36 @@ app.include_router(bot_router)
 app.include_router(whatsapp_router)
 app.include_router(public_router)
 
+_ARRANCADO = datetime.now(timezone.utc)
+
+
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "service": "Silprodent"}
+    """Estado del servicio, y QUE version esta corriendo.
+
+    Lo segundo importa tanto como lo primero: mas de una vez se desplego un
+    arreglo y no habia forma de saber si Dokploy lo habia tomado, porque los
+    cambios eran internos y desde afuera todo se veia igual. Ahora se ve.
+
+    `codigo` es la fecha del codigo dentro de la imagen: si no cambia despues de
+    un deploy, el contenedor sigue con la version vieja. `commit` sale de la
+    variable GIT_COMMIT cuando el build la pasa; si no esta, queda en null y
+    alcanza con mirar la fecha.
+    """
+    try:
+        codigo = datetime.fromtimestamp(
+            os.path.getmtime(os.path.abspath(__file__)), tz=timezone.utc
+        ).isoformat(timespec="seconds")
+    except OSError:
+        codigo = None
+
+    return {
+        "status": "ok",
+        "service": "Silprodent",
+        "commit": os.getenv("GIT_COMMIT") or None,
+        "codigo": codigo,
+        "arrancado": _ARRANCADO.isoformat(timespec="seconds"),
+    }
 
 # ── Serve Frontend (SPA) ───────────────────────────────
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
