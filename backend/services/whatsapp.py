@@ -62,8 +62,15 @@ def ofuscar_telefono(number: str) -> str:
     return f"***{digitos[-4:]}"
 
 
-async def send_whatsapp_message(number: str, text: str):
-    """Sends a WhatsApp text message using YCloud API."""
+async def send_whatsapp_message(number: str, text: str) -> bool:
+    """Manda un texto libre por WhatsApp. Devuelve si se pudo enviar.
+
+    El booleano importa: el texto libre SOLO se puede mandar dentro de la
+    ventana de 24 h que abre el paciente al escribir. Fuera de esa ventana
+    WhatsApp lo rechaza, y antes ese rechazo se tragaba en silencio: el loop
+    de recordatorios escribia "Recordatorio enviado" igual. Ahora quien llama
+    puede enterarse y caer a una plantilla.
+    """
     api_key = get_config("YCLOUD_API_KEY", "")
     from_phone = get_config("YCLOUD_FROM_PHONE", "")
     
@@ -91,10 +98,11 @@ async def send_whatsapp_message(number: str, text: str):
                     r.raise_for_status()
                 except Exception as e:
                     logger.error(f"❌ Fallback Evolution error: {e}")
-            return
+                    return False
+            return True
         
         logger.warning("❌ No WhatsApp configuration found (neither YCloud nor Evolution)!")
-        return
+        return False
 
     # Prepare YCloud request
     # YCloud requires phone numbers to start with '+'
@@ -103,11 +111,11 @@ async def send_whatsapp_message(number: str, text: str):
     
     if not to_phone:
         logger.error(f"❌ Invalid recipient phone number format: {number}")
-        return
+        return False
         
     if not from_phone_norm:
         logger.error(f"❌ Invalid YCLOUD_FROM_PHONE configuration: {from_phone}")
-        return
+        return False
 
     url = "https://api.ycloud.com/v2/whatsapp/messages"
     headers = {
@@ -129,11 +137,83 @@ async def send_whatsapp_message(number: str, text: str):
             r = await client.post(url, json=payload, headers=headers)
             logger.info(f"📥 YCloud API response: {r.status_code} - {r.text}")
             r.raise_for_status()
+            return True
         except Exception as e:
             logger.error(f"❌ Failed to send WhatsApp message via YCloud: {e}")
+            return False
 
 
-# ── Mensajes interactivos ────────────────────────────────────────────────────
+# ── Plantillas ───────────────────────────────────────────────────────────────
+# El texto libre solo se puede mandar dentro de la ventana de 24 h que abre el
+# paciente al escribir. Un recordatorio sale el dia ANTES del turno, asi que
+# casi siempre cae fuera de esa ventana y WhatsApp lo rechaza: los recordatorios
+# solo llegaban a quien justo habia escrito ese dia, y el log decia "enviado"
+# igual. Para reabrir la conversacion hace falta una plantilla aprobada.
+
+PLANTILLA_RECORDATORIO = "recordatorio_turno"
+IDIOMA_PLANTILLA = "es_AR"
+
+
+async def send_whatsapp_template(number: str, nombre: str, idioma: str,
+                                 parametros: list[str],
+                                 parametro_boton: str | None = None) -> bool:
+    """Manda una plantilla aprobada. Devuelve si se pudo enviar.
+
+    `parametros` son los {{1}}, {{2}}... del cuerpo, en orden.
+    `parametro_boton` es el sufijo de la URL del boton, si la plantilla lo tiene.
+    """
+    api_key = get_config("YCLOUD_API_KEY", "")
+    to_phone = normalize_to_e164(number)
+    from_phone_norm = normalize_to_e164(get_config("YCLOUD_FROM_PHONE", ""))
+
+    if not (api_key and to_phone and from_phone_norm):
+        logger.error("❌ Falta configuración de YCloud para mandar la plantilla.")
+        return False
+
+    componentes = [{
+        "type": "body",
+        "parameters": [{"type": "text", "text": str(p)} for p in parametros],
+    }]
+    if parametro_boton:
+        componentes.append({
+            "type": "button",
+            "sub_type": "url",
+            "index": "0",
+            "parameters": [{"type": "text", "text": str(parametro_boton)}],
+        })
+
+    payload = {
+        "from": from_phone_norm,
+        "to": to_phone,
+        "type": "template",
+        "template": {
+            "name": nombre,
+            "language": {"code": idioma},
+            "components": componentes,
+        },
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            r = await client.post(
+                "https://api.ycloud.com/v2/whatsapp/messages",
+                json=payload,
+                headers={"X-API-Key": api_key, "Content-Type": "application/json"},
+            )
+            if r.status_code >= 400:
+                logger.error(
+                    "❌ La plantilla '%s' fue rechazada para %s: %s - %s",
+                    nombre, ofuscar_telefono(number), r.status_code, r.text[:300],
+                )
+                return False
+            logger.info("📤 Plantilla '%s' enviada a %s", nombre, ofuscar_telefono(number))
+            return True
+        except Exception as e:
+            logger.error("❌ Error mandando la plantilla '%s': %s", nombre, e, exc_info=True)
+            return False
+
+
+# ── Mensajes interactivos ─────────────────────────────────────────────────────
 # Hasta ahora el bot solo mandaba texto plano, asi que el paciente tenia que
 # tipear la obra social, el motivo y el horario. De ahi salian cosas como
 # "Pami" cargado como motivo de consulta. Con listas y botones elige de

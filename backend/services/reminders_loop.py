@@ -17,7 +17,62 @@ def get_config(db: Session, key: str, default: str = ""):
         return conf.value
     return os.getenv(key, default)
 
-from backend.services.whatsapp import send_whatsapp_message
+from backend.services.whatsapp import (
+    send_whatsapp_message, send_whatsapp_template, ofuscar_telefono,
+    PLANTILLA_RECORDATORIO, IDIOMA_PLANTILLA,
+)
+
+
+# La ventana de servicio de WhatsApp: 24 h desde el ultimo mensaje DEL PACIENTE.
+# Dentro de ella el texto libre es gratis; fuera, WhatsApp lo rechaza y hay que
+# usar una plantilla aprobada (que se cobra, pero llega).
+VENTANA_SERVICIO = timedelta(hours=24)
+
+
+def dentro_de_la_ventana(db: Session, telefono: str) -> bool:
+    """Si ese paciente escribio en las ultimas 24 horas."""
+    from backend.models.chat_session import ChatSession, ChatMessage, MessageRole
+
+    digitos = "".join(filter(str.isdigit, (telefono or "")))
+    if len(digitos) < 8:
+        return False
+
+    ultimo = (
+        db.query(ChatMessage.created_at)
+        .join(ChatSession, ChatMessage.session_id == ChatSession.id)
+        .filter(
+            ChatSession.platform_user_id.like(f"%{digitos[-8:]}%"),
+            ChatMessage.role == MessageRole.user,
+        )
+        .order_by(ChatMessage.created_at.desc())
+        .first()
+    )
+    return bool(ultimo) and (datetime.utcnow() - ultimo[0]) < VENTANA_SERVICIO
+
+
+async def enviar_recordatorio(db: Session, appt, patient, time_str: str,
+                              cancel_link: str, msg: str) -> bool:
+    """Manda el recordatorio por el canal que corresponda. Devuelve si llego.
+
+    Dentro de la ventana de servicio va texto libre, que es gratis. Fuera va la
+    plantilla, unica forma de reabrir la conversacion. Si la plantilla todavia
+    no esta aprobada por Meta, se intenta el texto igual: puede fallar, pero es
+    mejor intentarlo que no mandar nada.
+    """
+    if dentro_de_la_ventana(db, patient.phone):
+        if await send_whatsapp_message(patient.phone, msg):
+            return True
+        # Estaba en la ventana y aun asi fallo: se intenta la plantilla.
+
+    if await send_whatsapp_template(
+        patient.phone, PLANTILLA_RECORDATORIO, IDIOMA_PLANTILLA,
+        [patient.first_name, time_str, appt.location or "el consultorio"],
+        parametro_boton=str(appt.id),
+    ):
+        return True
+
+    # Ultimo intento: quiza la plantilla no esta aprobada todavia.
+    return await send_whatsapp_message(patient.phone, msg)
 
 async def notify_admins(db: Session, text: str):
     admin_numbers = get_config(db, "ADMIN_NOTIFY_NUMBERS", "")
@@ -65,8 +120,19 @@ async def check_reminders():
                     f"el {time_str} en nuestra sede de {appt.location}.\n\n"
                     f"Si no podés asistir, por favor cancelálo en el siguiente link:\n{cancel_link}"
                 )
-                await send_whatsapp_message(patient.phone, msg)
-                logger.info(f"Recordatorio enviado a {patient.phone} para turno {appt.id}")
+                # Antes esto decia "Recordatorio enviado" pasara lo que pasara:
+                # send_whatsapp_message se tragaba el rechazo de WhatsApp y el
+                # log reportaba un exito que no habia ocurrido.
+                if await enviar_recordatorio(db, appt, patient, time_str, cancel_link, msg):
+                    logger.info("✅ Recordatorio enviado a %s para el turno %s",
+                                ofuscar_telefono(patient.phone), appt.id)
+                else:
+                    logger.error(
+                        "❌ NO se pudo enviar el recordatorio a %s para el turno %s. "
+                        "Si la plantilla '%s' todavía no está aprobada por Meta, los "
+                        "recordatorios fuera de la ventana de 24 h no van a llegar.",
+                        ofuscar_telefono(patient.phone), appt.id, PLANTILLA_RECORDATORIO,
+                    )
                 
         except Exception as e:
             logger.error(f"Reminder loop error: {e}")
