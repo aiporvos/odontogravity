@@ -83,6 +83,13 @@ const UI = {
         return labels[channel] || channel;
     },
 
+    // Un apellido con < o & no puede romper el HTML donde se lo dibuja.
+    escape(txt) {
+        return String(txt ?? '').replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        }[c]));
+    },
+
     // ── Form Helpers ───────────────────────────────────
     getFormData(formId) {
         const form = document.getElementById(formId);

@@ -60,8 +60,8 @@ const PatientsPage = {
                         ${patients.map(p => `
                             <tr>
                                 <td><strong>${p.last_name}, ${p.first_name}</strong></td>
-                                <td>${p.dni || '<span class="badge badge-cancelled" title="Lo cargó el bot: falta completar el DNI cuando venga">falta DNI</span>'}</td>
-                                <td>${p.phone}</td>
+                                <td>${p.dni || '<span class="badge badge-cancelled" title="Falta completar el DNI cuando el paciente venga">falta DNI</span>'}</td>
+                                <td>${p.phone || '<span class="badge badge-cancelled" title="Sin teléfono no recibe recordatorios">falta teléfono</span>'}</td>
                                 <td>${p.insurance_name || '-'}</td>
                                 <td>
                                     <button class="btn btn-sm btn-ghost" onclick="PatientsPage.showForm('${p.id}')">Editar</button>
@@ -94,13 +94,17 @@ const PatientsPage = {
                     <label>Apellido *</label>
                     <input type="text" name="last_name" value="${patient.last_name}" required>
                 </div>
+<!-- Solo nombre y apellido son obligatorios. Recepcion carga fichas
+                     desde la agenda de papel, donde el DNI y el telefono casi nunca
+                     estan anotados; exigirlos obligaba a inventarlos, y un telefono
+                     inventado hace que el recordatorio le llegue a un tercero. -->
                 <div class="form-group">
-                    <label>DNI *</label>
-                    <input type="text" name="dni" value="${patient.dni || ''}" ${id && patient.dni ? 'readonly' : ''} placeholder="Se completa cuando el paciente viene">
+                    <label>DNI</label>
+                    <input type="text" name="dni" value="${patient.dni && !String(patient.dni).startsWith('TMP-') ? patient.dni : ''}" ${id && patient.dni && !String(patient.dni).startsWith('TMP-') ? 'readonly' : ''} placeholder="Se completa cuando el paciente viene">
                 </div>
                 <div class="form-group">
-                    <label>Teléfono *</label>
-                    <input type="text" name="phone" value="${patient.phone}" required>
+                    <label>Teléfono</label>
+                    <input type="text" name="phone" value="${patient.phone || ''}" placeholder="Sin teléfono no recibe recordatorios">
                 </div>
                 <div class="form-group">
                     <label>Email</label>
@@ -141,8 +145,8 @@ const PatientsPage = {
 
     async savePatient(id) {
         const data = UI.getFormData('form-patient');
-        if (!data.first_name || !data.last_name || !data.phone) {
-            UI.toast('Completá los campos obligatorios', 'error');
+        if (!data.first_name || !data.last_name) {
+            UI.toast('Completá nombre y apellido', 'error');
             return;
         }
         // Los campos opcionales vacíos ('') se envían como null; si no, valores

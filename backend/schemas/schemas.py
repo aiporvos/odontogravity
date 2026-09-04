@@ -54,8 +54,10 @@ class UserUpdate(BaseModel):
 class PatientCreate(BaseModel):
     first_name: str
     last_name: str
+    # Solo nombre y apellido son obligatorios. DNI y telefono los completa
+    # recepcion cuando el paciente llega.
     dni: Optional[str] = None
-    phone: str
+    phone: Optional[str] = None
     email: Optional[str] = None
     date_of_birth: Optional[date] = None
     address: Optional[str] = None
@@ -72,7 +74,7 @@ class PatientRead(BaseModel):
     # Puede faltar: el bot da de alta con nombre + teléfono, y recepción
     # completa el DNI cuando el paciente llega con el documento.
     dni: Optional[str] = None
-    phone: str
+    phone: Optional[str] = None
     email: Optional[str] = None
     date_of_birth: Optional[date] = None
     address: Optional[str] = None

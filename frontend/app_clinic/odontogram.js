@@ -201,16 +201,49 @@ Router.register('odontogram', async (container) => {
     `;
 
     // Buscador: filtra las opciones del selector a medida que se tipea
+    // Mismo caso que el buscador del modal de turnos: filtrar en el navegador
+    // solo mira la primera pagina de /clinic/patients (50 fichas), asi que el
+    // paciente buscado casi nunca aparecia. La busqueda va al servidor.
     const odoSearch = document.getElementById('odo-patient-search');
     if (odoSearch) {
+        let timer = null;
+        let token = 0;
         odoSearch.addEventListener('input', (e) => {
-            const q = e.target.value.trim().toLowerCase();
-            const sel = document.getElementById('odo-patient');
-            const current = sel.value;
-            const list = !q ? odontogramState.patients : odontogramState.patients.filter(p =>
-                `${p.last_name} ${p.first_name} ${p.dni}`.toLowerCase().includes(q));
-            sel.innerHTML = '<option value="">Seleccionar paciente...</option>' +
-                list.map(p => `<option value="${p.id}" ${p.id === current ? 'selected' : ''}>${p.last_name}, ${p.first_name} — DNI: ${p.dni}</option>`).join('');
+            const q = e.target.value.trim();
+            clearTimeout(timer);
+            timer = setTimeout(async () => {
+                const sel = document.getElementById('odo-patient');
+                if (!sel) return;
+                const mio = ++token;
+
+                let list;
+                if (!q) {
+                    list = odontogramState.patients;
+                } else {
+                    try {
+                        list = await API.getPatients(q, 200);
+                    } catch (err) {
+                        const n = q.toLowerCase();
+                        list = odontogramState.patients.filter(p =>
+                            `${p.last_name} ${p.first_name} ${p.dni || ''}`.toLowerCase().includes(n));
+                    }
+                }
+                // Respuesta vieja que llego tarde: descartarla.
+                if (mio !== token) return;
+
+                const conocidos = new Set(odontogramState.patients.map(p => p.id));
+                list.forEach(p => { if (!conocidos.has(p.id)) odontogramState.patients.push(p); });
+
+                const current = sel.value;
+                sel.innerHTML = (list.length === 0
+                        ? '<option value="">Sin resultados</option>'
+                        : '<option value="">Seleccionar paciente...</option>') +
+                    list.map(p => `<option value="${p.id}" ${p.id === current ? 'selected' : ''}>${p.last_name}, ${p.first_name} — DNI: ${p.dni || 's/d'}</option>`).join('');
+                if (list.length === 1) {
+                    sel.value = list[0].id;
+                    sel.dispatchEvent(new Event('change'));
+                }
+            }, 250);
         });
     }
 

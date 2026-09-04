@@ -17,7 +17,10 @@ class Patient(Base):
     # Pedirselo al paciente por chat era la mayor friccion del alta, y recepcion
     # lo completa cuando llega. Una ficha sin DNI queda marcada como incompleta.
     dni: Mapped[str | None] = mapped_column(String(20), unique=True, nullable=True, index=True)
-    phone: Mapped[str] = mapped_column(String(30), nullable=False)
+    # Opcional, igual que el DNI. Recepcion carga fichas desde la agenda de
+    # papel donde muchas veces no figura el telefono; exigirlo obligaba a
+    # inventar uno. Sin telefono la ficha existe, pero no recibe recordatorios.
+    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)

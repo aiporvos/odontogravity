@@ -752,11 +752,21 @@ const AgendaPage = {
             <form id="form-new-appointment" class="form-grid">
                 <div class="form-group form-group-full">
                     <label>Paciente *</label>
-                    <input type="text" id="appt-patient-search" placeholder="Buscar por nombre, apellido o DNI..." style="margin-bottom:.35rem;" oninput="AgendaPage._filterPatients(this.value)">
-                    <select name="patient_id" id="appt-patient-select" required>
-                        <option value="">Seleccionar...</option>
-                        ${patients.map(p => `<option value="${p.id}">${p.last_name}, ${p.first_name}</option>`).join('')}
-                    </select>
+                    <!-- Un solo campo: se escribe y se elige ahi mismo. Antes eran
+                         dos controles, un buscador arriba y un desplegable abajo, y
+                         habia que bajar a "Seleccionar..." para confirmar lo que ya
+                         se habia tipeado. -->
+                    <div class="buscador-ficha">
+                        <input type="text" id="appt-patient-search" autocomplete="off"
+                               placeholder="Buscar por nombre, apellido o DNI..."
+                               oninput="AgendaPage._filterPatients(this.value)"
+                               onfocus="AgendaPage._filterPatients(this.value)"
+                               onblur="AgendaPage._cerrarResultados()"
+                               onkeydown="AgendaPage._teclaEnBuscador(event)">
+                        <input type="hidden" name="patient_id" id="appt-patient-id">
+                        <div id="appt-patient-results" class="buscador-resultados" hidden></div>
+                    </div>
+                    <div id="appt-patient-chosen" class="buscador-elegido" hidden></div>
                     <button type="button" class="btn btn-sm btn-ghost" style="margin-top:.35rem;color:var(--primary);" onclick="AgendaPage._toggleNewPatient()">+ Nuevo paciente</button>
                     <div id="appt-new-patient" style="display:none;margin-top:.5rem;padding:.75rem;background:var(--slate-50);border-radius:8px;border:1px solid var(--slate-200);">
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
@@ -765,7 +775,7 @@ const AgendaPage = {
                             <input type="text" id="np-dni" placeholder="DNI (opcional)">
                             <input type="text" id="np-phone" placeholder="Teléfono (opcional)">
                         </div>
-                        <small style="color:var(--slate-500);">Solo nombre y apellido son obligatorios. Sin DNI se asigna uno provisorio para completar después.</small>
+                        <small style="color:var(--slate-500);">Solo nombre y apellido son obligatorios. El DNI y el teléfono se completan después, desde Pacientes.</small>
                         <button type="button" class="btn btn-sm btn-primary" style="margin-top:.5rem;display:block;" onclick="AgendaPage._createPatientInline()">Crear y seleccionar</button>
                     </div>
                 </div>
@@ -821,8 +831,9 @@ const AgendaPage = {
         this._pendingAppts.push({...data, duration_minutes: parseInt(data.duration_minutes) || 30, location: data.location || null});
         const listEl = document.getElementById('multi-appt-list');
         if (listEl) {
-            const pat = document.querySelector('[name="patient_id"] option:checked');
-            listEl.innerHTML += `<div class="pending-appt-item"><span>🕐 ${data.start_time.replace('T',' ')} — ${pat ? pat.textContent : '?'} — ${data.reason || 'Sin motivo'}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${this._pendingAppts.length - 1})" style="color:var(--danger)">✕</button></div>`;
+            const pat = (this._modalPatients || []).find(p => p.id === data.patient_id);
+            const quien = pat ? `${pat.last_name}, ${pat.first_name}` : '?';
+            listEl.innerHTML += `<div class="pending-appt-item"><span>🕐 ${data.start_time.replace('T',' ')} — ${quien} — ${data.reason || 'Sin motivo'}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${this._pendingAppts.length - 1})" style="color:var(--danger)">✕</button></div>`;
         }
         // Reset form time +30min. new Date("YYYY-MM-DDTHH:MM") sin zona se
         // interpreta como hora local, pero toISOString() la devuelve en UTC:
@@ -844,16 +855,138 @@ const AgendaPage = {
         if (items[idx]) items[idx].remove();
     },
 
-    // Buscador de paciente en el modal de Nuevo Turno
+    // Buscador de paciente en el modal de Nuevo Turno.
+    //
+    // Dos cosas estaban mal. Filtraba en el navegador sobre `_modalPatients`,
+    // que es lo que devolvio /clinic/patients al abrir el modal: la PRIMERA
+    // pagina, 50 fichas. Con la agenda cargada el paciente buscado casi nunca
+    // estaba ahi, se tipeaba el apellido y no aparecia nada. Y aunque
+    // apareciera, elegirlo pedia bajar a un desplegable aparte.
+    // Ahora busca el servidor y se elige en el mismo campo.
     _filterPatients(q) {
-        q = (q || '').trim().toLowerCase();
-        const sel = document.getElementById('appt-patient-select');
-        if (!sel) return;
-        const current = sel.value;
-        const list = !q ? this._modalPatients : this._modalPatients.filter(p =>
-            `${p.last_name} ${p.first_name} ${p.dni}`.toLowerCase().includes(q));
-        sel.innerHTML = '<option value="">Seleccionar...</option>' +
-            list.map(p => `<option value="${p.id}" ${p.id === current ? 'selected' : ''}>${p.last_name}, ${p.first_name}</option>`).join('');
+        clearTimeout(this._patientSearchTimer);
+        // Debounce: sin esto sale un request por tecla.
+        this._patientSearchTimer = setTimeout(
+            // La coma de "Apellido, Nombre" queda en el campo despues de elegir:
+            // sin sacarla, volver a enfocarlo no encontraba a nadie.
+            () => this._runPatientSearch((q || '').replace(/,/g, ' ').trim()), 250);
+    },
+
+    async _runPatientSearch(q) {
+        const caja = document.getElementById('appt-patient-results');
+        if (!caja) return;
+        // Cada busqueda lleva numero: si una respuesta lenta llega despues de
+        // una mas nueva, se descarta en vez de pisar la lista buena.
+        const token = (this._patientSearchToken || 0) + 1;
+        this._patientSearchToken = token;
+
+        // Si borro lo que habia escrito, tambien se suelta al paciente elegido:
+        // si no, quedaba un turno a nombre de alguien que ya no se ve.
+        if (!q) this._elegirPaciente(null);
+
+        let list;
+        if (!q) {
+            list = this._modalPatients;
+        } else {
+            try {
+                list = await API.getPatients(q, 200);
+            } catch (e) {
+                // Sin red, al menos filtrar lo que ya esta cargado: peor es
+                // dejar al usuario sin ninguna opcion.
+                const n = q.toLowerCase();
+                list = this._modalPatients.filter(p =>
+                    `${p.last_name} ${p.first_name} ${p.dni || ''}`.toLowerCase().includes(n));
+            }
+        }
+        if (token !== this._patientSearchToken) return;
+
+        // Lo encontrado se suma a la lista del modal: el resumen de "Agregar a
+        // lista" busca el nombre ahi, y sin esto mostraba "?".
+        const conocidos = new Set(this._modalPatients.map(p => p.id));
+        list.forEach(p => { if (!conocidos.has(p.id)) this._modalPatients.push(p); });
+
+        this._resultados = list;
+        this._resaltado = list.length ? 0 : -1;
+        this._pintarResultados(q);
+    },
+
+    _pintarResultados(q) {
+        const caja = document.getElementById('appt-patient-results');
+        if (!caja) return;
+        const lista = this._resultados || [];
+
+        if (lista.length === 0) {
+            caja.innerHTML = q
+                ? `<div class="buscador-vacio">Sin resultados para "${UI.escape(q)}". Probá con el apellido, o cargalo con "+ Nuevo paciente".</div>`
+                : '<div class="buscador-vacio">No hay pacientes cargados todavía.</div>';
+            caja.hidden = false;
+            return;
+        }
+
+        caja.innerHTML = lista.map((p, i) => {
+            const dni = (p.dni || '').startsWith('TMP-') ? 'sin DNI' : (p.dni || 'sin DNI');
+            // mousedown en vez de click: el click llega despues del blur del
+            // input, y para entonces la lista ya se cerro.
+            return `<div class="buscador-fila${i === this._resaltado ? ' resaltada' : ''}"
+                         data-i="${i}"
+                         onmousedown="event.preventDefault(); AgendaPage._elegirPorIndice(${i})">
+                        <span>${UI.escape(p.last_name)}, ${UI.escape(p.first_name)}</span>
+                        <small>${UI.escape(dni)}</small>
+                    </div>`;
+        }).join('');
+        caja.hidden = false;
+    },
+
+    _teclaEnBuscador(e) {
+        const lista = this._resultados || [];
+        const caja = document.getElementById('appt-patient-results');
+        const abierta = caja && !caja.hidden && lista.length > 0;
+        if (e.key === 'Escape') return this._cerrarResultados(0);
+        if (!abierta) return;
+
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const paso = e.key === 'ArrowDown' ? 1 : -1;
+            this._resaltado = (this._resaltado + paso + lista.length) % lista.length;
+            this._pintarResultados(document.getElementById('appt-patient-search').value.trim());
+            const fila = caja.querySelector(`[data-i="${this._resaltado}"]`);
+            if (fila) fila.scrollIntoView({block: 'nearest'});
+        } else if (e.key === 'Enter') {
+            // Sin esto, Enter manda el formulario con el paciente sin elegir.
+            e.preventDefault();
+            this._elegirPorIndice(this._resaltado);
+        }
+    },
+
+    _elegirPorIndice(i) {
+        const p = (this._resultados || [])[i];
+        if (p) this._elegirPaciente(p);
+    },
+
+    // Fuente unica de "quien es el paciente de este turno". `null` lo suelta.
+    _elegirPaciente(p) {
+        const oculto = document.getElementById('appt-patient-id');
+        const buscador = document.getElementById('appt-patient-search');
+        const cartel = document.getElementById('appt-patient-chosen');
+        if (!oculto) return;
+
+        oculto.value = p ? p.id : '';
+        if (cartel) {
+            cartel.hidden = !p;
+            cartel.innerHTML = p ? `✓ ${UI.escape(p.last_name)}, ${UI.escape(p.first_name)}` : '';
+        }
+        if (p) {
+            if (buscador) buscador.value = `${p.last_name}, ${p.first_name}`;
+            this._cerrarResultados(0);
+        }
+    },
+
+    _cerrarResultados(demora = 120) {
+        clearTimeout(this._cierreResultados);
+        this._cierreResultados = setTimeout(() => {
+            const caja = document.getElementById('appt-patient-results');
+            if (caja) caja.hidden = true;
+        }, demora);
     },
 
     _toggleNewPatient() {
@@ -867,18 +1000,19 @@ const AgendaPage = {
         if (!first || !last) {
             return UI.toast('Completá al menos nombre y apellido', 'error');
         }
-        // DNI opcional: si no hay, se asigna uno provisorio (editable después).
-        const dni = g('np-dni') || ('TMP-' + Math.random().toString(36).slice(2, 12));
-        const data = { first_name: first, last_name: last, dni, phone: g('np-phone') };
+        // DNI y teléfono opcionales: van como null, no como '' ni como un
+        // "TMP-xxxx" inventado. Ese provisorio ensuciaba la columna DNI de la
+        // lista de pacientes y no aportaba nada.
+        const data = {
+            first_name: first,
+            last_name: last,
+            dni: g('np-dni') || null,
+            phone: g('np-phone') || null,
+        };
         try {
             const p = await API.createPatient(data);
             this._modalPatients.push(p);
-            const sel = document.getElementById('appt-patient-select');
-            const opt = document.createElement('option');
-            opt.value = p.id;
-            opt.textContent = `${p.last_name}, ${p.first_name}`;
-            opt.selected = true;
-            sel.appendChild(opt);
+            this._elegirPaciente(p);
             document.getElementById('appt-new-patient').style.display = 'none';
             UI.toast('Paciente creado y seleccionado', 'success');
         } catch (e) { UI.toast(e.message || 'Error al crear paciente', 'error'); }

@@ -108,7 +108,16 @@ const API = {
     },
 
     // ── Clinic ──
-    getPatients(q = '') { return this.get(`/clinic/patients${q ? `?q=${encodeURIComponent(q)}` : ''}`); },
+    // El backend pagina (200 fichas como maximo). Los buscadores del panel
+    // tienen que mandar `q` y dejar que filtre el servidor: filtrar en el
+    // navegador solo mira la primera pagina.
+    getPatients(q = '', limit = 0) {
+        const params = new URLSearchParams();
+        if (q) params.set('q', q);
+        if (limit) params.set('limit', limit);
+        const qs = params.toString();
+        return this.get(`/clinic/patients${qs ? `?${qs}` : ''}`);
+    },
     getPatient(id) { return this.get(`/clinic/patients/${id}`); },
     createPatient(data) { return this.post('/clinic/patients', data); },
     updatePatient(id, data) { return this.put(`/clinic/patients/${id}`, data); },

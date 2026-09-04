@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from backend.database import get_db
 from backend.security import require_admin, require_clinic
@@ -33,6 +33,12 @@ router = APIRouter(prefix="/api/clinic", tags=["Clínica"], dependencies=[Depend
 # ═══════════════════════════════════════════════════════
 # PATIENTS
 # ═══════════════════════════════════════════════════════
+# Tope duro de fichas por respuesta. La lista completa no se manda nunca: con
+# la agenda de papel cargada son varios cientos de pacientes y el desplegable
+# del modal se vuelve inusable. Quien busca, busca contra el servidor.
+MAX_PACIENTES_POR_PAGINA = 200
+
+
 @router.get("/patients", response_model=list[PatientRead])
 def list_patients(
     q: Optional[str] = None,
@@ -40,16 +46,36 @@ def list_patients(
     limit: int = 50,
     db: Session = Depends(get_db),
 ):
+    """Lista de pacientes, ordenada y paginada.
+
+    El orden importa: sin ORDER BY, PostgreSQL devuelve las filas en el orden
+    que le conviene, asi que "los primeros 50" era un conjunto arbitrario que
+    ademas cambiaba entre llamadas. Los buscadores del panel filtraban sobre
+    ese recorte y el paciente casi nunca estaba: se tipeaba el apellido y el
+    desplegable quedaba vacio. Ahora la pagina es alfabetica y la busqueda la
+    resuelve esta query, no el navegador.
+
+    `q` busca por nombre, apellido o DNI, y tambien por "apellido nombre"
+    escrito de corrido, que es como lo tipea recepcion.
+    """
     query = db.query(Patient).filter(Patient.is_deleted == False)
     if q:
-        query = query.filter(
-            or_(
-                Patient.first_name.ilike(f"%{q}%"),
-                Patient.last_name.ilike(f"%{q}%"),
-                Patient.dni.ilike(f"%{q}%"),
+        entero = func.concat(Patient.last_name, " ", Patient.first_name)
+        invertido = func.concat(Patient.first_name, " ", Patient.last_name)
+        for palabra in q.split():
+            patron = f"%{palabra}%"
+            query = query.filter(
+                or_(
+                    Patient.first_name.ilike(patron),
+                    Patient.last_name.ilike(patron),
+                    Patient.dni.ilike(patron),
+                    entero.ilike(patron),
+                    invertido.ilike(patron),
+                )
             )
-        )
-    return query.offset(skip).limit(limit).all()
+    query = query.order_by(Patient.last_name, Patient.first_name)
+    limit = max(1, min(limit, MAX_PACIENTES_POR_PAGINA))
+    return query.offset(max(0, skip)).limit(limit).all()
 
 
 @router.get("/patients/{patient_id}", response_model=PatientRead)
@@ -62,9 +88,22 @@ def get_patient(patient_id: UUID, db: Session = Depends(get_db)):
 
 @router.post("/patients", response_model=PatientRead, status_code=201)
 def create_patient(data: PatientCreate, db: Session = Depends(get_db)):
-    if db.query(Patient).filter(Patient.dni == data.dni, Patient.is_deleted == False).first():
+    # El chequeo de duplicado corre SOLO si vino un DNI. Con `data.dni` en None
+    # el filtro se traducia a "dni IS NULL", asi que la primera ficha sin DNI
+    # hacia rebotar a todas las siguientes con "DNI ya registrado" -- justo las
+    # fichas que recepcion carga desde la agenda de papel.
+    dni = (data.dni or "").strip() or None
+    if dni and db.query(Patient).filter(
+        Patient.dni == dni, Patient.is_deleted == False
+    ).first():
         raise HTTPException(400, "DNI ya registrado")
-    patient = Patient(**data.model_dump())
+
+    campos = data.model_dump()
+    # '' no es un dato: se guarda como NULL. Con el DNI ademas es obligatorio,
+    # porque la columna es UNIQUE y varios '' chocarian entre si (varios NULL no).
+    campos["dni"] = dni
+    campos["phone"] = (campos.get("phone") or "").strip() or None
+    patient = Patient(**campos)
     db.add(patient)
     db.commit()
     db.refresh(patient)
@@ -79,12 +118,20 @@ def update_patient(patient_id: UUID, data: PatientUpdate, db: Session = Depends(
 
     payload = data.model_dump(exclude_unset=True)
 
+    # Vaciar un campo opcional lo deja en NULL, no en ''. Importa para el DNI:
+    # la columna es UNIQUE y varios '' chocarian entre si, mientras que varios
+    # NULL conviven. Ademas es la unica forma de limpiar los "TMP-xxxx" que el
+    # alta rapida inventaba cuando el DNI era obligatorio.
+    for campo in ("dni", "phone"):
+        if campo in payload and not (payload[campo] or "").strip():
+            payload[campo] = None
+
     # El DNI es único: si viene y cambia, verificar que no lo tenga otro paciente
     new_dni = payload.get("dni")
     if new_dni is not None:
         new_dni = new_dni.strip()
         if not new_dni:
-            payload.pop("dni")  # no permitir dejar el DNI vacío
+            payload.pop("dni")
         elif new_dni != p.dni:
             existe = db.query(Patient).filter(
                 Patient.dni == new_dni,

@@ -59,6 +59,14 @@ async def enviar_recordatorio(db: Session, appt, patient, time_str: str,
     no esta aprobada por Meta, se intenta el texto igual: puede fallar, pero es
     mejor intentarlo que no mandar nada.
     """
+    # Una ficha cargada desde la agenda de papel puede no tener telefono. No
+    # hay a donde mandar: se informa el fallo en vez de intentar tres envios
+    # que van a fallar los tres.
+    if not (patient.phone or "").strip():
+        logger.warning("⚠️ %s %s no tiene telefono: sin recordatorio (turno %s)",
+                       patient.first_name, patient.last_name, appt.id)
+        return False
+
     if dentro_de_la_ventana(db, patient.phone):
         if await send_whatsapp_message(patient.phone, msg):
             return True

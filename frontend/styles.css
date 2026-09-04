@@ -1628,3 +1628,58 @@ tbody tr:hover { background: var(--bg-inset); }
 }
 .tab:hover { color: var(--fg); }
 .tab.active { color: var(--charcoal); border-bottom-color: var(--yellow); }
+
+/* ── Buscador de ficha con resultados en el mismo campo ──────────────────────
+   Antes eran dos controles: un buscador arriba y un desplegable "Seleccionar..."
+   abajo. Se tipeaba el apellido y despues habia que bajar a confirmarlo en otro
+   lugar. Ahora se escribe y se elige en el mismo lugar. */
+.buscador-ficha {
+    position: relative;
+}
+
+.buscador-resultados {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--bg-surface);
+    border: 2px solid var(--primary);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-xl);
+}
+
+.buscador-fila {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: .55rem .75rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.buscador-fila:last-child { border-bottom: none; }
+.buscador-fila:hover,
+.buscador-fila.resaltada { background: var(--primary); color: #231f20; }
+
+.buscador-fila small {
+    font-size: .78rem;
+    opacity: .7;
+    white-space: nowrap;
+}
+
+.buscador-vacio {
+    padding: .7rem .75rem;
+    font-size: .85rem;
+    color: var(--slate-500);
+}
+
+.buscador-elegido {
+    margin-top: .35rem;
+    font-size: .85rem;
+    font-weight: 600;
+    color: var(--primary);
+}
