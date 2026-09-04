@@ -111,7 +111,10 @@ const UI = {
     // `opciones` es [{valor, texto, clase}]. Cerrar sin elegir devuelve null.
     elegir(titulo, cuerpoHtml, opciones) {
         return new Promise((resolve) => {
-            const footer = opciones.map((o, i) =>
+            // Una opcion con `oculta` no sale como boton del pie, pero se puede
+            // elegir desde el cuerpo con UI._responderEleccion(i). Sirve para
+            // que cada ficha repetida sea clickeable en la lista.
+            const footer = opciones.map((o, i) => o.oculta ? '' :
                 `<button class="btn ${o.clase || 'btn-secondary'}" onclick="UI._responderEleccion(${i})">${UI.escape(o.texto)}</button>`
             ).join('');
             window._eleccionResolve = (i) => resolve(i === null ? null : opciones[i].valor);
@@ -133,37 +136,40 @@ const UI = {
     // turnos) porque con el nombre solo no se puede decidir si es la misma
     // persona o un homonimo.
     async fichaRepetida(err, quien) {
-        const filas = (err.yaExisten || []).map(p => `
-            <div style="padding:.5rem .7rem;border:2px solid var(--border-color);border-radius:var(--radius-sm);margin-bottom:.4rem;">
-                <strong>${UI.escape(p.last_name)}, ${UI.escape(p.first_name)}</strong>
-                <div style="font-size:.82rem;color:var(--slate-500);margin-top:.15rem;">
-                    ${p.dni ? 'DNI ' + UI.escape(p.dni) : 'sin DNI'} ·
-                    ${p.phone ? UI.escape(p.phone) : 'sin teléfono'} ·
-                    ${p.turnos} turno${p.turnos === 1 ? '' : 's'}
-                    ${p.insurance_name ? ' · ' + UI.escape(p.insurance_name) : ''}
+        const fichas = err.yaExisten || [];
+
+        // Cada ficha es una opcion clickeable. Con dos o mas repetidas hay que
+        // poder decir CUAL usar, no solo "usá la que existe".
+        const opciones = fichas.map(p => ({ valor: p.id, oculta: true }));
+        const iCancelar = opciones.push({ valor: null, texto: 'Cancelar' }) - 1;
+        const iCrear = opciones.push({
+            valor: 'crear', texto: 'Es otro, crear igual', clase: 'btn-danger',
+        }) - 1;
+
+        const filas = fichas.map((p, i) => `
+            <div class="ficha-repetida" onclick="UI._responderEleccion(${i})">
+                <div>
+                    <strong>${UI.escape(p.last_name)}, ${UI.escape(p.first_name)}</strong>
+                    <div style="font-size:.82rem;opacity:.75;margin-top:.15rem;">
+                        ${p.dni ? 'DNI ' + UI.escape(p.dni) : 'sin DNI'} ·
+                        ${p.phone ? UI.escape(p.phone) : 'sin teléfono'} ·
+                        ${p.turnos} turno${p.turnos === 1 ? '' : 's'}
+                        ${p.insurance_name ? ' · ' + UI.escape(p.insurance_name) : ''}
+                    </div>
                 </div>
+                <span style="font-size:.8rem;font-weight:700;white-space:nowrap;">Usar esta →</span>
             </div>`).join('');
 
-        const unaSola = (err.yaExisten || []).length === 1;
         const cuerpo = `
             <p style="margin:0 0 .6rem;">${UI.escape(err.message)}</p>
             ${filas}
             <p style="font-size:.85rem;color:var(--slate-500);margin:.6rem 0 0;">
-                Si es la misma persona, usá la ficha que ya está: una ficha repetida
-                parte la historia clínica en dos. Si de verdad es otro paciente que
-                se llama igual, creala igual.
+                Si es la misma persona, tocá su ficha: una ficha repetida parte la
+                historia clínica en dos. Si de verdad es otro paciente que se llama
+                igual, creala igual.
             </p>`;
 
-        const opciones = [{ valor: null, texto: 'Cancelar' }];
-        if (unaSola) {
-            opciones.push({
-                valor: err.yaExisten[0].id,
-                texto: 'Usar la ficha que existe',
-                clase: 'btn-primary',
-            });
-        }
-        opciones.push({ valor: 'crear', texto: 'Es otro, crear igual', clase: 'btn-danger' });
-
+        void iCancelar; void iCrear;
         return this.elegir(`¿Es el mismo ${quien || 'paciente'}?`, cuerpo, opciones);
     },
 

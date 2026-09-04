@@ -1683,3 +1683,18 @@ tbody tr:hover { background: var(--bg-inset); }
     font-weight: 600;
     color: var(--primary);
 }
+
+/* Fichas repetidas: cada una es clickeable para elegir cuál usar. */
+.ficha-repetida {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: .55rem .7rem;
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    margin-bottom: .4rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.ficha-repetida:hover { border-color: var(--primary); background: var(--primary); color: #231f20; }

@@ -890,6 +890,13 @@ const AgendaPage = {
                         <div id="appt-patient-results" class="buscador-resultados" hidden></div>
                     </div>
                     <div id="appt-patient-chosen" class="buscador-elegido" hidden></div>
+                    <!-- Aparece recien con un paciente elegido: el registro se
+                         carga sobre alguien, y hasta que no se elige no hay
+                         sobre quien. -->
+                    <button type="button" id="appt-odontograma" hidden
+                            class="btn btn-sm btn-ghost"
+                            style="margin-top:.35rem;color:var(--primary);"
+                            onclick="AgendaPage._abrirOdontograma()">🦷 Cargar en el odontograma</button>
                     <button type="button" class="btn btn-sm btn-ghost" style="margin-top:.35rem;color:var(--primary);" onclick="AgendaPage._toggleNewPatient()">+ Nuevo paciente</button>
                     <div id="appt-new-patient" style="display:none;margin-top:.5rem;padding:.75rem;background:var(--slate-50);border-radius:8px;border:1px solid var(--slate-200);">
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;">
@@ -1104,10 +1111,69 @@ const AgendaPage = {
             cartel.hidden = !p;
             cartel.innerHTML = p ? `✓ ${UI.escape(p.last_name)}, ${UI.escape(p.first_name)}` : '';
         }
+        const botonOdo = document.getElementById('appt-odontograma');
+        if (botonOdo) botonOdo.hidden = !p;
         if (p) {
             if (buscador) buscador.value = `${p.last_name}, ${p.first_name}`;
             this._cerrarResultados(0);
         }
+    },
+
+    // Abre el Registro Manual del odontograma para el paciente elegido, sin
+    // salir de la carga del turno.
+    //
+    // El modal es uno solo en toda la app, asi que el odontograma TAPA al del
+    // turno. Por eso se guarda lo que haya cargado y se repone al volver: si
+    // no, abrir el odontograma costaba tener que cargar el turno de nuevo.
+    _abrirOdontograma() {
+        const oculto = document.getElementById('appt-patient-id');
+        const paciente = (this._modalPatients || []).find(p => p.id === (oculto || {}).value);
+        if (!paciente) return UI.toast('Elegí primero el paciente', 'error');
+
+        this._guardarModalTurno(paciente);
+
+        OdontogramPage.showEntryForm({
+            patientId: paciente.id,
+            titulo: `Odontograma — ${paciente.last_name}, ${paciente.first_name}`,
+            alCerrar: () => AgendaPage._reponerModalTurno(),
+        });
+    },
+
+    // `pacienteElegido` pisa al que estaba seleccionado: lo usa el aviso de
+    // ficha repetida, donde el resultado es justamente cambiar de paciente.
+    async _reponerModalTurno(pacienteElegido = null) {
+        const guardado = this._turnoAMedioCargar;
+        this._turnoAMedioCargar = null;
+        if (!guardado) return;
+
+        let profesionales = [];
+        try { profesionales = await API.getProfessionals(); } catch (e) {}
+
+        this._pendingAppts = guardado.pendientes;
+        this._renderMultiModal(profesionales, this._modalPatients || [],
+                               guardado.datos.start_time || UI.nowISO());
+
+        const d = guardado.datos;
+        const poner = (selector, valor) => {
+            const el = document.querySelector(`#form-new-appointment ${selector}`);
+            if (el && valor != null && valor !== '') el.value = valor;
+        };
+        poner('[name="professional_id"]', d.professional_id);
+        poner('[name="duration_minutes"]', d.duration_minutes);
+        poner('[name="location"]', d.location);
+        poner('[name="reason"]', d.reason);
+        this._elegirPaciente(pacienteElegido || guardado.paciente);
+    },
+
+    // Guarda lo que haya cargado en el modal de turno para poder reponerlo.
+    // El modal es uno solo en toda la app: cualquier dialogo que se abra
+    // encima lo destruye.
+    _guardarModalTurno(paciente = null) {
+        this._turnoAMedioCargar = {
+            datos: UI.getFormData('form-new-appointment'),
+            paciente,
+            pendientes: [...(this._pendingAppts || [])],
+        };
     },
 
     _cerrarResultados(demora = 120) {
@@ -1148,28 +1214,33 @@ const AgendaPage = {
         } catch (e) {
             if (!e.puedeDuplicar) return UI.toast(e.message || 'Error al crear paciente', 'error');
 
-            // Ya hay alguien con ese nombre. Aca la respuesta util casi siempre
-            // es usar la ficha que existe, que ademas es lo que se necesita
-            // para seguir cargando el turno.
+            // Ya hay alguien con ese nombre. El dialogo ocupa el mismo modal, o
+            // sea que se lleva puesto el turno a medio cargar: se guarda antes
+            // y se repone despues, con el paciente que se haya decidido.
+            this._guardarModalTurno();
             const decision = await UI.fichaRepetida(e, `${last}, ${first}`);
-            if (decision === null) return;
 
-            if (decision !== 'crear') {
-                const existente = e.yaExisten.find(x => x.id === decision);
-                this._modalPatients.push(existente);
-                this._elegirPaciente(existente);
-                document.getElementById('appt-new-patient').style.display = 'none';
-                UI.toast('Se usó la ficha que ya estaba', 'success');
+            if (decision === null) {
+                await this._reponerModalTurno();
                 return;
             }
 
-            try {
-                const p = await API.createPatient({ ...data, force: true });
-                this._modalPatients.push(p);
-                this._elegirPaciente(p);
-                document.getElementById('appt-new-patient').style.display = 'none';
-                UI.toast('Paciente creado y seleccionado', 'success');
-            } catch (e2) { UI.toast(e2.message || 'Error al crear paciente', 'error'); }
+            let elegido;
+            if (decision === 'crear') {
+                try {
+                    elegido = await API.createPatient({ ...data, force: true });
+                    UI.toast('Paciente creado y seleccionado', 'success');
+                } catch (e2) {
+                    await this._reponerModalTurno();
+                    return UI.toast(e2.message || 'Error al crear paciente', 'error');
+                }
+            } else {
+                elegido = e.yaExisten.find(x => x.id === decision);
+                UI.toast('Se usó la ficha que ya estaba', 'success');
+            }
+
+            this._modalPatients.push(elegido);
+            await this._reponerModalTurno(elegido);
         }
     },
 

@@ -37,6 +37,7 @@ let odontogramState = {
     entries: [],
     patients: [],
     selectedFaces: [],
+    alCerrar: null,
 };
 
 Router.register('odontogram', async (container) => {
@@ -434,6 +435,9 @@ const OdontogramPage = {
 
     async loadEntries() {
         if (!odontogramState.patientId) return;
+        // Se puede llamar desde otra pantalla (el modal de turno abre el
+        // Registro Manual): sin el odontograma dibujado no hay nada que pintar.
+        if (!document.getElementById('odo-patient')) return;
 
         try {
             const entries = await API.getOdontogram(odontogramState.patientId);
@@ -687,7 +691,14 @@ const OdontogramPage = {
         }
     },
 
-    showEntryForm() {
+    // `opciones.patientId` permite abrirlo desde otra pantalla —hoy el modal de
+    // Nuevo Turno— sin pasar por el selector de paciente del odontograma.
+    // `opciones.alCerrar` corre al guardar o cancelar: lo usa la agenda para
+    // devolver el modal del turno, que este comparte el mismo contenedor y por
+    // lo tanto lo tapa.
+    showEntryForm(opciones = {}) {
+        if (opciones.patientId) odontogramState.patientId = opciones.patientId;
+        odontogramState.alCerrar = opciones.alCerrar || null;
         if (!odontogramState.patientId) return UI.toast('Seleccioná un paciente', 'error');
         
         const allTeeth = [...TEETH.upper_permanent, ...TEETH.upper_deciduous, ...TEETH.lower_deciduous, ...TEETH.lower_permanent];
@@ -763,8 +774,8 @@ const OdontogramPage = {
             </form>
             <div id="entry-preview" style="margin-top:.75rem;font-size:.8rem;color:var(--slate-500);"></div>
         `;
-        UI.showModal('Registro Manual', body, `
-            <button class="btn btn-secondary" onclick="UI.closeModal()">Cancelar</button>
+        UI.showModal(opciones.titulo || 'Registro Manual', body, `
+            <button class="btn btn-secondary" onclick="OdontogramPage.cerrarEntryForm()">Cancelar</button>
             <button class="btn btn-primary" onclick="OdontogramPage.saveEntry()">Guardar</button>
         `);
 
@@ -808,9 +819,17 @@ const OdontogramPage = {
 
         try {
             await API.createOdontogramEntriesBulk(payload);
-            UI.closeModal();
-            this.loadEntries();
             UI.toast(`${payload.length} registro(s) guardado(s)`, 'success');
+            this.cerrarEntryForm();
         } catch (err) { UI.toast(err.message, 'error'); }
+    },
+
+    cerrarEntryForm() {
+        const volver = odontogramState.alCerrar;
+        odontogramState.alCerrar = null;
+        UI.closeModal();
+        if (volver) return volver();
+        // Solo tiene sentido repintar si estamos parados en el odontograma.
+        if (document.getElementById('odo-patient')) this.loadEntries();
     }
 };
