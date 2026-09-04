@@ -174,6 +174,8 @@ class AppointmentRead(BaseModel):
     location: Optional[str] = None
     insurance_name: Optional[str] = None
     notes: Optional[str] = None
+    # Se cargo a proposito encima de otro turno. El panel lo muestra marcado.
+    is_overbooking: bool = False
     created_at: datetime
     patient: Optional[PatientRead] = None
     professional: Optional[ProfessionalRead] = None

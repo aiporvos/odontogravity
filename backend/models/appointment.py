@@ -43,6 +43,15 @@ class Appointment(Base):
     )
     location: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Sobreturno: este turno se cargo A PROPOSITO encima de otro que ya ocupaba
+    # el horario. Es una decision de recepcion, no un error, asi que queda
+    # escrita en el turno en vez de deducirse mirando cual se creo despues (que
+    # cambiaba de lugar si el original se cancelaba o se movia).
+    #
+    # La restriccion EXCLUDE de la base deja fuera a las filas marcadas: son las
+    # unicas que pueden pisar a otra. Todo lo demas —el bot incluido— sigue sin
+    # poder superponer nada.
+    is_overbooking: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

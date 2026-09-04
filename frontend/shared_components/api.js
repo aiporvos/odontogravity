@@ -57,6 +57,14 @@ const API = {
             // puede confirmar igual) de otros errores (404, feriado, etc.) sin
             // tener que parsear el texto del mensaje.
             err.status = res.status;
+            // Un 409 de horario ocupado viene con `puede_sobreturno` en el
+            // detalle: es la señal de que la operación se puede reintentar con
+            // force. Va como dato y no dentro del texto para no depender de
+            // cómo esté redactado el mensaje.
+            const detail = errData && errData.detail;
+            if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+                err.puedeSobreturno = detail.puede_sobreturno === true;
+            }
             throw err;
         }
 
@@ -68,6 +76,11 @@ const API = {
     errorMessage(errData, status) {
         const detail = errData && errData.detail;
         if (typeof detail === 'string') return detail;
+        // Un detalle estructurado (el 409 de horario ocupado) trae el texto en
+        // `message`; sin esto el toast mostraba "Error 409" a secas.
+        if (detail && typeof detail === 'object' && !Array.isArray(detail) && detail.message) {
+            return detail.message;
+        }
         if (Array.isArray(detail) && detail.length) {
             return detail
                 .map(d => {

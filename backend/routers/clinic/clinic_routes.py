@@ -212,9 +212,10 @@ def _assert_not_holiday(db: Session, when: datetime) -> None:
         )
 
 
-def _assert_slot_free(db: Session, start: datetime, duration_minutes: int,
-                      location: str | None, professional_id, exclude_id=None) -> None:
-    """Corta el alta/reprogramacion si el horario ya esta ocupado.
+def _motivo_de_conflicto(db: Session, start: datetime, duration_minutes: int,
+                        location: str | None, professional_id,
+                        exclude_id=None) -> str | None:
+    """Por que ese horario esta ocupado, o None si esta libre.
 
     Misma regla que usa el bot para ofrecer horarios, para que el panel y el bot
     no se contradigan: la cantidad de turnos simultaneos permitidos sale de
@@ -224,12 +225,50 @@ def _assert_slot_free(db: Session, start: datetime, duration_minutes: int,
         get_day_appointments, get_chairs_per_location, slot_conflict,
     )
     del_dia = get_day_appointments(db, start.date(), location)
-    motivo = slot_conflict(
+    return slot_conflict(
         del_dia, start, duration_minutes or 30, get_chairs_per_location(db),
         [professional_id] if professional_id else None, exclude_id,
     )
+
+
+def _assert_slot_free(db: Session, start: datetime, duration_minutes: int,
+                      location: str | None, professional_id, exclude_id=None) -> None:
+    """Corta el alta/reprogramacion si el horario ya esta ocupado."""
+    motivo = _motivo_de_conflicto(db, start, duration_minutes, location,
+                                  professional_id, exclude_id)
     if motivo:
-        raise HTTPException(409, f"{start.strftime('%d/%m/%Y %H:%M')}: {motivo}")
+        raise _ocupado(start, motivo)
+
+
+def _ocupado(start: datetime, motivo: str) -> HTTPException:
+    """El 409 de horario ocupado, en un formato que el panel sabe leer.
+
+    `puede_sobreturno` es lo que le permite al panel ofrecer "cargalo igual como
+    sobreturno" en vez de dejar a recepcion sin salida. Se manda como dato y no
+    dentro del texto para no depender de como este redactado el mensaje.
+    """
+    return HTTPException(409, {
+        "message": f"{start.strftime('%d/%m/%Y %H:%M')}: {motivo}",
+        "puede_sobreturno": True,
+    })
+
+
+def _guardar_turno(db: Session, appt: Appointment) -> Appointment:
+    """Guarda el turno traduciendo el rechazo de la base a un 409 legible.
+
+    La restriccion EXCLUDE es la ultima barrera contra la doble reserva, y salta
+    cuando dos altas simultaneas pasan las dos la validacion previa. Sin esto el
+    usuario veia un 500 y un turno que no se creo sin explicacion.
+    """
+    from sqlalchemy.exc import IntegrityError
+    db.add(appt)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise _ocupado(appt.start_time, "ese horario se ocupó recién, mientras cargabas este turno")
+    db.refresh(appt)
+    return appt
 
 
 @router.post("/appointments", response_model=AppointmentRead, status_code=201)
@@ -241,17 +280,22 @@ def create_appointment(data: AppointmentCreate, db: Session = Depends(get_db)):
         raise HTTPException(404, "Profesional no encontrado")
 
     _assert_not_holiday(db, data.start_time)
-    if not data.force:
-        _assert_slot_free(db, data.start_time, data.duration_minutes,
-                          data.location, data.professional_id)
+
+    # El horario ocupado se rechaza, salvo que quien carga el turno insista:
+    # ahi es un sobreturno deliberado y queda marcado como tal. Marcarlo importa
+    # tanto como permitirlo — es lo que despues distingue "el consultorio decidio
+    # doblar ese horario" de "se colo una doble reserva".
+    conflicto = _motivo_de_conflicto(db, data.start_time, data.duration_minutes,
+                                     data.location, data.professional_id)
+    if conflicto and not data.force:
+        raise _ocupado(data.start_time, conflicto)
 
     campos = data.model_dump()
     campos.pop("force", None)  # no es una columna del modelo, solo una bandera del request
-    appt = Appointment(**campos)
-    db.add(appt)
-    db.commit()
-    db.refresh(appt)
-    return appt
+    # Forzar un horario que estaba libre no crea ningun sobreturno: la marca
+    # sale de que HAYA habido un conflicto, no de que se haya mandado force.
+    campos["is_overbooking"] = bool(conflicto)
+    return _guardar_turno(db, Appointment(**campos))
 
 
 @router.put("/appointments/{appt_id}", response_model=AppointmentRead)
@@ -269,19 +313,28 @@ async def update_appointment(appt_id: UUID, data: AppointmentUpdate, db: Session
     campos.pop("force", None)  # no es una columna del modelo, solo una bandera del request
     if campos.get("start_time") and not was_cancelled:
         _assert_not_holiday(db, campos["start_time"])
-        if not data.force:
-            _assert_slot_free(
-                db,
-                campos["start_time"],
-                campos.get("duration_minutes", a.duration_minutes),
-                campos.get("location", a.location),
-                campos.get("professional_id", a.professional_id),
-                exclude_id=a.id,   # el propio turno no se cuenta como conflicto
-            )
+        conflicto = _motivo_de_conflicto(
+            db,
+            campos["start_time"],
+            campos.get("duration_minutes", a.duration_minutes),
+            campos.get("location", a.location),
+            campos.get("professional_id", a.professional_id),
+            exclude_id=a.id,   # el propio turno no se cuenta como conflicto
+        )
+        if conflicto and not data.force:
+            raise _ocupado(campos["start_time"], conflicto)
+        # Se recalcula en cada movida: un sobreturno que se corre a un horario
+        # libre deja de ser un sobreturno, y al reves. Si no, la marca quedaba
+        # pegada al turno para siempre.
+        campos["is_overbooking"] = bool(conflicto)
 
     for key, val in campos.items():
         setattr(a, key, val)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(a)
 
     if was_cancelled and a.patient and a.patient.phone:

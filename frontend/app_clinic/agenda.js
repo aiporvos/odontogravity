@@ -235,7 +235,11 @@ Router.register('agenda', async (container) => {
                     // El aviso va SOLO en el turno que se agrego encima (el creado
                     // despues); el original queda con su apariencia normal, sin
                     // marca, para que quede claro cual es el "extra".
-                    const esSobreturno = sobreturnoIds.has(a.id);
+                    // La marca la trae el turno: se decidio al cargarlo. El
+                    // calculo por created_at queda de respaldo para los turnos
+                    // anteriores a que existiera el campo — esa deduccion se
+                    // mudaba sola si el original se cancelaba.
+                    const esSobreturno = a.is_overbooking === true || sobreturnoIds.has(a.id);
                     const pri = a.treatment_priority || 'Baja';
                     const priorityClass = pri === 'Alta' ? 'badge-cancelled' : (pri === 'Media' ? 'badge-pending' : 'badge-confirmed');
                     
@@ -370,6 +374,11 @@ Router.register('agenda', async (container) => {
                     }
 
                     // Position events
+                    //
+                    // Los turnos van posicionados en absoluto y ocupaban el
+                    // ancho entero de la columna, asi que dos a la misma hora se
+                    // tapaban: se veia uno solo. Justo el caso del sobreturno.
+                    const ubicacion = AgendaPage._repartirEnColumnas(dayAppts);
                     let eventsHtml = '';
                     dayAppts.forEach(a => {
                         const dt = new Date(a.start_time);
@@ -378,9 +387,14 @@ Router.register('agenda', async (container) => {
                         const top = mins * SLOT_H / 30;
                         const dur = a.duration_minutes || 30;
                         const height = Math.max(dur * SLOT_H / 30, SLOT_H);
-                        const esSobreturno = sobreturnoIds.has(a.id);
+                        const esSobreturno = a.is_overbooking === true || sobreturnoIds.has(a.id);
                         const pri = a.treatment_priority || '';
-                        eventsHtml += `<div class="wk-event status-${a.status} ${esSobreturno ? 'wk-conflict' : ''}" style="top:${top}px;height:${height}px" onclick="AgendaPage.showAppointment('${a.id}')">
+                        const { columna, columnas } = ubicacion.get(a.id) || { columna: 0, columnas: 1 };
+                        const ancho = 100 / columnas;
+                        // `right:auto` porque la regla de .wk-event fija right:2px
+                        // para ocupar todo el ancho.
+                        const lado = `left:calc(${columna * ancho}% + 2px);width:calc(${ancho}% - 4px);right:auto;`;
+                        eventsHtml += `<div class="wk-event status-${a.status} ${esSobreturno ? 'wk-conflict' : ''}" style="top:${top}px;height:${height}px;${lado}" onclick="AgendaPage.showAppointment('${a.id}')">
                             <strong>${UI.formatTime(a.start_time)}</strong> ${a.patient ? a.patient.last_name : ''}
                             ${esSobreturno ? '<span class="wk-conflict-icon" title="Sobreturno">🔶</span>' : ''}
                             ${pri ? `<span class="wk-pri wk-pri-${pri.toLowerCase()}">${pri}</span>` : ''}
@@ -520,6 +534,49 @@ Router.register('agenda', async (container) => {
 
 const AgendaPage = {
     _pendingAppts: [],
+
+    // Reparte los turnos de un dia en columnas para que los que se pisan queden
+    // lado a lado en vez de uno encima del otro. Devuelve id -> {columna, columnas}.
+    //
+    // Se arman grupos de turnos encadenados por solapamiento y dentro de cada
+    // grupo cada turno toma la primera columna libre. El ancho se divide entre
+    // las columnas que ese grupo llego a necesitar, no entre todas las del dia:
+    // un par de sobreturnos a las 9 no tiene por que angostar la tarde entera.
+    _repartirEnColumnas(turnos) {
+        const ubicacion = new Map();
+        const enOrden = [...turnos].sort(
+            (a, b) => new Date(a.start_time) - new Date(b.start_time));
+
+        const fin = (t) => new Date(t.start_time).getTime() + (t.duration_minutes || 30) * 60000;
+        const inicio = (t) => new Date(t.start_time).getTime();
+
+        let grupo = [];          // turnos del grupo actual, con su columna asignada
+        let finDelGrupo = -Infinity;
+
+        const cerrarGrupo = () => {
+            if (!grupo.length) return;
+            const columnas = Math.max(...grupo.map(g => g.columna)) + 1;
+            grupo.forEach(g => ubicacion.set(g.turno.id, { columna: g.columna, columnas }));
+            grupo = [];
+            finDelGrupo = -Infinity;
+        };
+
+        enOrden.forEach(t => {
+            // Arranca despues de que termino todo el grupo: es un grupo nuevo.
+            if (inicio(t) >= finDelGrupo) cerrarGrupo();
+
+            const ocupadas = new Set(
+                grupo.filter(g => fin(g.turno) > inicio(t)).map(g => g.columna));
+            let columna = 0;
+            while (ocupadas.has(columna)) columna++;
+
+            grupo.push({ turno: t, columna });
+            finDelGrupo = Math.max(finDelGrupo, fin(t));
+        });
+        cerrarGrupo();
+
+        return ubicacion;
+    },
 
     async showAppointment(id) {
         try {
@@ -1111,34 +1168,67 @@ const AgendaPage = {
         }
 
         let ok = 0;
+        let sobreturnos = 0;
         const errores = [];
         for (const appt of allAppts) {
-            try {
-                await API.createAppointment(appt);
-                ok++;
-            } catch (err) {
-                // Sin esto el motivo del rechazo se perdia y solo se veia el conteo.
-                errores.push(err.message);
-            }
+            const r = await this._crearTurno(appt);
+            if (r === 'ok') ok++;
+            else if (r === 'sobreturno') { ok++; sobreturnos++; }
+            else if (r !== 'cancelado') errores.push(r);
         }
         this._pendingAppts = [];
         UI.closeModal();
         if (errores.length) {
             UI.toast(`${ok} turno(s) creado(s). ${errores.length} con error: ${errores[0]}`, ok > 0 ? 'info' : 'error');
-        } else {
-            UI.toast(`${ok} turno(s) creado(s)`, 'success');
+        } else if (ok) {
+            UI.toast(`${ok} turno(s) creado(s)` +
+                     (sobreturnos ? ` (${sobreturnos} como sobreturno)` : ''), 'success');
         }
         if (AgendaPage.loadAgenda) AgendaPage.loadAgenda();
     },
 
+    // Crea un turno. Si el horario esta ocupado no se corta ahi: se pregunta.
+    // El consultorio dobla horarios a proposito —encajar un paciente encima de
+    // otro es parte de como trabajan—, asi que recepcion tiene que poder
+    // hacerlo. Lo que no puede es pasar inadvertido: el turno queda marcado
+    // como sobreturno.
+    //
+    // Devuelve 'ok', 'sobreturno', 'cancelado' o el texto del error.
+    async _crearTurno(appt) {
+        try {
+            await API.createAppointment(appt);
+            return 'ok';
+        } catch (err) {
+            if (!err.puedeSobreturno) return err.message;
+
+            const cuando = String(appt.start_time).replace('T', ' ');
+            const quiere = await UI.confirm(
+                'Horario ocupado',
+                `${cuando} ya está tomado.<br><br>¿Lo cargás igual como ` +
+                `<strong>sobreturno</strong>? Va a quedar marcado en la agenda.`,
+            );
+            if (!quiere) return 'cancelado';
+
+            try {
+                await API.createAppointment({ ...appt, force: true });
+                return 'sobreturno';
+            } catch (err2) {
+                return err2.message;
+            }
+        }
+    },
+
     async saveNewAppointment() {
         const data = UI.getFormData('form-new-appointment');
-        try {
-            await API.createAppointment(data);
+        const r = await this._crearTurno(data);
+        if (r === 'cancelado') return;
+        if (r === 'ok' || r === 'sobreturno') {
             UI.closeModal();
-            UI.toast('Turno creado', 'success');
+            UI.toast(r === 'sobreturno' ? 'Sobreturno creado' : 'Turno creado', 'success');
             if (AgendaPage.loadAgenda) AgendaPage.loadAgenda();
-        } catch (err) { UI.toast(err.message, 'error'); }
+        } else {
+            UI.toast(r, 'error');
+        }
     }
 };
 
