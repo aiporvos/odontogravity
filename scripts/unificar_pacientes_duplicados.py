@@ -82,7 +82,25 @@ def main():
             return
 
         total_movidos = 0
+        salteados = []
         for nombre, fichas in duplicados.items():
+            # Dos fichas del mismo nombre con DNI o telefono DISTINTOS no son
+            # un duplicado: son dos personas que se llaman igual. Fusionarlas
+            # mezclaria dos historias clinicas, que es peor que dejar el
+            # duplicado. Se saltea y se avisa para revisarlo a mano.
+            def _valores(campo):
+                return {
+                    " ".join((getattr(f, campo, None) or "").split())
+                    for f in fichas
+                    if (getattr(f, campo, None) or "").strip()
+                }
+
+            dnis = _valores("dni")
+            telefonos = {"".join(filter(str.isdigit, t))[-8:] for t in _valores("phone")}
+            if len(dnis) > 1 or len(telefonos) > 1:
+                salteados.append((nombre, sorted(dnis), sorted(telefonos)))
+                continue
+
             def turnos_de(p):
                 return db.query(Appointment).filter(Appointment.patient_id == p.id).count()
 
@@ -121,7 +139,24 @@ def main():
                         if valor:
                             setattr(sobrevive, campo, valor)
 
+                # El DNI va aparte porque la columna es UNIQUE y el indice
+                # tambien cuenta las fichas dadas de baja: hay que SACARLO de la
+                # que se retira antes de ponerlo en la que queda, o chocan entre
+                # si. Sin esto el DNI se perdia — la sobreviviente se elige por
+                # cantidad de turnos, no por tener el documento cargado.
+                if not (sobrevive.dni or "").strip() and (p.dni or "").strip():
+                    dni = p.dni.strip()
+                    p.dni = None
+                    db.flush()
+                    sobrevive.dni = dni
+
                 p.is_deleted = True
+
+        if salteados:
+            print("\n⚠️  Se saltearon estos: mismo nombre pero DNI o teléfono distintos,")
+            print("   así que son dos personas, no un duplicado. Revisalos a mano:")
+            for nombre, dnis, tels in salteados:
+                print(f"   - {nombre.title()}: DNI {dnis or '—'}, tel {tels or '—'}")
 
         if args.dry_run:
             print(f"\n--dry-run: no se escribió nada. Se moverían {total_movidos} registros.")
