@@ -71,7 +71,11 @@ Router.register('agenda', async (container) => {
         </div>
     `;
 
-    async function loadAgenda() {
+    // `silencioso` es el refresco de fondo cada 30 segundos: pide los datos,
+    // y solo toca el DOM si algo cambio de verdad. Sin eso la agenda se
+    // repintaba entera sola cada medio minuto —parpadeo, scroll al tope y el
+    // hover cortado justo cuando alguien iba a hacer clic en un turno.
+    async function loadAgenda({ silencioso = false } = {}) {
         const date = state.currentDate;
         const profId = document.getElementById('agenda-prof').value;
         const location = document.getElementById('agenda-location').value;
@@ -95,7 +99,46 @@ Router.register('agenda', async (container) => {
         headerInfo.textContent = headerText;
 
         const content = document.getElementById('agenda-content');
-        content.innerHTML = '<div class="loading-page"><div class="spinner"></div></div>';
+
+        // Dos cargas encimadas (el refresco de fondo y un clic del usuario)
+        // llegaban en cualquier orden y la mas vieja podia pisar a la nueva.
+        const token = (state.tokenDeCarga || 0) + 1;
+        state.tokenDeCarga = token;
+
+        // El spinner no sale de entrada: se agenda para dentro de 250 ms y
+        // casi siempre se cancela antes, porque la respuesta llega primero.
+        // Asi cambiar de dia deja de tener un parpadeo blanco en el medio, y
+        // el spinner queda para cuando la espera se nota de verdad.
+        let spinnerTimer = null;
+        if (!silencioso) {
+            spinnerTimer = setTimeout(() => {
+                if (state.tokenDeCarga === token) {
+                    content.innerHTML = '<div class="loading-page"><div class="spinner"></div></div>';
+                }
+            }, 250);
+        }
+
+        const pintar = (html) => {
+            clearTimeout(spinnerTimer);
+            // Llego tarde: ya hay una carga mas nueva en curso.
+            if (state.tokenDeCarga !== token) return;
+            // En el refresco de fondo, si el resultado es identico a lo que ya
+            // esta en pantalla no se toca nada. Es el caso normal: la mayoria
+            // de los refrescos no traen ninguna novedad.
+            if (silencioso && html === state.ultimoHtml) return;
+            state.ultimoHtml = html;
+            // Reemplazar el innerHTML manda el scroll al tope. En el refresco
+            // de fondo eso es una pantalla que se mueve sola mientras alguien
+            // esta leyendo, asi que se restituye.
+            //
+            // Quien scrollea es #page-container, no la ventana: el body tiene
+            // overflow:hidden, asi que window.scrollY vale 0 siempre y
+            // guardarlo no restituia nada.
+            const scroller = document.getElementById('page-container');
+            const scroll = scroller ? scroller.scrollTop : 0;
+            content.innerHTML = html;
+            if (silencioso && scroller) scroller.scrollTop = scroll;
+        };
 
         try {
             let dateFrom, dateTo;
@@ -168,8 +211,7 @@ Router.register('agenda', async (container) => {
 
             if (state.view === 'day') {
                 if (appointments.length === 0) {
-                    content.innerHTML = `<div class="empty-state"><div class="empty-state-text">No hay turnos hoy</div></div>`;
-                    return;
+                    return pintar(`<div class="empty-state"><div class="empty-state-text">No hay turnos hoy</div></div>`);
                 }
 
                 // Show conflict banner if there are conflicts
@@ -268,7 +310,7 @@ Router.register('agenda', async (container) => {
                         `;
                     }).join('');
 
-                    content.innerHTML = bannerHtml + groupsHtml;
+                    pintar(bannerHtml + groupsHtml);
 
                 } else {
                     // Chronological view
@@ -288,7 +330,7 @@ Router.register('agenda', async (container) => {
                         </div>
                     `).join('');
 
-                    content.innerHTML = bannerHtml + slotsHtml;
+                    pintar(bannerHtml + slotsHtml);
                 }
             } else if (state.view === 'week') {
                 const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
@@ -354,7 +396,7 @@ Router.register('agenda', async (container) => {
                     bannerHtml = `<div style="background:var(--danger-light);border:1px solid var(--danger);border-radius:var(--radius);padding:.6rem 1rem;margin-bottom:.75rem;font-size:.85rem;color:var(--danger);font-weight:600;">⚠️ Hay sobreturnos esta semana</div>`;
                 }
 
-                content.innerHTML = bannerHtml + `<div class="wk-calendar"><div class="wk-header">${hdrHtml}</div><div class="wk-body">${bodyHtml}</div></div>`;
+                pintar(bannerHtml + `<div class="wk-calendar"><div class="wk-header">${hdrHtml}</div><div class="wk-body">${bodyHtml}</div></div>`);
             } else {
                 const startDate = new Date(dateFrom.split('T')[0] + 'T12:00:00');
                 const endDate = new Date(dateTo.split('T')[0] + 'T12:00:00');
@@ -385,10 +427,20 @@ Router.register('agenda', async (container) => {
                     `;
                 }
                 html += '</div>';
-                content.innerHTML = html;
+                pintar(html);
             }
         } catch (err) {
-            content.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
+            clearTimeout(spinnerTimer);
+            // Un corte de red en el refresco de fondo no puede borrar la
+            // agenda que alguien esta mirando: se deja lo que hay y se
+            // reintenta en el proximo ciclo.
+            if (silencioso) {
+                console.warn('Refresco de agenda fallido, se reintenta:', err.message);
+                return;
+            }
+            if (state.tokenDeCarga === token) {
+                content.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
+            }
         }
     }
 
@@ -440,14 +492,28 @@ Router.register('agenda', async (container) => {
     // Exponer la función para recargar desde fuera
     AgendaPage.loadAgenda = loadAgenda;
 
-    // Auto-refresh every 30 seconds
+    // Refresco de fondo cada 30 segundos, en silencio.
+    const conviene_refrescar = () =>
+        !!document.getElementById('agenda-content')
+        // Pestania en segundo plano: no tiene sentido pedir nada.
+        && !document.hidden
+        // Con un modal abierto la agenda de atras no se toca: alguien esta
+        // cargando un turno y no necesita que se le mueva la pantalla.
+        && !(typeof UI !== 'undefined' && UI.modalAbierto());
+
     let agendaInterval = setInterval(() => {
-        if (document.getElementById('agenda-content')) {
-            loadAgenda();
-        } else {
-            clearInterval(agendaInterval);
-        }
+        if (!document.getElementById('agenda-content')) return clearInterval(agendaInterval);
+        if (conviene_refrescar()) loadAgenda({ silencioso: true });
     }, 30000);
+
+    // Al volver a la pestania, ponerse al dia en el acto: si no, se miran
+    // datos de hasta 30 segundos atras sin saberlo.
+    if (!AgendaPage._miraLaVisibilidad) {
+        AgendaPage._miraLaVisibilidad = true;
+        document.addEventListener('visibilitychange', () => {
+            if (conviene_refrescar()) AgendaPage.loadAgenda?.({ silencioso: true });
+        });
+    }
 
     loadAgenda();
 });
