@@ -163,7 +163,26 @@ const PatientsPage = {
             UI.closeModal();
             PatientsPage.loadList();
         } catch (err) {
-            UI.toast(err.message, 'error');
+            if (!err.puedeDuplicar) return UI.toast(err.message, 'error');
+
+            // Ya hay una ficha con ese nombre: se pregunta en vez de crear el
+            // duplicado en silencio.
+            const decision = await UI.fichaRepetida(
+                err, `${data.last_name}, ${data.first_name}`);
+            if (decision === null) return;
+
+            if (decision !== 'crear') {
+                // Abrir la que ya existe, que es lo que se queria cargar.
+                PatientsPage.showForm(decision);
+                return;
+            }
+
+            try {
+                await API.createPatient({ ...data, force: true });
+                UI.closeModal();
+                UI.toast('Paciente creado', 'success');
+                PatientsPage.loadList();
+            } catch (err2) { UI.toast(err2.message, 'error'); }
         }
     },
 

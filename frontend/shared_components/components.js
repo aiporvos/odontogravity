@@ -30,6 +30,12 @@ const UI = {
         const pendiente = window._confirmResolve;
         window._confirmResolve = null;
         if (pendiente) pendiente(respuestaDelConfirm === true);
+
+        // Lo mismo para elegir(): cerrar sin elegir devuelve null en vez de
+        // dejar esperando para siempre a quien llamo.
+        const eleccion = window._eleccionResolve;
+        window._eleccionResolve = null;
+        if (eleccion) eleccion(null);
     },
 
     modalAbierto() {
@@ -96,6 +102,69 @@ const UI = {
             bot_telegram: '💬 Telegram', phone: '📞 Teléfono',
         };
         return labels[channel] || channel;
+    },
+
+    // Como confirm(), pero con las opciones que haga falta. Nace del aviso de
+    // paciente repetido, donde "sí/no" no alcanza: la respuesta util casi
+    // siempre es una tercera, "usá la ficha que ya existe".
+    //
+    // `opciones` es [{valor, texto, clase}]. Cerrar sin elegir devuelve null.
+    elegir(titulo, cuerpoHtml, opciones) {
+        return new Promise((resolve) => {
+            const footer = opciones.map((o, i) =>
+                `<button class="btn ${o.clase || 'btn-secondary'}" onclick="UI._responderEleccion(${i})">${UI.escape(o.texto)}</button>`
+            ).join('');
+            window._eleccionResolve = (i) => resolve(i === null ? null : opciones[i].valor);
+            this.showModal(titulo, cuerpoHtml, footer);
+        });
+    },
+
+    _responderEleccion(i) {
+        const pendiente = window._eleccionResolve;
+        window._eleccionResolve = null;
+        this.closeModal();
+        if (pendiente) pendiente(i);
+    },
+
+    // El aviso de ficha repetida. Devuelve el id de la ficha a usar, 'crear'
+    // si de verdad es otra persona, o null si se cierra sin decidir.
+    //
+    // Muestra los datos de las fichas que ya estan (DNI, telefono, cuantos
+    // turnos) porque con el nombre solo no se puede decidir si es la misma
+    // persona o un homonimo.
+    async fichaRepetida(err, quien) {
+        const filas = (err.yaExisten || []).map(p => `
+            <div style="padding:.5rem .7rem;border:2px solid var(--border-color);border-radius:var(--radius-sm);margin-bottom:.4rem;">
+                <strong>${UI.escape(p.last_name)}, ${UI.escape(p.first_name)}</strong>
+                <div style="font-size:.82rem;color:var(--slate-500);margin-top:.15rem;">
+                    ${p.dni ? 'DNI ' + UI.escape(p.dni) : 'sin DNI'} ·
+                    ${p.phone ? UI.escape(p.phone) : 'sin teléfono'} ·
+                    ${p.turnos} turno${p.turnos === 1 ? '' : 's'}
+                    ${p.insurance_name ? ' · ' + UI.escape(p.insurance_name) : ''}
+                </div>
+            </div>`).join('');
+
+        const unaSola = (err.yaExisten || []).length === 1;
+        const cuerpo = `
+            <p style="margin:0 0 .6rem;">${UI.escape(err.message)}</p>
+            ${filas}
+            <p style="font-size:.85rem;color:var(--slate-500);margin:.6rem 0 0;">
+                Si es la misma persona, usá la ficha que ya está: una ficha repetida
+                parte la historia clínica en dos. Si de verdad es otro paciente que
+                se llama igual, creala igual.
+            </p>`;
+
+        const opciones = [{ valor: null, texto: 'Cancelar' }];
+        if (unaSola) {
+            opciones.push({
+                valor: err.yaExisten[0].id,
+                texto: 'Usar la ficha que existe',
+                clase: 'btn-primary',
+            });
+        }
+        opciones.push({ valor: 'crear', texto: 'Es otro, crear igual', clase: 'btn-danger' });
+
+        return this.elegir(`¿Es el mismo ${quien || 'paciente'}?`, cuerpo, opciones);
     },
 
     // Un apellido con < o & no puede romper el HTML donde se lo dibuja.

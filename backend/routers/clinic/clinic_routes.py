@@ -86,6 +86,57 @@ def get_patient(patient_id: UUID, db: Session = Depends(get_db)):
     return p
 
 
+def _fichas_con_el_mismo_nombre(db: Session, nombre: str, apellido: str) -> list[Patient]:
+    """Fichas activas que se llaman igual. Vacio si no hay ninguna.
+
+    Usa la misma normalizacion que el bot (_nombre_normalizado): ignora
+    mayusculas, acentos y el orden, asi que "Juan Rodriguez" y "RODRIGUEZ, juan"
+    son la misma persona. Lo del orden importa: la agenda de papel viene escrita
+    de las dos formas.
+    """
+    from backend.services.appointment_service import _nombre_normalizado
+
+    buscado = _nombre_normalizado(nombre, apellido)
+    if not buscado:
+        return []
+    return [
+        p for p in db.query(Patient).filter(Patient.is_deleted == False).all()  # noqa: E712
+        if _nombre_normalizado(p.first_name, p.last_name) == buscado
+    ]
+
+
+def _ya_existe(fichas: list[Patient], db: Session) -> HTTPException:
+    """El 409 de "ya hay alguien con ese nombre", con las fichas que hay.
+
+    Van los datos para que quien esta cargando pueda decidir: si es la misma
+    persona usa la ficha que existe, y si de verdad es otra, crea igual. Una
+    ficha duplicada parte la historia clinica en dos y despues hay que
+    unificarla a mano (scripts/unificar_pacientes_duplicados.py).
+    """
+    detalle = []
+    for p in fichas:
+        detalle.append({
+            "id": str(p.id),
+            "first_name": p.first_name,
+            "last_name": p.last_name,
+            "dni": p.dni,
+            "phone": p.phone,
+            "insurance_name": p.insurance_name,
+            "turnos": db.query(Appointment).filter(
+                Appointment.patient_id == p.id,
+                Appointment.is_deleted == False,  # noqa: E712
+            ).count(),
+        })
+    quien = f"{fichas[0].last_name}, {fichas[0].first_name}"
+    return HTTPException(409, {
+        "message": (f"Ya existe una ficha de {quien}."
+                    if len(fichas) == 1 else
+                    f"Ya existen {len(fichas)} fichas de {quien}."),
+        "puede_duplicar": True,
+        "ya_existen": detalle,
+    })
+
+
 @router.post("/patients", response_model=PatientRead, status_code=201)
 def create_patient(data: PatientCreate, db: Session = Depends(get_db)):
     # El chequeo de duplicado corre SOLO si vino un DNI. Con `data.dni` en None
@@ -98,7 +149,17 @@ def create_patient(data: PatientCreate, db: Session = Depends(get_db)):
     ).first():
         raise HTTPException(400, "DNI ya registrado")
 
+    # Alguien con ese nombre ya cargado: se corta y se pregunta, en vez de
+    # crear el duplicado en silencio. Es la otra mitad del problema que
+    # scripts/unificar_pacientes_duplicados.py limpia despues; ahi hay 61
+    # nombres repetidos que salieron de cargar sin mirar.
+    if not data.force:
+        repetidas = _fichas_con_el_mismo_nombre(db, data.first_name, data.last_name)
+        if repetidas:
+            raise _ya_existe(repetidas, db)
+
     campos = data.model_dump()
+    campos.pop("force", None)  # es una bandera del request, no una columna
     # '' no es un dato: se guarda como NULL. Con el DNI ademas es obligatorio,
     # porque la columna es UNIQUE y varios '' chocarian entre si (varios NULL no).
     campos["dni"] = dni

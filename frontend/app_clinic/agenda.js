@@ -1144,7 +1144,33 @@ const AgendaPage = {
             this._elegirPaciente(p);
             document.getElementById('appt-new-patient').style.display = 'none';
             UI.toast('Paciente creado y seleccionado', 'success');
-        } catch (e) { UI.toast(e.message || 'Error al crear paciente', 'error'); }
+            return;
+        } catch (e) {
+            if (!e.puedeDuplicar) return UI.toast(e.message || 'Error al crear paciente', 'error');
+
+            // Ya hay alguien con ese nombre. Aca la respuesta util casi siempre
+            // es usar la ficha que existe, que ademas es lo que se necesita
+            // para seguir cargando el turno.
+            const decision = await UI.fichaRepetida(e, `${last}, ${first}`);
+            if (decision === null) return;
+
+            if (decision !== 'crear') {
+                const existente = e.yaExisten.find(x => x.id === decision);
+                this._modalPatients.push(existente);
+                this._elegirPaciente(existente);
+                document.getElementById('appt-new-patient').style.display = 'none';
+                UI.toast('Se usó la ficha que ya estaba', 'success');
+                return;
+            }
+
+            try {
+                const p = await API.createPatient({ ...data, force: true });
+                this._modalPatients.push(p);
+                this._elegirPaciente(p);
+                document.getElementById('appt-new-patient').style.display = 'none';
+                UI.toast('Paciente creado y seleccionado', 'success');
+            } catch (e2) { UI.toast(e2.message || 'Error al crear paciente', 'error'); }
+        }
     },
 
     async _saveAll() {

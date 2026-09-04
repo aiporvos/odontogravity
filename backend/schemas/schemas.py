@@ -65,6 +65,10 @@ class PatientCreate(BaseModel):
     insurance_name: Optional[str] = None
     insurance_number: Optional[str] = None
     medical_notes: Optional[str] = None
+    # Crear la ficha aunque ya haya otra con el mismo nombre. Por default eso se
+    # rechaza con 409 para que quien carga decida: son dos personas distintas
+    # que se llaman igual, o es la misma y hay que usar la ficha que ya existe.
+    force: bool = False
 
 
 class PatientRead(BaseModel):

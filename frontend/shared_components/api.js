@@ -64,6 +64,10 @@ const API = {
             const detail = errData && errData.detail;
             if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
                 err.puedeSobreturno = detail.puede_sobreturno === true;
+                // Alta de paciente con un nombre que ya existe: vienen las
+                // fichas cargadas para que quien decide las pueda ver.
+                err.puedeDuplicar = detail.puede_duplicar === true;
+                err.yaExisten = detail.ya_existen || [];
             }
             throw err;
         }
