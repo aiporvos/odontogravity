@@ -13,6 +13,12 @@ const Router = {
         if (this.currentPage === page) return;
         this.currentPage = page;
 
+        // El modal vive fuera del contenedor de la pagina, asi que al cambiar
+        // de pantalla se quedaba flotando encima de la nueva: un "Nuevo Turno"
+        // abierto seguia ahi sobre la lista de Pacientes, con sus datos a medio
+        // cargar y sin relacion con lo que se veia atras.
+        if (typeof UI !== 'undefined' && UI.modalAbierto()) UI.closeModal();
+
         // Update nav
         document.querySelectorAll('.nav-item').forEach(el => {
             el.classList.toggle('active', el.dataset.page === page);

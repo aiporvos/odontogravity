@@ -16,10 +16,25 @@ const UI = {
         this.showModal(title, html, '');
     },
 
-    closeModal() {
+    // `respuestaDelConfirm` solo importa cuando el modal abierto es un
+    // UI.confirm(): es lo que se le devuelve a quien esta esperando la
+    // respuesta. Cerrar sin elegir vale "no".
+    closeModal(respuestaDelConfirm = false) {
         document.getElementById('modal-overlay').classList.add('hidden');
         document.getElementById('modal-body').innerHTML = '';
         document.getElementById('modal-footer').innerHTML = '';
+
+        // Un confirm() cerrado con Escape, con la ×, clickeando el fondo o
+        // navegando a otra pantalla dejaba su promesa colgada para siempre, y
+        // el codigo que la esperaba no seguia nunca. Ahora siempre se resuelve.
+        const pendiente = window._confirmResolve;
+        window._confirmResolve = null;
+        if (pendiente) pendiente(respuestaDelConfirm === true);
+    },
+
+    modalAbierto() {
+        const overlay = document.getElementById('modal-overlay');
+        return !!overlay && !overlay.classList.contains('hidden');
     },
 
     // ── Toast ──────────────────────────────────────────
@@ -41,8 +56,8 @@ const UI = {
                 ? `<p style="color:var(--slate-600);font-size:.95rem;">${message}</p>`
                 : '';
             const footer = `
-                <button class="btn btn-secondary" onclick="UI.closeModal(); window._confirmResolve(false)">Cancelar</button>
-                <button class="btn btn-danger" onclick="UI.closeModal(); window._confirmResolve(true)">Confirmar</button>
+                <button class="btn btn-secondary" onclick="UI.closeModal(false)">Cancelar</button>
+                <button class="btn btn-danger" onclick="UI.closeModal(true)">Confirmar</button>
             `;
             window._confirmResolve = resolve;
             this.showModal(title, body, footer);
@@ -126,4 +141,13 @@ const UI = {
 document.getElementById('modal-close')?.addEventListener('click', () => UI.closeModal());
 document.getElementById('modal-overlay')?.addEventListener('click', (e) => {
     if (e.target.id === 'modal-overlay') UI.closeModal();
+});
+
+// Escape cierra el modal. Es lo que espera cualquiera que haya usado una
+// ventana modal antes, y hasta ahora la unica salida era apuntarle a la × o al
+// borde. Un control de adentro que ya use Escape para lo suyo (el desplegable
+// del buscador de pacientes, por ejemplo) frena el evento antes de que llegue
+// hasta aca, asi que el primer Escape cierra la lista y el segundo el modal.
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && UI.modalAbierto()) UI.closeModal();
 });

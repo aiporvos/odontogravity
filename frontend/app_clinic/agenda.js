@@ -941,7 +941,13 @@ const AgendaPage = {
         const lista = this._resultados || [];
         const caja = document.getElementById('appt-patient-results');
         const abierta = caja && !caja.hidden && lista.length > 0;
-        if (e.key === 'Escape') return this._cerrarResultados(0);
+        if (e.key === 'Escape') {
+            // Con la lista abierta, Escape la cierra y no llega al modal: el
+            // segundo Escape ya cierra el modal. Sin esto, querer descartar el
+            // desplegable te cerraba el turno entero.
+            if (abierta) e.stopPropagation();
+            return this._cerrarResultados(0);
+        }
         if (!abierta) return;
 
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
