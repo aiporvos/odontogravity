@@ -78,6 +78,24 @@ def list_patients(
     return query.offset(max(0, skip)).limit(limit).all()
 
 
+@router.get("/patients/count")
+def contar_patients(q: Optional[str] = None, db: Session = Depends(get_db)):
+    """Cuantos pacientes hay. El dashboard mostraba el largo de la primera
+    pagina —50— como si fuera el total, con 475 fichas cargadas.
+
+    Va declarada ANTES que /patients/{patient_id}: FastAPI resuelve por orden y
+    "count" entraria como patient_id, que espera un UUID.
+    """
+    query = db.query(Patient).filter(Patient.is_deleted == False)  # noqa: E712
+    if q:
+        query = query.filter(or_(
+            Patient.first_name.ilike(f"%{q}%"),
+            Patient.last_name.ilike(f"%{q}%"),
+            Patient.dni.ilike(f"%{q}%"),
+        ))
+    return {"total": query.count()}
+
+
 @router.get("/patients/{patient_id}", response_model=PatientRead)
 def get_patient(patient_id: UUID, db: Session = Depends(get_db)):
     p = db.query(Patient).filter(Patient.id == patient_id, Patient.is_deleted == False).first()

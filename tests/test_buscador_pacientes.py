@@ -14,7 +14,7 @@ import pytest
 
 from backend.models.patient import Patient
 from backend.routers.clinic.clinic_routes import (
-    MAX_PACIENTES_POR_PAGINA, list_patients,
+    MAX_PACIENTES_POR_PAGINA, contar_patients, list_patients,
 )
 
 
@@ -100,3 +100,24 @@ def test_los_borrados_no_aparecen(db, paciente):
     paciente.is_deleted = True
     db.commit()
     assert list_patients(q="luna", db=db) == []
+
+
+# ── El total no es el largo de la primera pagina ────────────────────────────
+# El dashboard mostraba len(getPatients()) como "Pacientes Registrados": 50 fijo,
+# con 475 fichas cargadas. El total lo tiene que contar el servidor.
+
+def test_cuenta_todos_no_solo_la_primera_pagina(db):
+    _cargar(db, 137)
+    assert contar_patients(db=db) == {"total": 137}
+    assert len(list_patients(db=db)) == 50
+
+
+def test_la_cuenta_respeta_el_filtro(db, paciente, otro_paciente):
+    assert contar_patients(q="luna", db=db)["total"] == 1
+    assert contar_patients(q="noexiste", db=db)["total"] == 0
+
+
+def test_los_borrados_no_se_cuentan(db, paciente):
+    paciente.is_deleted = True
+    db.commit()
+    assert contar_patients(db=db) == {"total": 0}

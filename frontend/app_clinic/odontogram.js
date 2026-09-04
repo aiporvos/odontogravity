@@ -524,53 +524,38 @@ const OdontogramPage = {
     },
 
     renderEntriesTable(entries) {
-        const container = document.getElementById('odo-entries-table');
-        if (entries.length === 0) {
-            container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Sin registros históricos</div></div>`;
-            return;
-        }
-
         const faceLabels = { mesial: 'M', distal: 'D', vestibular: 'V', palatina: 'P/L', oclusal: 'O', full: 'Diente' };
-        
-        container.innerHTML = `
-            <table>
-                <thead>
-                    <tr>
-                        <th>Fecha</th>
-                        <th>Diente</th>
-                        <th>Cara</th>
-                        <th>Prestación</th>
-                        <th>Prioridad</th>
-                        <th>Código</th>
-                        <th>Mat. Prof.</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${entries.map(e => `
-                        <tr class="${e.category === 'preexisting' ? 'row-preexisting' : 'row-treatment'}" 
-                            ondblclick="OdontogramPage.deleteEntry('${e.id}')" 
-                            title="Doble clic para eliminar"
-                            style="cursor:pointer">
-                            <td>${UI.formatDate(e.created_at)}</td>
-                            <td><strong>${e.tooth_number}</strong></td>
-                            <td>${faceLabels[e.face] || e.face}</td>
-                            <td>${SYMBOLS.find(s => s.id === e.symbol)?.label || e.symbol}</td>
-                            <td style="cursor:pointer;" onclick="OdontogramPage.updatePriority('${e.id}', '${e.priority || 'Baja'}')" title="Clic para cambiar prioridad">
-                                <span class="badge ${e.priority === 'Alta' ? 'badge-cancelled' : (e.priority === 'Media' ? 'badge-pending' : 'badge-confirmed')}">
-                                    ${e.priority || 'Baja'}
-                                </span>
-                            </td>
-                            <td>${e.procedure_code || '-'}</td>
-                            <td>${e.description || '-'}</td>
-                            <td style="text-align:right">
-                                <button class="btn btn-sm btn-ghost" onclick="OdontogramPage.deleteEntry('${e.id}')">✕</button>
-                            </td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
-        `;
+        const pesoPrioridad = { Alta: 3, Media: 2, Baja: 1 };
+
+        UI.tabla('odo-entries-table', {
+            filas: entries,
+            vacio: 'Sin registros históricos',
+            filaAttrs: e => `class="${e.category === 'preexisting' ? 'row-preexisting' : 'row-treatment'}" ` +
+                            `ondblclick="OdontogramPage.deleteEntry('${e.id}')" ` +
+                            `title="Doble clic para eliminar" style="cursor:pointer"`,
+            columnas: [
+                // Se ordena por la fecha real, no por el texto dd/mm/aaaa, que
+                // pondria el 02/01 antes que el 15/12 del año anterior.
+                {titulo: 'Fecha', valor: e => new Date(e.created_at),
+                 html: e => UI.formatDate(e.created_at)},
+                {titulo: 'Diente', valor: e => e.tooth_number,
+                 html: e => `<strong>${e.tooth_number}</strong>`},
+                {titulo: 'Cara', valor: e => faceLabels[e.face] || e.face},
+                {titulo: 'Prestación',
+                 valor: e => SYMBOLS.find(s => s.id === e.symbol)?.label || e.symbol},
+                // Alta > Media > Baja, no alfabetico (que daria Alta, Baja, Media).
+                {titulo: 'Prioridad', valor: e => pesoPrioridad[e.priority] || 1,
+                 tdAttrs: e => `style="cursor:pointer;" onclick="OdontogramPage.updatePriority('${e.id}', '${e.priority || 'Baja'}')" title="Clic para cambiar prioridad"`,
+                 html: e => `<span class="badge ${e.priority === 'Alta' ? 'badge-cancelled' : (e.priority === 'Media' ? 'badge-pending' : 'badge-confirmed')}">${e.priority || 'Baja'}</span>`},
+                {titulo: 'Código', valor: e => e.procedure_code,
+                 html: e => UI.escape(e.procedure_code || '-')},
+                {titulo: 'Mat. Prof.', valor: e => e.description,
+                 html: e => UI.escape(e.description || '-')},
+                {titulo: '', orden: false, valor: () => '',
+                 tdAttrs: () => 'style="text-align:right"',
+                 html: e => `<button class="btn btn-sm btn-ghost" onclick="OdontogramPage.deleteEntry('${e.id}')">✕</button>`},
+            ],
+        });
     },
 
     renderPendingTreatments(entries) {

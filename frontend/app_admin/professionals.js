@@ -70,28 +70,22 @@ const ProfessionalsPage = {
         const container = document.getElementById('profs-table');
         try {
             const profs = await API.getAdminProfessionals();
-            container.innerHTML = `
-                <table>
-                    <thead>
-                        <tr><th>Nombre</th><th>Matrícula</th><th>Especialidades</th><th>Sedes</th><th>Estado</th><th>Acciones</th></tr>
-                    </thead>
-                    <tbody>
-                        ${profs.map(p => `
-                            <tr>
-                                <td><strong>${p.full_name}</strong></td>
-                                <td>${p.license_number}</td>
-                                <td>${p.specialties.join(', ')}</td>
-                                <td>${p.locations.join(', ')}</td>
-                                <td>${p.is_active ? '✅' : '⛔'}</td>
-                                <td>
-                                    <button class="btn btn-sm btn-ghost" onclick="ProfessionalsPage.showForm('${p.id}')">Editar</button>
-                                    <button class="btn btn-sm btn-danger" onclick="ProfessionalsPage.deleteProfessional('${p.id}')">✕</button>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
+            UI.tabla('profs-table', {
+                filas: profs,
+                vacio: 'No hay profesionales cargados',
+                columnas: [
+                    {titulo: 'Nombre', valor: p => p.full_name,
+                     html: p => `<strong>${UI.escape(p.full_name)}</strong>`},
+                    {titulo: 'Matrícula', valor: p => p.license_number},
+                    {titulo: 'Especialidades', valor: p => p.specialties.join(', ')},
+                    {titulo: 'Sedes', valor: p => p.locations.join(', ')},
+                    {titulo: 'Estado', valor: p => (p.is_active ? 'Activo' : 'Inactivo'),
+                     html: p => p.is_active ? '✅' : '⛔'},
+                    {titulo: 'Acciones', orden: false, valor: () => '', html: p => `
+                        <button class="btn btn-sm btn-ghost" onclick="ProfessionalsPage.showForm('${p.id}')">Editar</button>
+                        <button class="btn btn-sm btn-danger" onclick="ProfessionalsPage.deleteProfessional('${p.id}')">✕</button>`},
+                ],
+            });
         } catch (err) {
             container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
         }

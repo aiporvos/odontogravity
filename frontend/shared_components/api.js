@@ -135,6 +135,27 @@ const API = {
         const qs = params.toString();
         return this.get(`/clinic/patients${qs ? `?${qs}` : ''}`);
     },
+    // Todas las fichas, recorriendo el paginado del servidor. La lista de
+    // Pacientes las necesita todas para poder ordenar y paginar de verdad: con
+    // una sola pagina, "ordenar por apellido" ordena 50 de 475 y el resto no
+    // aparece nunca. El tope existe para que un error del servidor no deje al
+    // navegador pidiendo paginas para siempre.
+    async getAllPatients(q = '', tope = 5000) {
+        const porPagina = 200;
+        const todas = [];
+        for (let skip = 0; skip < tope; skip += porPagina) {
+            const params = new URLSearchParams({ skip, limit: porPagina });
+            if (q) params.set('q', q);
+            const pagina = await this.get(`/clinic/patients?${params}`);
+            todas.push(...pagina);
+            if (pagina.length < porPagina) break;
+        }
+        return todas;
+    },
+
+    contarPatients(q = '') {
+        return this.get(`/clinic/patients/count${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+    },
     getPatient(id) { return this.get(`/clinic/patients/${id}`); },
     createPatient(data) { return this.post('/clinic/patients', data); },
     updatePatient(id, data) { return this.put(`/clinic/patients/${id}`, data); },

@@ -35,44 +35,30 @@ const PatientsPage = {
     async loadList(q = '') {
         const container = document.getElementById('patients-table');
         try {
-            const patients = await API.getPatients(q);
-            if (patients.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <div class="empty-state-icon">👥</div>
-                        <div class="empty-state-text">No se encontraron pacientes</div>
-                    </div>`;
-                return;
-            }
-
-            container.innerHTML = `
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Apellido, Nombre</th>
-                            <th>DNI</th>
-                            <th>Teléfono</th>
-                            <th>Obra Social</th>
-                            <th>Acciones</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${patients.map(p => `
-                            <tr>
-                                <td><strong>${p.last_name}, ${p.first_name}</strong></td>
-                                <td>${p.dni || '<span class="badge badge-cancelled" title="Falta completar el DNI cuando el paciente venga">falta DNI</span>'}</td>
-                                <td>${p.phone || '<span class="badge badge-cancelled" title="Sin teléfono no recibe recordatorios">falta teléfono</span>'}</td>
-                                <td>${p.insurance_name || '-'}</td>
-                                <td>
-                                    <button class="btn btn-sm btn-ghost" onclick="PatientsPage.showForm('${p.id}')">Editar</button>
-                                    <button class="btn btn-sm btn-primary" onclick="PatientsPage.viewOdontogram('${p.id}')">🦷</button>
-                                    <button class="btn btn-sm btn-danger" onclick="PatientsPage.deletePatient('${p.id}')">✕</button>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
+            const patients = await API.getAllPatients(q);
+            UI.tabla('patients-table', {
+                filas: patients,
+                vacio: 'No se encontraron pacientes',
+                columnas: [
+                    {titulo: 'Apellido, Nombre',
+                     valor: p => `${p.last_name}, ${p.first_name}`,
+                     html: p => `<strong>${UI.escape(p.last_name)}, ${UI.escape(p.first_name)}</strong>`},
+                    {titulo: 'DNI', valor: p => p.dni,
+                     html: p => p.dni
+                        ? UI.escape(p.dni)
+                        : '<span class="badge badge-cancelled" title="Falta completar el DNI cuando el paciente venga">falta DNI</span>'},
+                    {titulo: 'Teléfono', valor: p => p.phone,
+                     html: p => p.phone
+                        ? UI.escape(p.phone)
+                        : '<span class="badge badge-cancelled" title="Sin teléfono no recibe recordatorios">falta teléfono</span>'},
+                    {titulo: 'Obra Social', valor: p => p.insurance_name,
+                     html: p => UI.escape(p.insurance_name || '-')},
+                    {titulo: 'Acciones', orden: false, valor: () => '', html: p => `
+                        <button class="btn btn-sm btn-ghost" onclick="PatientsPage.showForm('${p.id}')">Editar</button>
+                        <button class="btn btn-sm btn-primary" onclick="PatientsPage.viewOdontogram('${p.id}')">🦷</button>
+                        <button class="btn btn-sm btn-danger" onclick="PatientsPage.deletePatient('${p.id}')">✕</button>`},
+                ],
+            });
         } catch (err) {
             container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
         }

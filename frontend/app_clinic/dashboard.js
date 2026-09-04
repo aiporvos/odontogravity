@@ -12,14 +12,16 @@ Router.register('dashboard', async (container) => {
         tomorrow.setDate(tomorrow.getDate() + 1);
         const tomorrowISO = tomorrow.toISOString().split('T')[0];
 
-        const [patients, appointments, reschedule] = await Promise.all([
-            API.getPatients(),
+        const [cuenta, appointments, reschedule] = await Promise.all([
+            // El total lo cuenta el servidor: antes se traia la primera pagina
+            // de pacientes y se mostraba su largo, o sea 50 fijo con 475 fichas.
+            API.contarPatients().catch(() => ({ total: 0 })),
             API.getAppointments({ date_from: `${today}T00:00:00`, date_to: `${today}T23:59:59` }),
             API.getRescheduleList().catch(() => []),
         ]);
         toReschedule = reschedule || [];
 
-        stats.patients = patients.length;
+        stats.patients = cuenta.total;
         stats.appointments_today = appointments.length;
         stats.pending = appointments.filter(a => a.status === 'pending').length;
         stats.completed = appointments.filter(a => a.status === 'completed').length;
@@ -75,21 +77,7 @@ Router.register('dashboard', async (container) => {
             <p style="font-size:.85rem;color:var(--slate-500);margin-bottom:.75rem;">
                 Estos turnos caen en un día en que el profesional está ausente. Reprogramalos.
             </p>
-            <div class="table-container">
-                <table>
-                    <thead><tr><th>Fecha/Hora</th><th>Paciente</th><th>Profesional</th><th>Motivo</th><th></th></tr></thead>
-                    <tbody>
-                        ${toReschedule.map(a => `
-                            <tr>
-                                <td><strong>${UI.formatDateTime(a.start_time)}</strong></td>
-                                <td>${a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : '-'}</td>
-                                <td>${a.professional ? a.professional.full_name : '-'}</td>
-                                <td>${a.reason || '-'}</td>
-                                <td><button class="btn btn-sm btn-primary" onclick="AgendaPage.showAppointment('${a.id}')">Reprogramar</button></td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
+            <div class="table-container" id="tabla-reprogramar"></div>
             </div>
         </div>
         `}
@@ -99,35 +87,44 @@ Router.register('dashboard', async (container) => {
                 <h2>Turnos de Hoy</h2>
                 <button class="btn btn-sm btn-primary" onclick="Router.navigate('agenda')">Ver Agenda</button>
             </div>
-            <div class="table-container">
-                ${todayAppointments.length === 0
-                    ? '<div class="empty-state"><div class="empty-state-icon">📅</div><div class="empty-state-text">No hay turnos para hoy</div></div>'
-                    : `<table>
-                        <thead>
-                            <tr>
-                                <th>Hora</th>
-                                <th>Paciente</th>
-                                <th>Profesional</th>
-                                <th>Motivo</th>
-                                <th>Estado</th>
-                                <th>Canal</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${todayAppointments.map(a => `
-                                <tr>
-                                    <td><strong>${UI.formatTime(a.start_time)}</strong></td>
-                                    <td>${a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : '-'}</td>
-                                    <td>${a.professional ? a.professional.full_name : '-'}</td>
-                                    <td>${a.reason || '-'}</td>
-                                    <td>${UI.statusBadge(a.status)}</td>
-                                    <td>${UI.channelLabel(a.channel)}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>`
-                }
+            <div class="table-container" id="tabla-hoy"></div>
             </div>
         </div>
     `;
+
+    // Las tablas se dibujan despues del innerHTML: UI.tabla necesita el
+    // contenedor ya en el documento, y de paso quedan con orden y paginado.
+    if (toReschedule.length) {
+        UI.tabla('tabla-reprogramar', {
+            filas: toReschedule,
+            porPagina: 10,
+            vacio: 'No hay turnos para reprogramar',
+            columnas: [
+                {titulo: 'Fecha/Hora', valor: a => new Date(a.start_time),
+                 html: a => `<strong>${UI.formatDateTime(a.start_time)}</strong>`},
+                {titulo: 'Paciente',
+                 valor: a => a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : ''},
+                {titulo: 'Profesional', valor: a => a.professional ? a.professional.full_name : ''},
+                {titulo: 'Motivo', valor: a => a.reason},
+                {titulo: '', orden: false, valor: () => '', html: a =>
+                    `<button class="btn btn-sm btn-primary" onclick="AgendaPage.showAppointment('${a.id}')">Reprogramar</button>`},
+            ],
+        });
+    }
+
+    UI.tabla('tabla-hoy', {
+        filas: todayAppointments,
+        porPagina: 15,
+        vacio: 'No hay turnos para hoy',
+        columnas: [
+            {titulo: 'Hora', valor: a => new Date(a.start_time),
+             html: a => `<strong>${UI.formatTime(a.start_time)}</strong>`},
+            {titulo: 'Paciente',
+             valor: a => a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : ''},
+            {titulo: 'Profesional', valor: a => a.professional ? a.professional.full_name : ''},
+            {titulo: 'Motivo', valor: a => a.reason},
+            {titulo: 'Estado', valor: a => a.status, html: a => UI.statusBadge(a.status)},
+            {titulo: 'Canal', valor: a => a.channel, html: a => UI.channelLabel(a.channel)},
+        ],
+    });
 });

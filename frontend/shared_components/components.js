@@ -180,6 +180,152 @@ const UI = {
         }[c]));
     },
 
+    // ── Tablas ─────────────────────────────────────────
+    // Tabla con orden por columna y paginado. Todas las tablas del panel
+    // volcaban la lista entera de una: con 475 pacientes cargados eso es una
+    // pantalla imposible de recorrer, y sin forma de ordenarla por nada.
+    //
+    //   UI.tabla('patients-table', {
+    //       filas: patients,
+    //       columnas: [
+    //           {titulo: 'Apellido, Nombre', valor: p => `${p.last_name}, ${p.first_name}`},
+    //           {titulo: 'DNI', valor: p => p.dni, html: p => p.dni || '—'},
+    //           {titulo: 'Acciones', orden: false, html: p => `<button ...>`},
+    //       ],
+    //       vacio: 'No se encontraron pacientes',
+    //   });
+    //
+    // `valor` es lo que se usa para ordenar y, si no hay `html`, lo que se
+    // muestra. `html` va tal cual: si viene de datos del usuario, escapalo.
+    _tablas: {},
+
+    tabla(contenedorId, config) {
+        const cont = document.getElementById(contenedorId);
+        if (!cont) return;
+
+        // El orden y la pagina sobreviven a un redibujado: si no, ordenar por
+        // una columna y que un refresco te devuelva al orden original es peor
+        // que no poder ordenar.
+        const estado = this._tablas[contenedorId] || (this._tablas[contenedorId] = {
+            columna: null, descendente: false, pagina: 1,
+        });
+        if (config) estado.config = config;
+        const { columnas, filas, vacio, porPagina = 25 } = estado.config;
+
+        if (!filas.length) {
+            cont.innerHTML = `<div class="empty-state"><div class="empty-state-text">${vacio || 'No hay datos'}</div></div>`;
+            return;
+        }
+
+        // ── Ordenar ──
+        const ordenadas = [...filas];
+        if (estado.columna !== null && columnas[estado.columna]) {
+            const col = columnas[estado.columna];
+            const signo = estado.descendente ? -1 : 1;
+            ordenadas.sort((a, b) => {
+                const va = col.valor(a), vb = col.valor(b);
+                // Los vacios van al final SIEMPRE, en los dos sentidos: una
+                // ficha sin DNI no es "la que tiene el DNI mas alto". Por eso
+                // se resuelve antes de aplicar el signo.
+                const ea = this._celdaVacia(va), eb = this._celdaVacia(vb);
+                if (ea || eb) return ea && eb ? 0 : (ea ? 1 : -1);
+                return signo * this._compararCeldas(va, vb);
+            });
+        }
+
+        // ── Paginar ──
+        const paginas = Math.max(1, Math.ceil(ordenadas.length / porPagina));
+        estado.pagina = Math.min(Math.max(1, estado.pagina), paginas);
+        const desde = (estado.pagina - 1) * porPagina;
+        const visibles = ordenadas.slice(desde, desde + porPagina);
+
+        const encabezados = columnas.map((c, i) => {
+            if (c.orden === false) return `<th>${c.titulo}</th>`;
+            const activa = estado.columna === i;
+            const flecha = activa ? (estado.descendente ? ' ▼' : ' ▲') : '';
+            return `<th class="th-ordenable${activa ? ' activa' : ''}"
+                        onclick="UI._ordenarTabla('${contenedorId}', ${i})"
+                        title="Ordenar por ${c.titulo}">${c.titulo}${flecha}</th>`;
+        }).join('');
+
+        // `filaAttrs` deja poner clase, ondblclick o title en el <tr>: hay tablas
+        // que colorean la fila entera o reaccionan al doble clic.
+        const attrs = estado.config.filaAttrs || (() => '');
+        const cuerpo = visibles.map(f => `<tr ${attrs(f)}>${
+            columnas.map(c => `<td${c.tdAttrs ? ' ' + c.tdAttrs(f) : ''}>${
+                c.html ? c.html(f) : UI.escape(c.valor(f) ?? '')
+            }</td>`).join('')
+        }</tr>`).join('');
+
+        cont.innerHTML = `
+            <table><thead><tr>${encabezados}</tr></thead><tbody>${cuerpo}</tbody></table>
+            ${this._pieDeTabla(contenedorId, estado.pagina, paginas, desde, visibles.length, ordenadas.length)}`;
+    },
+
+    _pieDeTabla(contenedorId, pagina, paginas, desde, cuantas, total) {
+        if (paginas <= 1) {
+            return `<div class="tabla-pie"><span>${total} registro${total === 1 ? '' : 's'}</span></div>`;
+        }
+        const ir = (n, texto, deshabilitado = false) =>
+            `<button class="tabla-pag${n === pagina ? ' activa' : ''}" ${deshabilitado ? 'disabled' : ''}
+                     onclick="UI._irAPagina('${contenedorId}', ${n})">${texto}</button>`;
+
+        // Una ventana de paginas alrededor de la actual: con 20 paginas no
+        // entran todas, y el usuario igual navega de a poco.
+        const desdeN = Math.max(1, Math.min(pagina - 2, paginas - 4));
+        const hastaN = Math.min(paginas, Math.max(pagina + 2, 5));
+        const numeros = [];
+        for (let n = desdeN; n <= hastaN; n++) numeros.push(ir(n, n));
+
+        return `
+            <div class="tabla-pie">
+                <span>${desde + 1}–${desde + cuantas} de ${total}</span>
+                <div class="tabla-paginas">
+                    ${ir(pagina - 1, '‹', pagina === 1)}
+                    ${desdeN > 1 ? ir(1, '1') + '<span class="tabla-puntos">…</span>' : ''}
+                    ${numeros.join('')}
+                    ${hastaN < paginas ? '<span class="tabla-puntos">…</span>' + ir(paginas, paginas) : ''}
+                    ${ir(pagina + 1, '›', pagina === paginas)}
+                </div>
+            </div>`;
+    },
+
+    _celdaVacia(v) {
+        return v === null || v === undefined || v === '' ||
+               (typeof v === 'string' && v.trim() === '');
+    },
+
+    // Números como números y fechas como fechas: ordenar "10" y "9" como texto
+    // deja el 10 antes que el 9.
+    _compararCeldas(a, b) {
+        if (typeof a === 'number' && typeof b === 'number') return a - b;
+        if (a instanceof Date && b instanceof Date) return a - b;
+
+        const na = Number(a), nb = Number(b);
+        if (!Number.isNaN(na) && !Number.isNaN(nb) && String(a).trim() !== '' && String(b).trim() !== '') {
+            return na - nb;
+        }
+        return String(a).localeCompare(String(b), 'es', { sensitivity: 'base', numeric: true });
+    },
+
+    _ordenarTabla(contenedorId, i) {
+        const estado = this._tablas[contenedorId];
+        if (!estado) return;
+        // Tocar la misma columna alterna ascendente/descendente.
+        if (estado.columna === i) estado.descendente = !estado.descendente;
+        else { estado.columna = i; estado.descendente = false; }
+        estado.pagina = 1;
+        this.tabla(contenedorId, null);
+    },
+
+    _irAPagina(contenedorId, n) {
+        const estado = this._tablas[contenedorId];
+        if (!estado) return;
+        estado.pagina = n;
+        this.tabla(contenedorId, null);
+        document.getElementById(contenedorId)?.scrollIntoView({ block: 'nearest' });
+    },
+
     // ── Form Helpers ───────────────────────────────────
     getFormData(formId) {
         const form = document.getElementById(formId);

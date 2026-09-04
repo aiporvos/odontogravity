@@ -23,51 +23,6 @@
                 weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
             });
         }
-
-        watchForUpdates();
-    }
-
-    // ── Aviso de version nueva ─────────────────────────
-    // El index.html se sirve con "no-store", asi que una recarga siempre trae la
-    // ultima version. El problema es la pestania que queda abierta dias: no se
-    // entera de que hubo deploy. Comparamos contra /api/version y avisamos.
-    function watchForUpdates() {
-        const loaded = window.APP_VERSION;
-        if (!loaded) return; // servido fuera del backend (dev con file://, etc.)
-
-        async function check() {
-            try {
-                const res = await fetch('/api/version', { cache: 'no-store' });
-                if (!res.ok) return;
-                const { version } = await res.json();
-                if (version && version !== loaded) showUpdateBanner(version);
-            } catch (_) {
-                // Sin conexion: reintentamos en el proximo ciclo.
-            }
-        }
-
-        setInterval(check, 5 * 60 * 1000);
-        document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') check();
-        });
-    }
-
-    function showUpdateBanner(version) {
-        // Una sola vez por version: si el usuario lo cierra, no reaparece cada 5'.
-        if (sessionStorage.getItem('dsp_update_notified') === version) return;
-        sessionStorage.setItem('dsp_update_notified', version);
-
-        const bar = document.createElement('div');
-        bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:1.25rem;z-index:9999;display:flex;align-items:center;gap:.75rem;padding:.7rem 1rem;border-radius:var(--radius);background:var(--slate-800,#1e293b);color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.25);font-size:.9rem;';
-        bar.innerHTML = `
-            <span>Hay una version nueva del sistema.</span>
-            <button class="btn btn-primary" style="padding:.35rem .8rem;font-size:.85rem;">Actualizar</button>
-            <button style="background:none;border:none;color:#cbd5e1;cursor:pointer;font-size:1.1rem;line-height:1;">&times;</button>
-        `;
-        const [reloadBtn, closeBtn] = bar.querySelectorAll('button');
-        reloadBtn.addEventListener('click', () => window.location.reload());
-        closeBtn.addEventListener('click', () => bar.remove());
-        document.body.appendChild(bar);
     }
 
     // ── Login ──────────────────────────────────────────

@@ -23,27 +23,22 @@ const UsersPage = {
         const container = document.getElementById('users-table');
         try {
             const users = await API.getUsers();
-            container.innerHTML = `
-                <table>
-                    <thead>
-                        <tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr>
-                    </thead>
-                    <tbody>
-                        ${users.map(u => `
-                            <tr>
-                                <td><strong>${u.full_name}</strong></td>
-                                <td>${u.email}</td>
-                                <td><span class="badge badge-${u.role === 'admin' ? 'confirmed' : 'pending'}">${u.role}</span></td>
-                                <td>${u.is_active ? '✅ Activo' : '⛔ Inactivo'}</td>
-                                <td>
-                                    <button class="btn btn-sm btn-ghost" onclick="UsersPage.showForm('${u.id}', '${u.full_name}', '${u.role}', ${u.is_active})">Editar</button>
-                                    <button class="btn btn-sm btn-danger" onclick="UsersPage.deleteUser('${u.id}')">✕</button>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
+            UI.tabla('users-table', {
+                filas: users,
+                vacio: 'No hay usuarios cargados',
+                columnas: [
+                    {titulo: 'Nombre', valor: u => u.full_name,
+                     html: u => `<strong>${UI.escape(u.full_name)}</strong>`},
+                    {titulo: 'Email', valor: u => u.email},
+                    {titulo: 'Rol', valor: u => u.role,
+                     html: u => `<span class="badge badge-${u.role === 'admin' ? 'confirmed' : 'pending'}">${UI.escape(u.role)}</span>`},
+                    {titulo: 'Estado', valor: u => (u.is_active ? 'Activo' : 'Inactivo'),
+                     html: u => u.is_active ? '✅ Activo' : '⛔ Inactivo'},
+                    {titulo: 'Acciones', orden: false, valor: () => '', html: u => `
+                        <button class="btn btn-sm btn-ghost" onclick="UsersPage.showForm('${u.id}', '${UI.escape(u.full_name)}', '${u.role}', ${u.is_active})">Editar</button>
+                        <button class="btn btn-sm btn-danger" onclick="UsersPage.deleteUser('${u.id}')">✕</button>`},
+                ],
+            });
         } catch (err) {
             container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
         }
