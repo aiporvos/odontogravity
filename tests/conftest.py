@@ -17,14 +17,70 @@ from datetime import datetime, timedelta, time as py_time
 import pytest
 from sqlalchemy import text as sa_text
 
+# ── Contra qué base corren los tests ─────────────────────────────────────────
+# Esto era un setdefault sobre DATABASE_URL, y ahí estaba el peor riesgo del
+# repositorio: en una terminal donde alguien hubiera exportado DATABASE_URL
+# —apuntando a producción, por ejemplo— setdefault no la pisaba, la sesión de
+# tests se conectaba ahí y el fixture `esquema` corría drop_all() sobre esa
+# base. Verificado sobre una base descartable: la tabla patients desapareció y
+# pytest informó "11 passed". Verde mientras borra pacientes.
+#
+# Ahora TEST_DATABASE_URL manda siempre, y antes de tocar nada se comprueba que
+# la base sea efectivamente de pruebas.
+
+PISTAS_DE_PRUEBA = ("test", "prueba")
+HOSTS_PERMITIDOS = {"localhost", "127.0.0.1", "::1", "postgres", "db"}
+
+
+def _exigir_base_de_pruebas(url: str) -> None:
+    """Aborta la sesión si la URL no es, sin lugar a dudas, una base de pruebas.
+
+    Los tests destruyen el esquema. La única defensa real es no arrancar cuando
+    la base no se puede reconocer como descartable: el nombre tiene que decirlo
+    y el host tiene que estar en la lista, ampliable con TEST_DB_ALLOWED_HOSTS
+    para un runner de CI.
+    """
+    from urllib.parse import urlparse
+
+    partes = urlparse(url)
+    nombre = (partes.path or "").lstrip("/")
+    host = (partes.hostname or "").lower()
+    permitidos = HOSTS_PERMITIDOS | {
+        h.strip().lower()
+        for h in os.getenv("TEST_DB_ALLOWED_HOSTS", "").split(",") if h.strip()
+    }
+
+    problemas = []
+    if not any(p in nombre.lower() for p in PISTAS_DE_PRUEBA):
+        problemas.append(
+            f"el nombre de la base ('{nombre}') no contiene "
+            + " ni ".join(f"'{p}'" for p in PISTAS_DE_PRUEBA)
+        )
+    if host not in permitidos:
+        problemas.append(
+            f"el host ('{host}') no está permitido "
+            f"(permitidos: {', '.join(sorted(permitidos))}; "
+            f"ampliá con TEST_DB_ALLOWED_HOSTS)"
+        )
+    if problemas:
+        raise RuntimeError(
+            "Los tests BORRAN el esquema y esta base no parece de pruebas: "
+            + "; ".join(problemas)
+            + ". Definí TEST_DATABASE_URL apuntando a una base descartable."
+        )
+
+
 # Tiene que quedar seteado ANTES de importar nada del backend: database.py lee
 # DATABASE_URL al importarse, y security.py/bot_routes.py abortan si no hay
 # SECRET_KEY y BOT_API_KEY propias.
-os.environ.setdefault(
-    "DATABASE_URL",
-    os.getenv("TEST_DATABASE_URL",
-              "postgresql://dentibot:dentibot_secure_2024@localhost:5432/dentibot_test"),
+_URL_DE_PRUEBAS = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql://dentibot:dentibot_secure_2024@localhost:5432/dentibot_test",
 )
+_exigir_base_de_pruebas(_URL_DE_PRUEBAS)
+# Asignación directa, no setdefault: una DATABASE_URL heredada no puede ganar.
+os.environ["DATABASE_URL"] = _URL_DE_PRUEBAS
+
 os.environ.setdefault("SECRET_KEY", "clave-solo-para-tests-no-usar-en-serio")
 os.environ.setdefault("BOT_API_KEY", "bot-key-solo-para-tests")
 
@@ -39,9 +95,13 @@ from backend.models.professional import Professional  # noqa: E402
 from backend.models.schedule import ClinicSchedule, ClinicHoliday  # noqa: E402
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def esquema():
-    """Crea el esquema una vez y aplica las migraciones, igual que el arranque real."""
+    """Crea el esquema una vez y aplica las migraciones, igual que el arranque real.
+
+    No es autouse: los tests que no piden `db` —los de conversación, parsers y
+    formato— no tienen por qué crear ni borrar tablas para correr.
+    """
     Base.metadata.drop_all(bind=engine)
     # alembic_version no pertenece a Base.metadata, asi que drop_all no la toca.
     # Si queda de una corrida anterior, Alembic se cree al dia y saltea TODAS las
