@@ -637,20 +637,20 @@ async def _responder(remote_jid: str, texto: str, publicadas: dict | None):
 
     # Eleccion binaria (obra social / particular): botones, que se tocan sin
     # abrir ningun menu.
+    # send_whatsapp_* ya cae a texto por su cuenta si el interactivo falla, y
+    # devuelve False solo cuando no se pudo entregar NADA. Reenviar aca el
+    # texto ante un False producia dos mensajes identicos.
     if publicadas.get("tipo") == "botones" and 2 <= len(ofrecidas) <= 3:
-        if await send_whatsapp_buttons(remote_jid, texto, ofrecidas):
-            return
+        return await send_whatsapp_buttons(remote_jid, texto, ofrecidas)
 
     # Con una sola opcion una lista es mas incomoda que el texto.
     if len(ofrecidas) >= 2:
-        enviado = await send_whatsapp_list(
+        return await send_whatsapp_list(
             remote_jid, texto, ofrecidas,
             boton=publicadas.get("boton") or "Elegir horario",
             titulo=publicadas.get("titulo") or "Horarios disponibles",
         )
-        if enviado:
-            return
-    await send_whatsapp_message(remote_jid, texto)
+    return await send_whatsapp_message(remote_jid, texto)
 
 
 async def handle_text_message(remote_jid: str, text: str):
@@ -745,6 +745,22 @@ async def handle_text_message(remote_jid: str, text: str):
             estado_nuevo = dict(estado_nuevo or {})
             estado_nuevo[CLAVE_ULTIMAS_OPCIONES] = _firma_opciones(opciones)
             _guardar_estado(db, session, estado_nuevo)
+
+            # La pausa se chequeo al entrar, pero la llamada al modelo tarda
+            # segundos: en ese rato la secretaria puede haber tomado el chat.
+            # Con un solo chequeo al principio, su intervencion no evitaba que
+            # despues saliera la respuesta del bot encima. Se vuelve a mirar
+            # aca, contra la base, antes de guardar y enviar.
+            db.refresh(session)
+            if bot_silenciado(remote_jid) or (
+                session.paused_until and session.paused_until > datetime.utcnow()
+            ):
+                logger.info(
+                    "⏸️ La conversación %s pasó a atención humana mientras se "
+                    "generaba la respuesta: no se envía.", remote_jid,
+                )
+                return
+
             save_message(db, session.id, MessageRole.assistant, response)
             await _responder(remote_jid, response, opciones)
         except Exception as e:

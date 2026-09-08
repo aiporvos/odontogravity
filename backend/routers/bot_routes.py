@@ -383,6 +383,20 @@ def _validar_dni_y_telefono(dni, phone, requester_phone):
     return d
 
 
+def _es_la_misma_persona(ficha, nombre: str | None, apellido: str | None) -> bool:
+    """Si el nombre que paso el bot es el de esa ficha (o no vino ninguno).
+
+    Sin nombre, el turno es para quien ya usa el telefono: es el caso normal.
+    Con un nombre distinto, es otra persona aunque comparta el numero.
+    """
+    from backend.services.appointment_service import _nombre_normalizado
+
+    pedido = _nombre_normalizado(nombre, apellido)
+    if not pedido:
+        return True
+    return pedido == _nombre_normalizado(ficha.first_name, ficha.last_name)
+
+
 @router.post("/appointments", dependencies=[Depends(verify_bot_key)])
 def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(get_db)):
     # Paciente que ya existe: no hace falta que tipee nada. Si el numero de
@@ -392,12 +406,43 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
     apellido = data.patient_last_name
     if not (data.dni or "").strip():
         conocido, opciones = resolver_paciente(db, None, data.requester_phone)
-        if conocido:
+        # El DNI de la ficha del telefono se reutiliza SOLO si el turno es para
+        # esa misma persona. Antes se tomaba siempre, aunque el bot hubiera
+        # pasado otro nombre: como el alta busca primero por DNI, el turno del
+        # familiar terminaba cargado en la ficha del dueño del telefono, y su
+        # historia clinica se mezclaba con la de otro.
+        #
+        # Un telefono es un contacto, no un paciente: en una familia lo comparten.
+        if conocido and _es_la_misma_persona(conocido, nombre, apellido):
             dni_normalizado = conocido.dni
             nombre = nombre or conocido.first_name
             apellido = apellido or conocido.last_name
+        elif conocido and (nombre or "").strip() and (apellido or "").strip():
+            # Turno para otra persona desde el mismo telefono: ficha propia, sin
+            # heredar el DNI. Queda pendiente para que lo cargue recepcion.
+            dni_normalizado = None
+        elif conocido:
+            raise HTTPException(400, (
+                "Este número ya tiene una ficha. Si el turno es para esa misma "
+                "persona no hace falta nada más; si es para otra, preguntale "
+                "UNA sola cosa: a nombre de quién agendás el turno."
+            ))
         elif opciones:
-            raise HTTPException(400, _elegir_entre(opciones))
+            # Varias personas comparten el numero. Si el bot ya dijo de quien es
+            # el turno, no hay nada que preguntar: se busca entre ellas.
+            elegida = next(
+                (o for o in opciones if _es_la_misma_persona(o, nombre, apellido)),
+                None,
+            ) if (nombre or "").strip() and (apellido or "").strip() else None
+            if elegida is not None:
+                dni_normalizado = elegida.dni
+                nombre = nombre or elegida.first_name
+                apellido = apellido or elegida.last_name
+            elif (nombre or "").strip() and (apellido or "").strip():
+                # Una tercera persona del mismo grupo familiar: ficha propia.
+                dni_normalizado = None
+            else:
+                raise HTTPException(400, _elegir_entre(opciones))
         elif (nombre or "").strip() and (apellido or "").strip():
             # Paciente nuevo con nombre y apellido: alcanza para reservar. El
             # DNI queda pendiente y lo completa recepcion cuando llega, con el

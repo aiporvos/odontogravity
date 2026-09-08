@@ -229,11 +229,17 @@ MAX_TITULO = 20
 
 
 async def _enviar_interactivo(number: str, payload_interactivo: dict, texto_fallback: str) -> bool:
-    """Manda un mensaje interactivo. Si falla, cae a texto plano.
+    """Manda un mensaje interactivo, cayendo a texto plano si falla.
 
-    Devuelve True si se mando como interactivo. El fallback importa: si YCloud
-    rechaza el formato, es preferible que el paciente reciba el texto a que no
-    reciba nada.
+    Devuelve True SIEMPRE que el paciente haya recibido algo —interactivo o
+    texto—, y False solo si no se pudo entregar nada.
+
+    Antes devolvia True solo para el interactivo, y ademas ya mandaba el texto
+    de fallback por su cuenta. Quien llamaba (_responder) leia ese False como
+    "no se envio" y mandaba el texto OTRA VEZ: un interactivo rechazado por
+    YCloud le llegaba al paciente como dos mensajes identicos.
+
+    El fallback lo decide un solo lugar, y es este.
     """
     api_key = get_config("YCLOUD_API_KEY", "")
     from_phone = get_config("YCLOUD_FROM_PHONE", "")
@@ -241,8 +247,7 @@ async def _enviar_interactivo(number: str, payload_interactivo: dict, texto_fall
     from_phone_norm = normalize_to_e164(from_phone)
 
     if not (api_key and to_phone and from_phone_norm):
-        await send_whatsapp_message(number, texto_fallback)
-        return False
+        return await send_whatsapp_message(number, texto_fallback)
 
     payload = {
         "from": from_phone_norm,
@@ -259,14 +264,12 @@ async def _enviar_interactivo(number: str, payload_interactivo: dict, texto_fall
             )
             if r.status_code >= 400:
                 logger.error(f"❌ YCloud rechazó el interactivo ({r.status_code}): {r.text[:300]}")
-                await send_whatsapp_message(number, texto_fallback)
-                return False
+                return await send_whatsapp_message(number, texto_fallback)
             logger.info(f"📤 Interactivo enviado a {to_phone}")
             return True
         except Exception as e:
             logger.error(f"❌ Error enviando interactivo: {e}")
-            await send_whatsapp_message(number, texto_fallback)
-            return False
+            return await send_whatsapp_message(number, texto_fallback)
 
 
 async def send_whatsapp_list(number: str, cuerpo: str, opciones: list[str],
@@ -278,8 +281,7 @@ async def send_whatsapp_list(number: str, cuerpo: str, opciones: list[str],
     if len(opciones) > MAX_FILAS_LISTA:
         logger.warning(f"Lista recortada de {len(opciones)} a {MAX_FILAS_LISTA} opciones")
     if not filas:
-        await send_whatsapp_message(number, cuerpo)
-        return False
+        return await send_whatsapp_message(number, cuerpo)
 
     interactivo = {
         "type": "list",
@@ -300,8 +302,7 @@ async def send_whatsapp_buttons(number: str, cuerpo: str, botones: list[str]) ->
         for i, b in enumerate(botones[:MAX_BOTONES])
     ]
     if not acciones:
-        await send_whatsapp_message(number, cuerpo)
-        return False
+        return await send_whatsapp_message(number, cuerpo)
 
     interactivo = {
         "type": "button",

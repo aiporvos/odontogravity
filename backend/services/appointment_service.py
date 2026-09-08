@@ -346,23 +346,45 @@ def get_chairs_per_location(db: Session) -> int:
         return 1
 
 
+def misma_sede(a: str | None, b: str | None) -> bool:
+    """Si dos nombres de sede se refieren al mismo lugar.
+
+    La comparacion era `location == location` a secas, y eso partio la agenda
+    en dos: la misma sede esta cargada como "San Rafael" (382 turnos),
+    "Silprodent" (194) y "Silproden" (16, con la 't' faltante). El bot agenda
+    siempre en "San Rafael", asi que no veia el 87% de los turnos futuros y
+    ofrecia como libres horarios ya tomados. Paso de verdad: el turno del
+    01/09 a las 11:00 se agendo encima de uno de 10:30 a 11:30 cargado como
+    "Silprodent".
+
+    Una sede en NULL cuenta como cualquiera: son los turnos que se cargaron
+    antes de que el formulario pidiera sede, y contarlos como ocupados es lo
+    conservador.
+
+    Esto NO unifica sedes distintas de verdad: solo hace que una diferencia de
+    mayusculas, acentos, espacios o un typo deje de crear una agenda paralela.
+    """
+    if a is None or b is None:
+        return True
+    return _sin_acentos(" ".join(a.split())).lower() == _sin_acentos(" ".join(b.split())).lower()
+
+
 def get_day_appointments(db: Session, day, location: str | None):
     """Turnos activos de una sede en un dia, para calcular ocupacion.
 
-    Incluye los que tienen la sede en NULL: son los que se cargaron desde el
-    panel antes de que el formulario pidiera sede, y en SQL `location = 'X'`
-    nunca matchea NULL, asi que quedaban invisibles y se ofrecian horarios ya
-    tomados. Contarlos como ocupados es lo conservador.
+    El filtro por sede se hace en Python y no en SQL para poder normalizar el
+    nombre: ver misma_sede(). Un dia tiene pocas decenas de turnos, asi que
+    traerlos y filtrarlos no cambia nada en la practica.
     """
     start_of_day = datetime.combine(day, py_time(0, 0))
     end_of_day = datetime.combine(day, py_time(23, 59, 59))
-    return db.query(Appointment).filter(
-        or_(Appointment.location == location, Appointment.location.is_(None)),
+    del_dia = db.query(Appointment).filter(
         Appointment.is_deleted == False,
         Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
         Appointment.start_time >= start_of_day,
         Appointment.start_time <= end_of_day,
     ).all()
+    return [a for a in del_dia if misma_sede(a.location, location)]
 
 
 def overlapping_appointments(appointments, start: datetime, duration_minutes: int, exclude_id=None):
