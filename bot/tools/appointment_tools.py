@@ -234,9 +234,11 @@ def agendar_turno(
     location: str = "San Rafael",
     insurance_name: str = "Particular",
     duration_minutes: int = 30,
+    profesional: str = "",
 ) -> str:
     """Agenda un nuevo turno en el sistema."""
     payload = {
+        "profesional_pedido": profesional or None,
         "patient_name": patient_name,
         "patient_last_name": patient_last_name,
         "dni": dni,
@@ -328,6 +330,7 @@ def consultar_disponibilidad(
     date: str = "",
     obra_social: str = "Particular",
     preferencia_horaria: str = "",
+    profesional: str = "",
 ) -> str:
     """Consulta los horarios disponibles para una sede, especialidad y fecha."""
     # El motivo tiene que haberlo dicho el paciente, no deducirlo el modelo: de
@@ -365,6 +368,7 @@ def consultar_disponibilidad(
             "date": date,
             "obra_social": obra_social,
             "preferencia_horaria": preferencia_horaria or None,
+            "profesional_pedido": profesional or None,
         }
         r = httpx.post(f"{API_BASE}/api/bot/availability", json=payload, headers=HEADERS, timeout=30)
         r.raise_for_status()
@@ -828,6 +832,16 @@ TOOL_DEFINITIONS = [
                         "description": "Duración: Consulta/Limpieza=15, Extracción/Ortodoncia=30, Endodoncia=60",
                         "default": 30,
                     },
+                    "profesional": {
+                        "type": "string",
+                        "description": (
+                            "Profesional que pidió el paciente, tal como lo nombró "
+                            "(ej: 'Silvestro', 'Dra. Murad'). Dejar VACÍO si no pidió a "
+                            "ninguno en particular. Si lo pidió, es OBLIGATORIO pasarlo: "
+                            "sin esto el turno se le asigna a quien esté libre, que puede "
+                            "no ser el que el paciente pidió."
+                        ),
+                    },
                 },
                 "required": ["reason", "preferred_date"],
             },
@@ -921,6 +935,15 @@ TOOL_DEFINITIONS = [
                             "'antes de las 11'. Dejar vacío si no expresó ninguna preferencia. "
                             "SIEMPRE pasarlo si el paciente mencionó un horario: sin esto se le "
                             "ofrecen horarios que no le sirven."
+                        ),
+                    },
+                    "profesional": {
+                        "type": "string",
+                        "description": (
+                            "Profesional que pidió el paciente, tal como lo nombró "
+                            "(ej: 'Silvestro', 'la Dra. Murad'). Dejar vacío si no pidió a "
+                            "ninguno. PROHIBIDO decir que unos horarios son de un profesional "
+                            "sin haberlo pasado acá: cada uno atiende días distintos."
                         ),
                     },
                 },

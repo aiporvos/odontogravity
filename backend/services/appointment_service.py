@@ -498,6 +498,52 @@ def _duracion_hardcodeada(reason: str) -> int:
     return 15
 
 
+DIAS_DE_LA_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes",
+                     "sábado", "domingo"]
+
+
+def buscar_profesional(db: Session, texto: str):
+    """La ficha del profesional que nombro el paciente, o None.
+
+    El paciente escribe "el doctor Silvestro", "la Dra. Murad" o "silvestro" a
+    secas. Se compara contra las palabras del nombre completo ignorando
+    mayusculas, acentos y los tratamientos.
+    """
+    if not (texto or "").strip():
+        return None
+
+    tratamientos = {"dr", "dra", "doctor", "doctora", "el", "la", "con"}
+    pedidas = [p for p in _palabras(texto) if p not in tratamientos]
+    if not pedidas:
+        return None
+
+    activos = db.query(Professional).filter(
+        Professional.is_deleted == False,  # noqa: E712
+        Professional.is_active == True,    # noqa: E712
+    ).all()
+
+    for p in activos:
+        suyas = set(_palabras(p.full_name)) - tratamientos
+        # Alcanza con que coincida el apellido: nadie escribe el nombre completo.
+        if any(pedida in suyas for pedida in pedidas):
+            return p
+    return None
+
+
+def dias_que_atiende(db: Session, profesional) -> list[str]:
+    """Los dias de la semana en que trabaja, en palabras y sin repetir.
+
+    Se usa para poder decirle al paciente "el Dr. Silvestro atiende miercoles,
+    jueves y viernes" en vez de mandarlo a otro dia sin explicar por que.
+    """
+    filas = db.query(ProfessionalSchedule).filter(
+        ProfessionalSchedule.professional_id == profesional.id,
+        ProfessionalSchedule.is_active == True,  # noqa: E712
+    ).all()
+    dias = sorted({f.weekday for f in filas})
+    return [DIAS_DE_LA_SEMANA[d] for d in dias if 0 <= d <= 6]
+
+
 def franjas_del_dia(db: Session, day, candidatos):
     """Franjas horarias en las que hay alguien que pueda atender ese dia.
 
@@ -681,6 +727,7 @@ def create_appointment_logic(
     channel: AppointmentChannel = AppointmentChannel.bot_whatsapp,
     duration_minutes: int = 30,
     requester_phone: str = None,
+    profesional_pedido: str = None,
 ):
     # Garantia dura: si la obra social no esta entre las activas, el turno se
     # agenda como Particular. El prompt le pide al modelo que lo verifique con
@@ -703,6 +750,23 @@ def create_appointment_logic(
     candidatos = find_professionals_for_reason(reason, db)
     if not candidatos:
         return {"error": "No hay profesionales disponibles"}
+
+    # Si el paciente pidio un profesional, el turno es con ese o no es. Antes no
+    # habia forma de pedirlo: el turno se asignaba a quien estuviera libre y el
+    # modelo igual le decia al paciente que quedaba con el que habia nombrado.
+    if profesional_pedido:
+        pedido = buscar_profesional(db, profesional_pedido)
+        if not pedido:
+            return {"error": f"No encuentro a ningún profesional llamado "
+                             f"'{profesional_pedido}'."}
+        if pedido.id not in [c.id for c in candidatos]:
+            return {"error": f"{pedido.full_name} no atiende {reason}."}
+        if not _atiende_en(db, pedido, start, duration_minutes):
+            dias = dias_que_atiende(db, pedido)
+            atiende = (" Atiende " + ", ".join(dias) + ".") if dias else ""
+            return {"error": f"{pedido.full_name} no atiende ese día ni a esa hora."
+                             f"{atiende} Ofrecele al paciente un día en que sí atienda."}
+        candidatos = [pedido]
 
     # La duracion la decide el motivo, no el modelo: es la misma con la que se
     # calculo el hueco que se le ofrecio al paciente.
@@ -955,7 +1019,8 @@ _MOTIVO_INTERNO = "__interno__"
 
 def get_available_slots(db: Session, target_date: str, location: str, reason: str,
                         obra_social: str = "Particular", recursive_depth=0,
-                        fecha_pedida=None, motivo_salto=None, preferencia_horaria=None):
+                        fecha_pedida=None, motivo_salto=None, preferencia_horaria=None,
+                        profesional_pedido=None):
     """Calculate free slots for a given date and location based on clinic schedule.
 
     fecha_pedida y motivo_salto se arrastran entre llamadas recursivas para poder
@@ -979,6 +1044,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         return get_available_slots(
             db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social,
             recursive_depth + 1, fecha_pedida, motivo_salto or motivo, preferencia_horaria,
+            profesional_pedido,
         )
 
     def respuesta(slots, mensaje=None, profesional=None):
@@ -1023,6 +1089,20 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # "Limpieza" la hacen los dos): el dia esta disponible si CUALQUIERA de
     # ellos trabaja, y se ofrece la union de sus horarios, no solo el de uno.
     candidatos = find_professionals_for_reason(reason, db)
+
+    # El paciente pidio un profesional por nombre. Sin esto la consulta devolvia
+    # los horarios de CUALQUIERA y el modelo los presentaba como si fueran de
+    # quien se habia pedido: asi se ofrecio un lunes con el Dr. Silvestro, que
+    # los lunes no atiende.
+    if profesional_pedido:
+        pedido = buscar_profesional(db, profesional_pedido)
+        if not pedido:
+            return respuesta([], f"No encuentro a ningún profesional con ese nombre "
+                                 f"({profesional_pedido}).")
+        if pedido.id not in [c.id for c in candidatos]:
+            return respuesta([], f"{pedido.full_name} no atiende {reason}.")
+        candidatos = [pedido]
+
     prof = candidatos[0] if candidatos else None
     prof_name = prof.full_name if prof else "Cualquier profesional disponible"
     prof_ids = [p.id for p in candidatos]
@@ -1042,6 +1122,11 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
 
     if not shifts:
         # Día cerrado, o ningún candidato trabaja/está disponible ese día.
+        if profesional_pedido and recursive_depth < 14:
+            dias = dias_que_atiende(db, candidatos[0])
+            atiende = (" Atiende " + ", ".join(dias) + ".") if dias else ""
+            return siguiente(f"{candidatos[0].full_name} no atiende el "
+                             f"{fecha_en_palabras(day)}.{atiende}")
         if recursive_depth < 14:
             return siguiente(f"el {fecha_en_palabras(day)} no hay nadie disponible para {reason}")
         return respuesta([], "Sin disponibilidad en las próximas dos semanas.")

@@ -4,6 +4,7 @@ Usa la API nativa de OpenAI (compatible con OpenRouter y Groq) para
 function calling. Más confiable que LangChain AgentExecutor.
 """
 import os
+import re
 import json
 import logging
 from urllib.parse import quote_plus
@@ -1277,6 +1278,31 @@ def chat(user_message: str, history: list[dict] | None = None,
     last_error = None
     sin_key = []
 
+    # ── Un "te agendé" tiene que tener un turno detrás ──────────────────────
+    # Pasó en producción: el paciente pidió turno con el Dr. Silvestro, y el
+    # modelo le contestó "tengo disponibilidad el lunes 14 a las 11:00" y
+    # después "te agendé para el lunes 14 a las 11:00 con el Dr. Martin
+    # Silvestro" — sin llamar a ninguna herramienta. El log de esa conversación
+    # no tiene ni un POST a /availability ni a /appointments despues del primer
+    # turno, y el link de cancelacion era el del turno ANTERIOR, copiado.
+    #
+    # O sea que el paciente se fue creyendo que tenia un turno que no existia, y
+    # ademas con un profesional que los lunes no atiende. Un prompt no alcanza:
+    # esto lo tiene que garantizar el codigo.
+    _CONFIRMA_TURNO = re.compile(
+        r"\b(te\s+agend|qued(o|ó)\s+agendad|te\s+reserv|te\s+anot|"
+        r"turno\s+confirmad|agendad[oa]\s+para)", re.IGNORECASE,
+    )
+
+    def _promete_sin_cumplir(texto: str, agendo_de_verdad: bool) -> bool:
+        return bool(texto) and not agendo_de_verdad and bool(_CONFIRMA_TURNO.search(texto))
+
+    _SIN_RESPALDO = (
+        "Perdón, no llegué a confirmar ese turno: todavía no quedó agendado. "
+        "¿Me repetís el día y la hora que querés y con qué profesional, así lo "
+        "cargo bien?"
+    )
+
     for attempt, provider in enumerate(providers, 1):
         try:
             logger.info(f"AI_AGENT -> Intentando proveedor {attempt}/{len(providers)}: {provider}")
@@ -1288,6 +1314,10 @@ def chat(user_message: str, history: list[dict] | None = None,
             # ── Function calling loop ────────────────────────────────
             # Copy messages so each provider attempt starts fresh
             conv = list(messages)
+            # Si en este turno se creo un turno de verdad. Lo unico que cuenta
+            # es que agendar_turno haya devuelto exito, no que el modelo diga
+            # que lo hizo.
+            agendo_de_verdad = False
 
             for round_num in range(MAX_TOOL_ROUNDS):
                 response = client.chat.completions.create(
@@ -1305,6 +1335,12 @@ def chat(user_message: str, history: list[dict] | None = None,
                 # No tool calls → final text response
                 if not msg.tool_calls:
                     result = msg.content or ""
+                    if _promete_sin_cumplir(result, agendo_de_verdad):
+                        logger.error(
+                            "AI_AGENT -> El modelo confirmó un turno que NUNCA se agendó. "
+                            "Mensaje bloqueado: %s", result[:200],
+                        )
+                        return _SIN_RESPALDO, None, get_estado_conversacion()
                     logger.info(f"AI_AGENT -> Respuesta final (ronda {round_num + 1}): {result[:80]}...")
                     return result, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
@@ -1332,6 +1368,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                     except json.JSONDecodeError:
                         args = {}
                     tool_result = execute_tool(tc.function.name, args)
+                    if tc.function.name == "agendar_turno" and tool_result.startswith("✅"):
+                        agendo_de_verdad = True
                     logger.info(f"  🔧 {tc.function.name}({json.dumps(args, ensure_ascii=False)[:120]}) → {tool_result[:100]}...")
                     conv.append({
                         "role": "tool",
@@ -1347,8 +1385,14 @@ def chat(user_message: str, history: list[dict] | None = None,
                 temperature=0.3,
                 max_tokens=1000,
             )
-            return (response.choices[0].message.content or "",
-                    tomar_opciones_ofrecidas(), get_estado_conversacion())
+            final = response.choices[0].message.content or ""
+            if _promete_sin_cumplir(final, agendo_de_verdad):
+                logger.error(
+                    "AI_AGENT -> El modelo confirmó un turno que NUNCA se agendó "
+                    "(tras agotar las rondas). Mensaje bloqueado: %s", final[:200],
+                )
+                return _SIN_RESPALDO, None, get_estado_conversacion()
+            return final, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
         except Exception as e:
             logger.error(f"AI_AGENT -> Error usando proveedor {provider}: {e}")

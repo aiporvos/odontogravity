@@ -427,6 +427,7 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
         duration_minutes=data.duration_minutes,
         channel=AppointmentChannel.bot_whatsapp,
         requester_phone=data.requester_phone,
+        profesional_pedido=data.profesional_pedido,
     )
     if "error" in result:
         raise HTTPException(404, result["error"])
@@ -765,4 +766,6 @@ def bot_get_availability(data: BotAvailabilityRequest, db: Session = Depends(get
     argentina_now = get_clinic_now()
     target_date = data.date if data.date else argentina_now.date().isoformat()
     return get_available_slots(db, target_date, data.location, data.reason,
-                              data.obra_social, preferencia_horaria=data.preferencia_horaria)
+                              data.obra_social,
+                              preferencia_horaria=data.preferencia_horaria,
+                              profesional_pedido=data.profesional_pedido)

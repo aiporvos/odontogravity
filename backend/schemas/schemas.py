@@ -313,6 +313,9 @@ class BotAppointmentRequest(BaseModel):
     # Número de WhatsApp real de la conversación (lo agrega el bot, no el paciente).
     # Se usa como identidad para verificar la propiedad de los turnos.
     requester_phone: Optional[str] = None
+    # Profesional que pidió el paciente, tal como lo nombró ("Silvestro").
+    # Si viene, el turno es con ese o no es.
+    profesional_pedido: Optional[str] = None
 
 
 class BotCancelRequest(BaseModel):
@@ -343,6 +346,10 @@ class BotAvailabilityRequest(BaseModel):
     # Franja que pidio el paciente: "manana", "tarde" o una hora ("18:45").
     # Sin esto el bot no tenia por donde pasar "necesito despues de las 18:45".
     preferencia_horaria: Optional[str] = None
+    # Profesional que pidió el paciente. Sin esto la consulta devolvía los
+    # horarios de cualquiera y el modelo los presentaba como si fueran de quien
+    # se había pedido.
+    profesional_pedido: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════
