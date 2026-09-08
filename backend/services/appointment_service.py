@@ -346,6 +346,39 @@ def get_chairs_per_location(db: Session) -> int:
         return 1
 
 
+def sede_por_defecto(db: Session) -> str | None:
+    """El nombre de la unica sede activa, o None si hay varias.
+
+    El consultorio tiene una sola sede. El bot, sin embargo, traia
+    "San Rafael" escrito a mano en cuatro lugares, mientras la agenda real se
+    cargaba como "Silprodent": dos nombres para el mismo lugar, dos agendas
+    separadas, y el bot ofreciendo como libres horarios ya tomados.
+
+    Con una sola sede activa el backend la resuelve solo y el bot no puede
+    equivocarse. Si algun dia hay dos, esto devuelve None y el parametro vuelve
+    a mandar.
+    """
+    from backend.models.clinic_location import ClinicLocation
+
+    activas = db.query(ClinicLocation).filter(
+        ClinicLocation.is_active == True,   # noqa: E712
+        ClinicLocation.is_deleted == False,  # noqa: E712
+    ).all()
+    return activas[0].name if len(activas) == 1 else None
+
+
+def sede_efectiva(db: Session, pedida: str | None) -> str | None:
+    """La sede que corresponde usar, mande lo que mande quien llama.
+
+    Con una sola sede activa, esa gana siempre: es la unica que existe, y
+    aceptar otro nombre solo sirve para volver a partir la agenda.
+    """
+    unica = sede_por_defecto(db)
+    if unica:
+        return unica
+    return pedida
+
+
 def misma_sede(a: str | None, b: str | None) -> bool:
     """Si dos nombres de sede se refieren al mismo lugar.
 

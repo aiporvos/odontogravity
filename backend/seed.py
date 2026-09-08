@@ -69,23 +69,24 @@ def run_seed(db: Session):
                 full_name="Dr. Sergio Silvestro",
                 license_number="MP-10520",
                 specialties=["Cirugía", "Implantes", "Prótesis"],
-                locations=["San Rafael", "Alvear"],
+                locations=["Silprodent"],
             ),
             Professional(
                 full_name="Dra. Lucía Murad",
                 license_number="MP-12480",
                 specialties=["Ortodoncia", "Odontopediatría"],
-                locations=["San Rafael"],
+                locations=["Silprodent"],
             )
         ])
         db.commit()
 
     # ── Locations & Insurances ─────────────────────────
+    # Una sola sede. Sembrar dos era lo que originaba el problema de fondo: el
+    # nombre de la sede se escribia a mano en cada lado, terminaban conviviendo
+    # tres grafias y cada una era una agenda separada (ver la migracion
+    # d6e7f8a9b0c1). Con una sola activa, el backend la resuelve solo.
     if db.query(ClinicLocation).count() == 0:
-        db.add_all([
-            ClinicLocation(name="San Rafael", address="Av. Mitre 450, San Rafael"),
-            ClinicLocation(name="Alvear", address="Paso de los Andes 120, Gral. Alvear"),
-        ])
+        db.add(ClinicLocation(name="Silprodent"))
         db.commit()
 
     if db.query(Insurance).count() == 0:
@@ -132,13 +133,13 @@ def run_seed(db: Session):
                 patient_id=p1.id, professional_id=prof1.id,
                 start_time=now + timedelta(days=2, hours=10),
                 duration_minutes=30, reason="Consulta Inicial",
-                status=AppointmentStatus.confirmed, location="San Rafael"
+                status=AppointmentStatus.confirmed, location="Silprodent"
             ),
             Appointment(
                 patient_id=p2.id, professional_id=prof1.id,
                 start_time=now + timedelta(days=1, hours=15),
                 duration_minutes=60, reason="Limpieza y Caries",
-                status=AppointmentStatus.confirmed, location="San Rafael"
+                status=AppointmentStatus.confirmed, location="Silprodent"
             )
         ])
 

@@ -231,7 +231,7 @@ def agendar_turno(
     patient_last_name: str = "",
     dni: str = "",
     phone: str = "",
-    location: str = "San Rafael",
+    location: str = "",
     insurance_name: str = "Particular",
     duration_minutes: int = 30,
     profesional: str = "",
@@ -326,7 +326,7 @@ def consultar_mis_turnos(dni: str = "") -> str:
 
 def consultar_disponibilidad(
     motivo_confirmado_por_paciente: str,
-    location: str = "San Rafael",
+    location: str = "",
     date: str = "",
     obra_social: str = "Particular",
     preferencia_horaria: str = "",
@@ -821,7 +821,7 @@ TOOL_DEFINITIONS = [
                         "type": "string",
                         "description": "Fecha y hora EXACTA en formato 'YYYY-MM-DD HH:MM' (ej: '2026-06-18 09:30'). OBLIGATORIO.",
                     },
-                    "location": {"type": "string", "description": "Sede (por defecto 'San Rafael')", "default": "San Rafael"},
+                    "location": {"type": "string", "description": "Sede. Dejar VACÍO: el consultorio tiene una sola y la resuelve el sistema."},
                     "insurance_name": {
                         "type": "string",
                         "description": "Obra Social (usar 'Particular' si no tiene)",
@@ -917,7 +917,7 @@ TOOL_DEFINITIONS = [
                             "PROHIBIDO adivinar; si no lo dijo, preguntale primero."
                         ),
                     },
-                    "location": {"type": "string", "description": "Sede (por defecto 'San Rafael')", "default": "San Rafael"},
+                    "location": {"type": "string", "description": "Sede. Dejar VACÍO: el consultorio tiene una sola y la resuelve el sistema."},
                     "date": {
                         "type": "string",
                         "description": "Fecha opcional (YYYY-MM-DD). Si se omite, busca para hoy.",

@@ -10,6 +10,7 @@ import logging
 
 from backend.database import get_db
 from backend.services.appointment_service import (
+    sede_efectiva,
     create_appointment_logic, get_available_slots, route_professional,
     find_professionals_for_reason, motivo_no_agendable, duracion_para_motivo,
     get_clinic_now, profesional_libre,
@@ -466,7 +467,7 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
         dni=dni_normalizado,
         phone=data.phone,
         reason=data.reason,
-        location=data.location,
+        location=sede_efectiva(db, data.location),
         insurance_name=data.insurance_name,
         preferred_date=data.preferred_date,
         duration_minutes=data.duration_minutes,
@@ -810,7 +811,10 @@ def bot_get_availability(data: BotAvailabilityRequest, db: Session = Depends(get
     from backend.services.appointment_service import get_clinic_now
     argentina_now = get_clinic_now()
     target_date = data.date if data.date else argentina_now.date().isoformat()
-    return get_available_slots(db, target_date, data.location, data.reason,
+    # La sede la resuelve el backend: con una sola activa, lo que mande el bot
+    # no puede partir la agenda en dos.
+    from backend.services.appointment_service import sede_efectiva
+    return get_available_slots(db, target_date, sede_efectiva(db, data.location), data.reason,
                               data.obra_social,
                               preferencia_horaria=data.preferencia_horaria,
                               profesional_pedido=data.profesional_pedido)

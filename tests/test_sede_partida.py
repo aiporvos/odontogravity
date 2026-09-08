@@ -99,3 +99,49 @@ def test_una_sede_de_verdad_distinta_sigue_siendo_independiente(
     turno(db, paciente, silvestro, cuando, duracion=60, location="Alvear")
 
     assert get_day_appointments(db, cuando.date(), "San Rafael") == []
+
+
+# ── Con una sola sede, el backend la resuelve y el bot no puede errarle ─────
+
+def test_con_una_sola_sede_activa_esa_gana(db, clinica):
+    from backend.services.appointment_service import sede_efectiva, sede_por_defecto
+    assert sede_por_defecto(db) == "San Rafael"
+    # Mande lo que mande el bot, la única sede activa es la que vale.
+    assert sede_efectiva(db, "San Rafael") == "San Rafael"
+    assert sede_efectiva(db, "Silprodent") == "San Rafael"
+    assert sede_efectiva(db, None) == "San Rafael"
+    assert sede_efectiva(db, "") == "San Rafael"
+
+
+def test_con_dos_sedes_activas_vuelve_a_mandar_el_parametro(db, clinica):
+    from backend.models.clinic_location import ClinicLocation
+    from backend.services.appointment_service import sede_efectiva, sede_por_defecto
+
+    db.add(ClinicLocation(name="Alvear"))
+    db.commit()
+
+    assert sede_por_defecto(db) is None
+    assert sede_efectiva(db, "Alvear") == "Alvear"
+
+
+def test_sin_ninguna_sede_activa_no_inventa(db):
+    from backend.services.appointment_service import sede_efectiva, sede_por_defecto
+    assert sede_por_defecto(db) is None
+    assert sede_efectiva(db, "lo que sea") == "lo que sea"
+
+
+def test_el_turno_del_bot_queda_en_la_sede_del_sistema(db, clinica, silvestro, paciente):
+    """Aunque el bot mande otro nombre, el turno no puede caer en otra agenda."""
+    from backend.models.appointment import Appointment
+    from backend.routers.bot_routes import bot_create_appointment
+    from backend.schemas.schemas import BotAppointmentRequest
+
+    r = bot_create_appointment(BotAppointmentRequest(
+        patient_name=paciente.first_name, patient_last_name=paciente.last_name,
+        dni=paciente.dni, reason="Extracción", location="Sede Inventada",
+        preferred_date=proximo_dia_habil().strftime("%Y-%m-%d %H:%M"),
+        requester_phone=paciente.phone,
+    ), db=db)
+
+    guardado = db.query(Appointment).filter(Appointment.id == r["appointment_id"]).first()
+    assert guardado.location == "San Rafael"
