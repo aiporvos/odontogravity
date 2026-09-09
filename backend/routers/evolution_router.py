@@ -429,6 +429,19 @@ def bot_silenciado(remote_jid: str) -> bool:
                 session.paused_until, ofuscar_telefono(remote_jid),
             )
             return True
+
+        # Venció la pausa pero quedó algo esperando a recepción. Reanudar la
+        # admisión ahí es contradecir a quien todavía no pudo atenderlo: el
+        # paciente escribió porque su problema sigue sin resolverse, y el bot
+        # volvería a ofrecerle turnos como si nada. Se calla hasta que recepción
+        # cierre el caso.
+        from backend.services.derivaciones import hay_pendiente
+        if hay_pendiente(db, remote_jid):
+            logger.info(
+                "⏸️ %s tiene una derivación sin resolver: el bot no reanuda solo.",
+                ofuscar_telefono(remote_jid),
+            )
+            return True
         return False
     except Exception as e:
         logger.error(f"Error verificando si el bot está pausado: {e}", exc_info=True)
@@ -545,6 +558,48 @@ _SALUDO_SUELTO = re.compile(
     r"[^.!?\n]{0,40}?[!¡.,]+[\s\U0001F300-\U0001FAFF☀-➿]*",
     re.IGNORECASE,
 )
+
+
+# ── Cierres de conversación ─────────────────────────────────────────────────
+# "Gracias" después de un turno ya reservado, y "Ok" después de un recordatorio,
+# no son pedidos nuevos. El bot contestaba "¿En qué puedo ayudarte hoy?" y
+# arrancaba otra admisión, perdiendo el contexto de lo que acababa de pasar.
+
+_AGRADECE = re.compile(
+    r"^\s*(muchas\s+)?(gracias|graciasss*|mil\s+gracias|dale\s+gracias|"
+    r"ok+|ok(ay|ey|is)|listo|perfecto|barbaro|buenisimo|genial|de\s+una|"
+    r"joya|excelente|👍+|🙏+|😊+|✅+)"
+    r"[\s!\.,¡👍🙏😊🥰❤️✅]*$",
+    re.IGNORECASE,
+)
+
+_PIDE_ALGO_MAS = re.compile(
+    r"[?¿]|\b(turno|cancel|reprogram|cambiar|precio|cuanto|alias|direccion|"
+    r"donde|horario|necesito|quiero|puedo|me\s+pas|consulta)\b",
+    re.IGNORECASE,
+)
+
+
+def es_solo_un_cierre(texto: str) -> bool:
+    """Si el mensaje es solo un agradecimiento o un acuse, sin pedido nuevo.
+
+    "Gracias!! Que tengas un lindo día!!! ☺️" cierra la conversación.
+    "Gracias, ¿me pasás el alias?" NO: trae un pedido y hay que resolverlo.
+    """
+    limpio = _sin_acentos_simple(texto or "").strip()
+    if not limpio or len(limpio) > 80:
+        return False
+    if _PIDE_ALGO_MAS.search(limpio):
+        return False
+    return bool(_AGRADECE.match(limpio))
+
+
+def _sin_acentos_simple(texto: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto or "")
+        if unicodedata.category(c) != "Mn"
+    )
 
 
 def quitar_presentacion(texto: str) -> str:
@@ -818,6 +873,13 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
                 None, chat, text, history, requester_phone, estado_previo
             )
             logger.info(f"🤖 IA respondió: {response[:50]}...")
+
+            # 0) Un cierre no reabre nada. Si el paciente solo agradeció o
+            # acusó recibo, se responde corto y no se consulta ninguna
+            # herramienta ni se vuelve a enumerar el turno.
+            if es_solo_un_cierre(text) and history:
+                response = "¡De nada! Cualquier cosa, escribime. 😊"
+                opciones = None
 
             # 1) Si la charla ya venía empezada, no se vuelve a presentar.
             if history:

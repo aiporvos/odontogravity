@@ -1,7 +1,7 @@
 # Estado del encargo
 
 Rama `encargo/asistente-etapas`, sobre `061c184`. **Nada desplegado.**
-420 tests verdes (eran 332 al empezar).
+449 tests verdes (eran 332 al empezar).
 
 ## Entregado
 
@@ -15,7 +15,10 @@ Rama `encargo/asistente-etapas`, sobre `061c184`. **Nada desplegado.**
 | 6 | Una sola sede *(no estaba en el plan)* | — | 16 |
 | 7 | Ráfagas agrupadas y versión de conversación | C01-C08, H02 | 12 |
 | 8 | Días excluidos y parsers ambiguos | R01, R02, R03, R06 | 19 |
-| 9 | Bandeja de derivaciones | H03, I02, S01 | 17 |
+| 9 | Bandeja de derivaciones | H03, I02, S01 | 18 |
+| 10 | El turno que no aparece se deriva, no se niega | I02 | — |
+| 11 | El bot no reanuda con un caso abierto | H06 | 1 |
+| 12 | «Gracias» y «Ok» cierran en vez de reabrir | N01-N03, N08 | 28 |
 
 ### Lo que cada uno arregla, en una línea
 
@@ -28,6 +31,9 @@ Rama `encargo/asistente-etapas`, sobre `061c184`. **Nada desplegado.**
 7. Tres mensajes seguidos producían tres respuestas cruzadas entre sí.
 8. «Menos martes y jueves» terminó en un turno el martes.
 9. «Dejé la consulta para recepción» no dejaba nada en ningún lado.
+10. «No tenés turnos» cuando en realidad no se lo podía identificar.
+11. Vencía la pausa y volvía a ofrecer turnos con el caso sin resolver.
+12. «Ok» a un recordatorio abría otra admisión desde cero.
 
 ## Lo que NO se hizo, y por qué
 

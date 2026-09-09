@@ -151,3 +151,31 @@ def test_si_la_derivacion_fallo_no_se_promete(monkeypatch):
 def test_un_mensaje_normal_no_se_toca(monkeypatch):
     normal = "Tengo turnos el jueves a las 09:00 o 10:00. ¿Cuál te sirve?"
     assert _correr(monkeypatch, normal, tool=None) == normal
+
+
+# ── El bot no reanuda la admisión con una tarea humana abierta ─────────────
+
+def test_el_bot_se_calla_mientras_haya_una_derivacion_pendiente(db, monkeypatch):
+    """Vencer el temporizador no resuelve el problema del paciente.
+
+    Si volviera a hablar, le ofrecería turnos como si nada a alguien que
+    escribió justamente porque su caso sigue sin resolverse.
+    """
+    from backend.routers import evolution_router as er
+
+    class _Sesion:
+        paused_until = None
+
+    monkeypatch.setattr(er, "get_config", lambda k, d="": "true")
+    monkeypatch.setattr(er, "get_or_create_session", lambda d, j: _Sesion())
+    monkeypatch.setattr(er, "SessionLocal", lambda: db)
+
+    assert er.bot_silenciado(JID) is False
+
+    d = crear_derivacion(db, JID, MotivoDerivacion.identidad, "No puede cancelar.")
+    assert er.bot_silenciado(JID) is True, (
+        "Reanudó la admisión con un caso sin resolver"
+    )
+
+    resolver(db, d.id, por="recepcion")
+    assert er.bot_silenciado(JID) is False, "No volvió después de resolverlo"

@@ -325,6 +325,23 @@ def reprogramar_turno(appointment_id: str, new_datetime: str, dni: str = "") -> 
         return f"❌ Error: {str(e)}"
 
 
+# Lo que el modelo tiene que hacer cuando el turno no aparece. No es lo mismo
+# "no existe" que "no lo puedo ver": el 85% de las fichas activas vienen de la
+# agenda de papel, sin DNI ni telefono, asi que a la mayoria de los pacientes el
+# sistema no los puede identificar aunque su turno este cargado.
+#
+# Una paciente pidio cancelar el suyo del dia siguiente y la conversacion
+# termino en "¿podrías darme el nombre y apellido de otra persona?". El turno
+# existia. Nadie se entero.
+_NO_APARECE = (
+    "\n\n🚫 NO le digas que no tiene turnos ni que nunca los tuvo: puede tenerlos "
+    "en una ficha que el sistema no puede vincular a este número. "
+    "Decile que NO LO ENCONTRÁS EN ESTA AGENDA y llamá a `derivar_a_recepcion` "
+    "con motivo 'identidad', poniendo en datos_aportados todo lo que ya te dijo "
+    "(nombre, DNI, día y hora del turno que dice tener)."
+)
+
+
 def consultar_mis_turnos(dni: str = "") -> str:
     """Consulta los turnos pendientes de un paciente."""
     try:
@@ -333,15 +350,21 @@ def consultar_mis_turnos(dni: str = "") -> str:
         r.raise_for_status()
         data = r.json()
         if not data["appointments"]:
-            return f"ℹ️ {data['patient']}, no tenés turnos pendientes."
+            return f"ℹ️ No hay turnos vinculados a {data['patient']}." + _NO_APARECE
         lines = [f"📋 Turnos de {data['patient']}:"]
         for a in data["appointments"]:
-            lines.append(f"  • {a['date']} - {a['reason']} con {a['professional']} en {a['location']} ({a['status']})")
+            lines.append(
+                f"  • ID {a.get('id', '?')} — {a['date']} - {a['reason']} "
+                f"con {a['professional']} en {a['location']} ({a['status']})"
+            )
         return "\n".join(lines)
     except httpx.HTTPStatusError as e:
-        return f"❌ {e.response.json().get('detail', 'Paciente no encontrado')}"
+        detalle = e.response.json().get("detail", "Paciente no encontrado")
+        # No poder identificar a alguien no es un error del paciente: es un
+        # limite del sistema, y se resuelve derivando, no interrogandolo.
+        return f"❌ {detalle}" + _NO_APARECE
     except Exception as e:
-        return f"❌ Error: {str(e)}"
+        return f"❌ Error de conexión: {e}. Esto NO significa que no tenga turnos."
 
 
 def consultar_disponibilidad(
