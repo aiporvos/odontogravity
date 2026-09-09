@@ -783,6 +783,7 @@ def create_appointment_logic(
     duration_minutes: int = 30,
     requester_phone: str = None,
     profesional_pedido: str = None,
+    preferencia_horaria: str = None,
 ):
     # Garantia dura: si la obra social no esta entre las activas, el turno se
     # agenda como Particular. El prompt le pide al modelo que lo verifique con
@@ -801,6 +802,16 @@ def create_appointment_logic(
         start = datetime.fromisoformat(preferred_date.strip())
     except Exception:
         return {"error": f"Formato de fecha inválido: '{preferred_date}'. Usar formato YYYY-MM-DD HH:MM."}
+
+    # Las restricciones se verifican TAMBIEN al crear, no solo al ofrecer.
+    # Validarlas en un solo lado deja pasar el turno si el modelo elige una
+    # fecha por su cuenta: es lo que produjo el turno del martes que la
+    # paciente habia descartado.
+    excluidos = dias_excluidos(preferencia_horaria)
+    if start.weekday() in excluidos:
+        nombre = DIAS_SEMANA[start.weekday()] if start.weekday() < len(DIAS_SEMANA) else ""
+        return {"error": f"El paciente pidió que no fuera {nombre}. "
+                         f"Ofrecele un día que sí le sirva."}
 
     candidatos = find_professionals_for_reason(reason, db)
     if not candidatos:
@@ -1000,6 +1011,40 @@ def _franjas_del_profesional(db: Session, professional_id, weekday: int, clinic_
     return _intersectar_franjas(clinic_shifts, del_dia)
 
 
+DIAS_POR_NOMBRE = {
+    "lunes": 0, "martes": 1, "miercoles": 2, "jueves": 3,
+    "viernes": 4, "sabado": 5, "domingo": 6,
+}
+
+
+def dias_excluidos(preferencia) -> set[int]:
+    """Los dias de la semana que el paciente descarto explicitamente.
+
+    "a la tarde, menos martes y jueves" -> {1, 3}
+
+    Paso en produccion: una paciente pidio exactamente eso y el turno quedo el
+    martes. La franja horaria si se respetaba —hay codigo para eso— pero la
+    exclusion de dias no tenia por donde entrar, asi que se ignoraba entera.
+
+    Es una restriccion DURA: se mantiene hasta que la persona la cambie. Solo
+    cuenta lo que viene despues de "menos", "excepto", "salvo" o "sin"; en
+    "martes o jueves" esos dias son lo que quiere, no lo que descarta.
+    """
+    if not preferencia:
+        return set()
+    texto = _sin_acentos(str(preferencia)).lower()
+
+    marcas = ("menos ", "excepto ", "salvo ", "sin ", "que no sea ", "no puedo ")
+    posiciones = [texto.find(m) + len(m) for m in marcas if m in texto]
+    if not posiciones:
+        return set()
+
+    # Desde la primera marca de exclusion hasta el final: "menos martes y
+    # jueves" descarta los dos, no solo el primero.
+    cola = texto[min(posiciones):]
+    return {n for dia, n in DIAS_POR_NOMBRE.items() if dia in cola}
+
+
 def interpretar_preferencia(preferencia):
     """Traduce lo que pidio el paciente a un rango (desde, hasta) en minutos.
 
@@ -1008,21 +1053,35 @@ def interpretar_preferencia(preferencia):
     """
     if not preferencia:
         return None
-    p = _sin_acentos(str(preferencia)).strip()
+    p = _sin_acentos(str(preferencia)).strip().lower()
     if not p:
         return None
-    if "manana" in p or "temprano" in p:
-        return (0, 12 * 60 + 30)
+
+    # "mañana a la tarde" son dos cosas distintas: el DIA de mañana y la franja
+    # de la tarde. Sin esto, la palabra "manana" ganaba y se le ofrecia la
+    # manana a alguien que habia pedido la tarde. El dia lo resuelve la fecha;
+    # aca solo interesa la franja.
     if "tarde" in p or "noche" in p:
         return (12 * 60 + 30, 24 * 60)
+    if "manana" in p or "temprano" in p:
+        return (0, 12 * 60 + 30)
 
     # "despues de las 18:45", "18:45", "18hs", "a las 18"
     import re as _re
-    m = _re.search(r"(\d{1,2})(?:[:.](\d{2}))?", p)
+    # Una fecha ("despues del 16", "el 16 de septiembre") no es una hora. Se
+    # descartan los numeros que vienen precedidos por "del"/"el" y los que
+    # siguen a un dia del mes, salvo que traigan minutos o "hs"/":".
+    m = _re.search(r"(?:a las?\s+)?(\d{1,2})[:.](\d{2})", p)
+    if not m:
+        # Exige "la/las" delante: eso distingue una hora ("de las 17") de una
+        # fecha ("del 16"), que era justamente lo que se confundia.
+        m = _re.search(r"\b(?:a|de|desde|hasta|antes de|despues de)\s+las?\s+(\d{1,2})\b", p)
+    if not m:
+        m = _re.search(r"\b(\d{1,2})\s*(?:hs|hrs|horas?)\b", p)
     if not m:
         return None
     hora = int(m.group(1))
-    minuto = int(m.group(2) or 0)
+    minuto = int(m.group(2) if m.lastindex and m.lastindex > 1 else 0)
     if hora > 23 or minuto > 59:
         return None
     desde = hora * 60 + minuto
@@ -1125,7 +1184,17 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         }
 
     weekday = day.weekday() # 0=Mon, 2=Wed
-        
+
+    # Dias que el paciente descarto ("menos martes y jueves"). Es una
+    # restriccion dura: no se afloja sola. Si no queda ningun dia, el que
+    # llama se entera por el mensaje, no ofreciendole un dia que no queria.
+    excluidos = dias_excluidos(preferencia_horaria)
+    if weekday in excluidos:
+        if recursive_depth < 14:
+            nombre = DIAS_SEMANA[weekday] if weekday < len(DIAS_SEMANA) else ""
+            return siguiente(f"pediste que no fuera {nombre}")
+        return respuesta([], "No hay turnos en los días que pediste.")
+
     # Regla PAMI: solo viernes
     if obra_social and obra_social.upper() == "PAMI" and weekday != 4:
         if recursive_depth < 14:

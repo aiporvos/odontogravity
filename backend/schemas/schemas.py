@@ -316,6 +316,9 @@ class BotAppointmentRequest(BaseModel):
     # Profesional que pidió el paciente, tal como lo nombró ("Silvestro").
     # Si viene, el turno es con ese o no es.
     profesional_pedido: Optional[str] = None
+    # Lo que pidió sobre día y horario, tal como lo dijo ("a la tarde, menos
+    # martes y jueves"). Se revalida al crear, no solo al ofrecer.
+    preferencia_horaria: Optional[str] = None
 
 
 class BotCancelRequest(BaseModel):

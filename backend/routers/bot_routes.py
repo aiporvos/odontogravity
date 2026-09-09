@@ -474,6 +474,7 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
         channel=AppointmentChannel.bot_whatsapp,
         requester_phone=data.requester_phone,
         profesional_pedido=data.profesional_pedido,
+        preferencia_horaria=data.preferencia_horaria,
     )
     if "error" in result:
         raise HTTPException(404, result["error"])

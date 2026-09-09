@@ -224,6 +224,22 @@ def tomar_opciones_ofrecidas():
 
 # ── Tool implementations ─────────────────────────────────────────────────────
 
+def _lo_que_pidio() -> str:
+    """Lo ultimo que el paciente dijo sobre dia u horario, tal como lo dijo.
+
+    Se usa al agendar para revalidar la restriccion: entre que se ofrecen los
+    horarios y se crea el turno, el modelo puede no reenviarla, y ahi es donde
+    se colaba un dia que el paciente habia descartado.
+    """
+    for dicho in reversed(_dichos_por_el_paciente.get() or (_ultimo_mensaje.get(),)):
+        if not dicho:
+            continue
+        from backend.services.appointment_service import dias_excluidos
+        if _franja_en_el_texto(dicho) or dias_excluidos(dicho):
+            return dicho
+    return ""
+
+
 def agendar_turno(
     reason: str,
     preferred_date: str,
@@ -235,10 +251,14 @@ def agendar_turno(
     insurance_name: str = "Particular",
     duration_minutes: int = 30,
     profesional: str = "",
+    preferencia_horaria: str = "",
 ) -> str:
     """Agenda un nuevo turno en el sistema."""
     payload = {
         "profesional_pedido": profesional or None,
+        # Si el modelo no la reenvia, se busca en lo que dijo el paciente: la
+        # restriccion no puede perderse entre ofrecer y agendar.
+        "preferencia_horaria": (preferencia_horaria or "").strip() or _lo_que_pidio() or None,
         "patient_name": patient_name,
         "patient_last_name": patient_last_name,
         "dni": dni,
@@ -840,6 +860,15 @@ TOOL_DEFINITIONS = [
                             "ninguno en particular. Si lo pidió, es OBLIGATORIO pasarlo: "
                             "sin esto el turno se le asigna a quien esté libre, que puede "
                             "no ser el que el paciente pidió."
+                        ),
+                    },
+                    "preferencia_horaria": {
+                        "type": "string",
+                        "description": (
+                            "Lo que el paciente pidió sobre día y hora, TAL COMO lo dijo "
+                            "(ej: 'a la tarde, menos martes y jueves'). Se vuelve a "
+                            "verificar al crear el turno: sin esto se puede agendar un "
+                            "día que el paciente descartó."
                         ),
                     },
                 },
