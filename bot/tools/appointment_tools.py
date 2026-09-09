@@ -748,7 +748,28 @@ def resumen_estado(estado: dict) -> str:
     return f"YA SABÉS TODO: {ya}. Podés agendar."
 
 
+def derivar_a_recepcion(motivo: str, resumen: str, datos_aportados: str = "") -> str:
+    """Deja la consulta para que la vea una persona de la clinica."""
+    payload = {
+        "motivo": motivo,
+        "resumen": resumen,
+        "datos_aportados": datos_aportados or None,
+        "requester_phone": _current_requester_phone(),
+    }
+    try:
+        r = httpx.post(f"{API_BASE}/api/bot/derivar", json=payload, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        return ("✅ La consulta quedó registrada para recepción. Recién AHORA podés "
+                "decirle al paciente que la dejaste anotada.")
+    except Exception as e:
+        # Importa que el modelo sepa que NO quedo registrada: prometer que se
+        # aviso cuando no se aviso es la promesa vacia que hay que evitar.
+        return (f"❌ NO se pudo registrar la consulta ({e}). NO le digas al paciente "
+                f"que quedó anotada. Pedile disculpas y sugerile llamar al consultorio.")
+
+
 _TOOL_MAP = {
+    "derivar_a_recepcion": derivar_a_recepcion,
     "agendar_turno": agendar_turno,
     "cancelar_turno": cancelar_turno,
     "reprogramar_turno": reprogramar_turno,
@@ -910,6 +931,50 @@ TOOL_DEFINITIONS = [
                     },
                 },
                 "required": ["appointment_id", "new_datetime"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "derivar_a_recepcion",
+            "description": (
+                "Deja la consulta anotada para que la resuelva una persona de la "
+                "clínica. Usala cuando: el paciente pide hablar con alguien; dice "
+                "tener un turno que no aparece; no se puede verificar quién es para "
+                "consultar o cancelar; refiere dolor, una prótesis que lastima u otra "
+                "molestia; o falta un dato que no tenés (precio, alias, dirección). "
+                "🚫 NUNCA le digas que dejaste la consulta sin haber llamado a esta "
+                "herramienta y recibido ✅."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "motivo": {
+                        "type": "string",
+                        "enum": ["identidad", "pedido_de_persona", "clinico",
+                                 "dato_faltante", "otro"],
+                        "description": (
+                            "identidad: no se pudo verificar quién escribe. "
+                            "pedido_de_persona: pidió hablar con alguien. "
+                            "clinico: dolor, molestia, problema con un tratamiento. "
+                            "dato_faltante: falta un precio, alias o dato operativo."
+                        ),
+                    },
+                    "resumen": {
+                        "type": "string",
+                        "description": "Qué necesita, en una o dos frases y con sus palabras.",
+                    },
+                    "datos_aportados": {
+                        "type": "string",
+                        "description": (
+                            "Todo lo que el paciente ya dio y no se pudo verificar: "
+                            "nombre, DNI, fecha del turno que dice tener. Así no tiene "
+                            "que repetirlo cuando lo atienda recepción."
+                        ),
+                    },
+                },
+                "required": ["motivo", "resumen"],
             },
         },
     },

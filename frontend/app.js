@@ -47,9 +47,26 @@
     });
 
     // ── Show App ───────────────────────────────────────
+    let _contadorDerivaciones = null;
+
     function showApp() {
         loginScreen.classList.add('hidden');
         appScreen.classList.remove('hidden');
+
+        // El contador de derivaciones se mira aunque no estés parado en esa
+        // pantalla: si no, nadie se entera de que hay un paciente esperando.
+        //
+        // Va acá y no en init(): antes del login la consulta devuelve 401,
+        // API.request borra la sesión y recarga la página, y eso es un bucle
+        // de recargas infinito. Se ve enseguida abriendo la app sin sesión.
+        if (typeof DerivacionesPage !== 'undefined' && !_contadorDerivaciones) {
+            DerivacionesPage.revisarPendientes();
+            _contadorDerivaciones = setInterval(() => {
+                if (!document.hidden && API.isAuthenticated()) {
+                    DerivacionesPage.revisarPendientes();
+                }
+            }, 2 * 60 * 1000);
+        }
 
         // Set user info
         const user = API.user;

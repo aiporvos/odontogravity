@@ -5,6 +5,8 @@ from fastapi import Body, APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
+from pydantic import BaseModel
+from typing import Optional
 import os
 import logging
 
@@ -804,6 +806,38 @@ def bot_verificar_obra_social(data: dict = Body(...), db: Session = Depends(get_
         "parecidas": parecidas,
         "activas": activas,
     }
+
+
+class BotDerivarRequest(BaseModel):
+    motivo: str
+    resumen: str
+    datos_aportados: Optional[str] = None
+    requester_phone: Optional[str] = None
+
+
+@router.post("/derivar", dependencies=[Depends(verify_bot_key)])
+def bot_derivar(data: BotDerivarRequest, db: Session = Depends(get_db)):
+    """Deja el caso para recepcion y devuelve si quedo registrado.
+
+    El bot solo puede decirle al paciente que dejo la consulta si esto
+    respondio ok. Antes "ya avisé" significaba nada mas que el bot se callaba.
+    """
+    from backend.models.derivacion import MotivoDerivacion
+    from backend.services.derivaciones import crear_derivacion
+
+    try:
+        motivo = MotivoDerivacion(data.motivo)
+    except ValueError:
+        motivo = MotivoDerivacion.otro
+
+    telefono = data.requester_phone or ""
+    jid = telefono if "@" in telefono else f"{''.join(filter(str.isdigit, telefono))}@s.whatsapp.net"
+
+    d = crear_derivacion(db, jid, motivo, data.resumen,
+                         data.datos_aportados, telefono)
+    if not d:
+        raise HTTPException(500, "No se pudo registrar la consulta para recepción.")
+    return {"status": "ok", "derivacion_id": str(d.id), "motivo": motivo.value}
 
 
 @router.post("/availability", dependencies=[Depends(verify_bot_key)])

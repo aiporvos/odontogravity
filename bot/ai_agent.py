@@ -1297,6 +1297,23 @@ def chat(user_message: str, history: list[dict] | None = None,
     def _promete_sin_cumplir(texto: str, agendo_de_verdad: bool) -> bool:
         return bool(texto) and not agendo_de_verdad and bool(_CONFIRMA_TURNO.search(texto))
 
+    # Lo mismo para las derivaciones: "dejé la consulta para recepción" es una
+    # afirmación sobre algo que ocurrió o no ocurrió. Antes pausar el bot era
+    # todo lo que pasaba, y el paciente quedaba esperando a alguien que no
+    # sabía que lo estaban esperando.
+    _PROMETE_AVISO = re.compile(
+        r"(dej[eé]\s+(la\s+)?consulta|le\s+aviso\s+a|avis[eé]\s+a\s+recepci|"
+        r"qued[oó]\s+anotad|lo\s+deriv[eé]|te\s+van\s+a\s+(llamar|contactar)|"
+        r"recepci[oó]n\s+(te|lo|la)\s+(va\s+a\s+)?(llamar|contactar|revisar))",
+        re.IGNORECASE,
+    )
+
+    _AVISO_SIN_CASO = (
+        "No pude dejar la consulta registrada. Para no hacerte esperar al pedo: "
+        "escribinos de nuevo en un rato o llamá al consultorio, así te atienden "
+        "directamente."
+    )
+
     _SIN_RESPALDO = (
         "Perdón, no llegué a confirmar ese turno: todavía no quedó agendado. "
         "¿Me repetís el día y la hora que querés y con qué profesional, así lo "
@@ -1318,6 +1335,7 @@ def chat(user_message: str, history: list[dict] | None = None,
             # es que agendar_turno haya devuelto exito, no que el modelo diga
             # que lo hizo.
             agendo_de_verdad = False
+            derivo_de_verdad = False
 
             for round_num in range(MAX_TOOL_ROUNDS):
                 response = client.chat.completions.create(
@@ -1341,6 +1359,12 @@ def chat(user_message: str, history: list[dict] | None = None,
                             "Mensaje bloqueado: %s", result[:200],
                         )
                         return _SIN_RESPALDO, None, get_estado_conversacion()
+                    if result and not derivo_de_verdad and _PROMETE_AVISO.search(result):
+                        logger.error(
+                            "AI_AGENT -> El modelo prometió avisarle a recepción sin "
+                            "crear la derivación. Mensaje bloqueado: %s", result[:200],
+                        )
+                        return _AVISO_SIN_CASO, None, get_estado_conversacion()
                     logger.info(f"AI_AGENT -> Respuesta final (ronda {round_num + 1}): {result[:80]}...")
                     return result, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
@@ -1370,6 +1394,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                     tool_result = execute_tool(tc.function.name, args)
                     if tc.function.name == "agendar_turno" and tool_result.startswith("✅"):
                         agendo_de_verdad = True
+                    if tc.function.name == "derivar_a_recepcion" and tool_result.startswith("✅"):
+                        derivo_de_verdad = True
                     logger.info(f"  🔧 {tc.function.name}({json.dumps(args, ensure_ascii=False)[:120]}) → {tool_result[:100]}...")
                     conv.append({
                         "role": "tool",
@@ -1392,6 +1418,12 @@ def chat(user_message: str, history: list[dict] | None = None,
                     "(tras agotar las rondas). Mensaje bloqueado: %s", final[:200],
                 )
                 return _SIN_RESPALDO, None, get_estado_conversacion()
+            if final and not derivo_de_verdad and _PROMETE_AVISO.search(final):
+                logger.error(
+                    "AI_AGENT -> Prometió avisarle a recepción sin crear la "
+                    "derivación. Mensaje bloqueado: %s", final[:200],
+                )
+                return _AVISO_SIN_CASO, None, get_estado_conversacion()
             return final, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
         except Exception as e:
