@@ -32,11 +32,27 @@ def upgrade() -> None:
     if "derivaciones" in sa.inspect(bind).get_table_names():
         return
 
-    motivo = sa.Enum("identidad", "pedido_de_persona", "clinico", "dato_faltante",
-                     "otro", name="motivoderivacion")
-    estado = sa.Enum("pendiente", "resuelta", name="estadoderivacion")
-    motivo.create(bind, checkfirst=True)
-    estado.create(bind, checkfirst=True)
+    # Los tipos se crean aparte y despues se referencian con create_type=False.
+    # Sin eso, create_table vuelve a emitir el CREATE TYPE y falla con
+    # "type already exists": el objeto Enum no sabe que ya se creo.
+    #
+    # No se veia en los tests porque ahi create_all() crea la tabla antes y la
+    # migracion se saltea sola. Salio al ensayar el deploy sobre una copia
+    # restaurada de produccion, donde la tabla NO existe y la migracion corre
+    # de verdad.
+    from sqlalchemy.dialects import postgresql
+
+    sa.Enum("identidad", "pedido_de_persona", "clinico", "dato_faltante",
+            "otro", name="motivoderivacion").create(bind, checkfirst=True)
+    sa.Enum("pendiente", "resuelta", name="estadoderivacion").create(bind, checkfirst=True)
+
+    motivo = postgresql.ENUM(
+        "identidad", "pedido_de_persona", "clinico", "dato_faltante", "otro",
+        name="motivoderivacion", create_type=False,
+    )
+    estado = postgresql.ENUM(
+        "pendiente", "resuelta", name="estadoderivacion", create_type=False,
+    )
 
     op.create_table(
         "derivaciones",
