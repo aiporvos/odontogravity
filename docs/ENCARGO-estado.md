@@ -1,7 +1,7 @@
 # Estado del encargo
 
-**Desplegado el 09/09/2026 23:23** (`3c8fa41`, alembic `f8a9b0c1d2e3`).
-449 tests verdes (eran 332 al empezar).
+**Desplegado el 09/09/2026** (`bf20f79`, alembic `a9b0c1d2e3f4`).
+456 tests verdes (eran 332 al empezar).
 
 Backup de producción tomado y **verificado restaurándolo** antes y después del
 deploy. Backup diario automático instalado en el VPS (03:15, retiene 30 días).
@@ -24,6 +24,7 @@ deploy. Backup diario automático instalado en el VPS (03:15, retiene 30 días).
 | 12 | «Gracias» y «Ok» cierran en vez de reabrir | N01-N03, N08 | 28 |
 | 13 | La barrera EXCLUDE de la base, por fin creada | R15, A07, A08 | ensayo |
 | 14 | Backup diario verificado, en el VPS y en cron | Etapa 3 | ensayo |
+| 15 | Un sobreturno exige una persona que lo autorice | — | 7 |
 
 ### Lo que cada uno arregla, en una línea
 
@@ -41,6 +42,7 @@ deploy. Backup diario automático instalado en el VPS (03:15, retiene 30 días).
 12. «Ok» a un recordatorio abría otra admisión desde cero.
 13. La agenda no tenía ninguna protección a nivel base. Ahora sí.
 14. Perder el volumen de Postgres borraba todo sin recuperación.
+15. Nada impedía a nivel base que un sobreturno saliera de otro lado que el panel.
 
 ## Lo que NO se hizo, y por qué
 
@@ -66,13 +68,17 @@ Por indicación explícita, no se implementa lo que el plan pide de más:
 ## Verificado en producción después del deploy
 
 ```
-alembic_version                    : f8a9b0c1d2e3
-no_solapar_turnos_por_profesional  : PRESENTE (exceptúa sobreturnos)
+alembic_version                    : a9b0c1d2e3f4
+no_solapar_turnos_por_profesional  : PRESENTE, validada
+solo_el_panel_marca_sobreturnos    : PRESENTE, NOT VALID (90 filas históricas)
 Pares superpuestos                 : 107, todos marcados, 0 sin marcar
 Turnos por sede                    : Silprodent 593  (era 382/195/16)
 Sedes activas                      : 1
 Tabla derivaciones                 : creada
 ```
+
+Backups tomados y **verificados restaurándolos** antes del deploy, después, y al
+cerrar. El diario corre en el VPS a las 03:15 y retiene 30 días.
 
 Y comprobado sobre una copia restaurada: la restricción **rechaza** una doble
 reserva nueva y **deja pasar** un sobreturno marcado.
