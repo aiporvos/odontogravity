@@ -239,6 +239,42 @@ def soft_delete_patient(patient_id: UUID, db: Session = Depends(get_db)):
 
 
 # ═══════════════════════════════════════════════════════
+# DERIVACIONES (lo que espera a una persona)
+# ═══════════════════════════════════════════════════════
+@router.get("/derivaciones")
+def listar_derivaciones(incluir_resueltas: bool = False, db: Session = Depends(get_db)):
+    """Lo que el bot no pudo resolver y espera a recepción."""
+    from backend.models.derivacion import Derivacion, EstadoDerivacion
+
+    query = db.query(Derivacion).filter(Derivacion.is_deleted == False)  # noqa: E712
+    if not incluir_resueltas:
+        query = query.filter(Derivacion.estado == EstadoDerivacion.pendiente)
+
+    return [{
+        "id": str(d.id),
+        "telefono": d.telefono,
+        "motivo": d.motivo.value,
+        "resumen": d.resumen,
+        "datos_aportados": d.datos_aportados,
+        "estado": d.estado.value,
+        "created_at": d.created_at.isoformat() if d.created_at else None,
+        "resuelta_por": d.resuelta_por,
+        "nota_de_cierre": d.nota_de_cierre,
+    } for d in query.order_by(Derivacion.created_at.desc()).limit(200).all()]
+
+
+@router.post("/derivaciones/{derivacion_id}/resolver")
+def resolver_derivacion(derivacion_id: UUID, datos: dict = Body(default={}),
+                        db: Session = Depends(get_db)):
+    from backend.services.derivaciones import resolver
+
+    d = resolver(db, derivacion_id, por=datos.get("por"), nota=datos.get("nota"))
+    if not d:
+        raise HTTPException(404, "Derivación no encontrada")
+    return {"status": "ok"}
+
+
+# ═══════════════════════════════════════════════════════
 # APPOINTMENTS (AGENDA)
 # ═══════════════════════════════════════════════════════
 @router.get("/appointments", response_model=list[AppointmentRead])

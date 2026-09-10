@@ -224,6 +224,22 @@ def tomar_opciones_ofrecidas():
 
 # ── Tool implementations ─────────────────────────────────────────────────────
 
+def _lo_que_pidio() -> str:
+    """Lo ultimo que el paciente dijo sobre dia u horario, tal como lo dijo.
+
+    Se usa al agendar para revalidar la restriccion: entre que se ofrecen los
+    horarios y se crea el turno, el modelo puede no reenviarla, y ahi es donde
+    se colaba un dia que el paciente habia descartado.
+    """
+    for dicho in reversed(_dichos_por_el_paciente.get() or (_ultimo_mensaje.get(),)):
+        if not dicho:
+            continue
+        from backend.services.appointment_service import dias_excluidos
+        if _franja_en_el_texto(dicho) or dias_excluidos(dicho):
+            return dicho
+    return ""
+
+
 def agendar_turno(
     reason: str,
     preferred_date: str,
@@ -231,14 +247,18 @@ def agendar_turno(
     patient_last_name: str = "",
     dni: str = "",
     phone: str = "",
-    location: str = "San Rafael",
+    location: str = "",
     insurance_name: str = "Particular",
     duration_minutes: int = 30,
     profesional: str = "",
+    preferencia_horaria: str = "",
 ) -> str:
     """Agenda un nuevo turno en el sistema."""
     payload = {
         "profesional_pedido": profesional or None,
+        # Si el modelo no la reenvia, se busca en lo que dijo el paciente: la
+        # restriccion no puede perderse entre ofrecer y agendar.
+        "preferencia_horaria": (preferencia_horaria or "").strip() or _lo_que_pidio() or None,
         "patient_name": patient_name,
         "patient_last_name": patient_last_name,
         "dni": dni,
@@ -305,6 +325,23 @@ def reprogramar_turno(appointment_id: str, new_datetime: str, dni: str = "") -> 
         return f"❌ Error: {str(e)}"
 
 
+# Lo que el modelo tiene que hacer cuando el turno no aparece. No es lo mismo
+# "no existe" que "no lo puedo ver": el 85% de las fichas activas vienen de la
+# agenda de papel, sin DNI ni telefono, asi que a la mayoria de los pacientes el
+# sistema no los puede identificar aunque su turno este cargado.
+#
+# Una paciente pidio cancelar el suyo del dia siguiente y la conversacion
+# termino en "¿podrías darme el nombre y apellido de otra persona?". El turno
+# existia. Nadie se entero.
+_NO_APARECE = (
+    "\n\n🚫 NO le digas que no tiene turnos ni que nunca los tuvo: puede tenerlos "
+    "en una ficha que el sistema no puede vincular a este número. "
+    "Decile que NO LO ENCONTRÁS EN ESTA AGENDA y llamá a `derivar_a_recepcion` "
+    "con motivo 'identidad', poniendo en datos_aportados todo lo que ya te dijo "
+    "(nombre, DNI, día y hora del turno que dice tener)."
+)
+
+
 def consultar_mis_turnos(dni: str = "") -> str:
     """Consulta los turnos pendientes de un paciente."""
     try:
@@ -313,20 +350,26 @@ def consultar_mis_turnos(dni: str = "") -> str:
         r.raise_for_status()
         data = r.json()
         if not data["appointments"]:
-            return f"ℹ️ {data['patient']}, no tenés turnos pendientes."
+            return f"ℹ️ No hay turnos vinculados a {data['patient']}." + _NO_APARECE
         lines = [f"📋 Turnos de {data['patient']}:"]
         for a in data["appointments"]:
-            lines.append(f"  • {a['date']} - {a['reason']} con {a['professional']} en {a['location']} ({a['status']})")
+            lines.append(
+                f"  • ID {a.get('id', '?')} — {a['date']} - {a['reason']} "
+                f"con {a['professional']} en {a['location']} ({a['status']})"
+            )
         return "\n".join(lines)
     except httpx.HTTPStatusError as e:
-        return f"❌ {e.response.json().get('detail', 'Paciente no encontrado')}"
+        detalle = e.response.json().get("detail", "Paciente no encontrado")
+        # No poder identificar a alguien no es un error del paciente: es un
+        # limite del sistema, y se resuelve derivando, no interrogandolo.
+        return f"❌ {detalle}" + _NO_APARECE
     except Exception as e:
-        return f"❌ Error: {str(e)}"
+        return f"❌ Error de conexión: {e}. Esto NO significa que no tenga turnos."
 
 
 def consultar_disponibilidad(
     motivo_confirmado_por_paciente: str,
-    location: str = "San Rafael",
+    location: str = "",
     date: str = "",
     obra_social: str = "Particular",
     preferencia_horaria: str = "",
@@ -728,7 +771,28 @@ def resumen_estado(estado: dict) -> str:
     return f"YA SABÉS TODO: {ya}. Podés agendar."
 
 
+def derivar_a_recepcion(motivo: str, resumen: str, datos_aportados: str = "") -> str:
+    """Deja la consulta para que la vea una persona de la clinica."""
+    payload = {
+        "motivo": motivo,
+        "resumen": resumen,
+        "datos_aportados": datos_aportados or None,
+        "requester_phone": _current_requester_phone(),
+    }
+    try:
+        r = httpx.post(f"{API_BASE}/api/bot/derivar", json=payload, headers=HEADERS, timeout=30)
+        r.raise_for_status()
+        return ("✅ La consulta quedó registrada para recepción. Recién AHORA podés "
+                "decirle al paciente que la dejaste anotada.")
+    except Exception as e:
+        # Importa que el modelo sepa que NO quedo registrada: prometer que se
+        # aviso cuando no se aviso es la promesa vacia que hay que evitar.
+        return (f"❌ NO se pudo registrar la consulta ({e}). NO le digas al paciente "
+                f"que quedó anotada. Pedile disculpas y sugerile llamar al consultorio.")
+
+
 _TOOL_MAP = {
+    "derivar_a_recepcion": derivar_a_recepcion,
     "agendar_turno": agendar_turno,
     "cancelar_turno": cancelar_turno,
     "reprogramar_turno": reprogramar_turno,
@@ -821,7 +885,7 @@ TOOL_DEFINITIONS = [
                         "type": "string",
                         "description": "Fecha y hora EXACTA en formato 'YYYY-MM-DD HH:MM' (ej: '2026-06-18 09:30'). OBLIGATORIO.",
                     },
-                    "location": {"type": "string", "description": "Sede (por defecto 'San Rafael')", "default": "San Rafael"},
+                    "location": {"type": "string", "description": "Sede. Dejar VACÍO: el consultorio tiene una sola y la resuelve el sistema."},
                     "insurance_name": {
                         "type": "string",
                         "description": "Obra Social (usar 'Particular' si no tiene)",
@@ -840,6 +904,15 @@ TOOL_DEFINITIONS = [
                             "ninguno en particular. Si lo pidió, es OBLIGATORIO pasarlo: "
                             "sin esto el turno se le asigna a quien esté libre, que puede "
                             "no ser el que el paciente pidió."
+                        ),
+                    },
+                    "preferencia_horaria": {
+                        "type": "string",
+                        "description": (
+                            "Lo que el paciente pidió sobre día y hora, TAL COMO lo dijo "
+                            "(ej: 'a la tarde, menos martes y jueves'). Se vuelve a "
+                            "verificar al crear el turno: sin esto se puede agendar un "
+                            "día que el paciente descartó."
                         ),
                     },
                 },
@@ -887,6 +960,50 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "derivar_a_recepcion",
+            "description": (
+                "Deja la consulta anotada para que la resuelva una persona de la "
+                "clínica. Usala cuando: el paciente pide hablar con alguien; dice "
+                "tener un turno que no aparece; no se puede verificar quién es para "
+                "consultar o cancelar; refiere dolor, una prótesis que lastima u otra "
+                "molestia; o falta un dato que no tenés (precio, alias, dirección). "
+                "🚫 NUNCA le digas que dejaste la consulta sin haber llamado a esta "
+                "herramienta y recibido ✅."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "motivo": {
+                        "type": "string",
+                        "enum": ["identidad", "pedido_de_persona", "clinico",
+                                 "dato_faltante", "otro"],
+                        "description": (
+                            "identidad: no se pudo verificar quién escribe. "
+                            "pedido_de_persona: pidió hablar con alguien. "
+                            "clinico: dolor, molestia, problema con un tratamiento. "
+                            "dato_faltante: falta un precio, alias o dato operativo."
+                        ),
+                    },
+                    "resumen": {
+                        "type": "string",
+                        "description": "Qué necesita, en una o dos frases y con sus palabras.",
+                    },
+                    "datos_aportados": {
+                        "type": "string",
+                        "description": (
+                            "Todo lo que el paciente ya dio y no se pudo verificar: "
+                            "nombre, DNI, fecha del turno que dice tener. Así no tiene "
+                            "que repetirlo cuando lo atienda recepción."
+                        ),
+                    },
+                },
+                "required": ["motivo", "resumen"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "consultar_mis_turnos",
             "description": "Consulta los turnos pendientes de un paciente.",
             "parameters": {
@@ -917,7 +1034,7 @@ TOOL_DEFINITIONS = [
                             "PROHIBIDO adivinar; si no lo dijo, preguntale primero."
                         ),
                     },
-                    "location": {"type": "string", "description": "Sede (por defecto 'San Rafael')", "default": "San Rafael"},
+                    "location": {"type": "string", "description": "Sede. Dejar VACÍO: el consultorio tiene una sola y la resuelve el sistema."},
                     "date": {
                         "type": "string",
                         "description": "Fecha opcional (YYYY-MM-DD). Si se omite, busca para hoy.",

@@ -335,6 +335,10 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.info(f"📎 Archivo {message_type} recibido de {ofuscar_telefono(remote_jid)}")
         if bot_silenciado(remote_jid):
             return {"status": "silenciado"}
+        # Un aviso por tanda, no uno por archivo. Mandar cuatro fotos seguidas
+        # devolvia cuatro veces el mismo texto: paso en vivo.
+        if not _corresponde_avisar(remote_jid):
+            return {"status": "aviso_ya_enviado"}
         background_tasks.add_task(
             send_whatsapp_message,
             remote_jid,
@@ -352,6 +356,8 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.info(f"⏭️ {message_type} recibido de {ofuscar_telefono(remote_jid)}")
         if bot_silenciado(remote_jid):
             return {"status": "silenciado"}
+        if not _corresponde_avisar(remote_jid):
+            return {"status": "aviso_ya_enviado"}
         background_tasks.add_task(
             send_whatsapp_message,
             remote_jid,
@@ -362,7 +368,7 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
 
     if text:
         logger.info(f"🤖 Procesando texto: {text}")
-        background_tasks.add_task(handle_text_message, remote_jid, text)
+        background_tasks.add_task(encolar_texto, remote_jid, text)
         return {"status": "processing_text"}
 
     logger.warning(f"⚠️ Tipo de mensaje no soportado: {message_type}")
@@ -423,6 +429,19 @@ def bot_silenciado(remote_jid: str) -> bool:
                 session.paused_until, ofuscar_telefono(remote_jid),
             )
             return True
+
+        # Venció la pausa pero quedó algo esperando a recepción. Reanudar la
+        # admisión ahí es contradecir a quien todavía no pudo atenderlo: el
+        # paciente escribió porque su problema sigue sin resolverse, y el bot
+        # volvería a ofrecerle turnos como si nada. Se calla hasta que recepción
+        # cierre el caso.
+        from backend.services.derivaciones import hay_pendiente
+        if hay_pendiente(db, remote_jid):
+            logger.info(
+                "⏸️ %s tiene una derivación sin resolver: el bot no reanuda solo.",
+                ofuscar_telefono(remote_jid),
+            )
+            return True
         return False
     except Exception as e:
         logger.error(f"Error verificando si el bot está pausado: {e}", exc_info=True)
@@ -450,6 +469,14 @@ async def _pausar_por_intervencion_humana(remote_jid: str, texto: str):
     responder cuando venza la pausa, sepa lo que ya le dijeron al paciente en
     vez de arrancar de cero y contradecir a la secretaria.
     """
+    # Recepcion tiene prioridad: lo que el bot este por decir queda invalidado
+    # en el acto. Sin esto, una respuesta ya generada salia igual encima de la
+    # secretaria, y un lote todavia en espera se contestaba despues.
+    nueva_version(remote_jid)
+    lote = _lotes.pop(remote_jid, None)
+    if lote and lote.get("tarea") and not lote["tarea"].done():
+        lote["tarea"].cancel()
+
     db = SessionLocal()
     try:
         session = get_or_create_session(db, remote_jid)
@@ -531,6 +558,48 @@ _SALUDO_SUELTO = re.compile(
     r"[^.!?\n]{0,40}?[!¡.,]+[\s\U0001F300-\U0001FAFF☀-➿]*",
     re.IGNORECASE,
 )
+
+
+# ── Cierres de conversación ─────────────────────────────────────────────────
+# "Gracias" después de un turno ya reservado, y "Ok" después de un recordatorio,
+# no son pedidos nuevos. El bot contestaba "¿En qué puedo ayudarte hoy?" y
+# arrancaba otra admisión, perdiendo el contexto de lo que acababa de pasar.
+
+_AGRADECE = re.compile(
+    r"^\s*(muchas\s+)?(gracias|graciasss*|mil\s+gracias|dale\s+gracias|"
+    r"ok+|ok(ay|ey|is)|listo|perfecto|barbaro|buenisimo|genial|de\s+una|"
+    r"joya|excelente|👍+|🙏+|😊+|✅+)"
+    r"[\s!\.,¡👍🙏😊🥰❤️✅]*$",
+    re.IGNORECASE,
+)
+
+_PIDE_ALGO_MAS = re.compile(
+    r"[?¿]|\b(turno|cancel|reprogram|cambiar|precio|cuanto|alias|direccion|"
+    r"donde|horario|necesito|quiero|puedo|me\s+pas|consulta)\b",
+    re.IGNORECASE,
+)
+
+
+def es_solo_un_cierre(texto: str) -> bool:
+    """Si el mensaje es solo un agradecimiento o un acuse, sin pedido nuevo.
+
+    "Gracias!! Que tengas un lindo día!!! ☺️" cierra la conversación.
+    "Gracias, ¿me pasás el alias?" NO: trae un pedido y hay que resolverlo.
+    """
+    limpio = _sin_acentos_simple(texto or "").strip()
+    if not limpio or len(limpio) > 80:
+        return False
+    if _PIDE_ALGO_MAS.search(limpio):
+        return False
+    return bool(_AGRADECE.match(limpio))
+
+
+def _sin_acentos_simple(texto: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto or "")
+        if unicodedata.category(c) != "Mn"
+    )
 
 
 def quitar_presentacion(texto: str) -> str:
@@ -637,23 +706,100 @@ async def _responder(remote_jid: str, texto: str, publicadas: dict | None):
 
     # Eleccion binaria (obra social / particular): botones, que se tocan sin
     # abrir ningun menu.
+    # send_whatsapp_* ya cae a texto por su cuenta si el interactivo falla, y
+    # devuelve False solo cuando no se pudo entregar NADA. Reenviar aca el
+    # texto ante un False producia dos mensajes identicos.
     if publicadas.get("tipo") == "botones" and 2 <= len(ofrecidas) <= 3:
-        if await send_whatsapp_buttons(remote_jid, texto, ofrecidas):
-            return
+        return await send_whatsapp_buttons(remote_jid, texto, ofrecidas)
 
     # Con una sola opcion una lista es mas incomoda que el texto.
     if len(ofrecidas) >= 2:
-        enviado = await send_whatsapp_list(
+        return await send_whatsapp_list(
             remote_jid, texto, ofrecidas,
             boton=publicadas.get("boton") or "Elegir horario",
             titulo=publicadas.get("titulo") or "Horarios disponibles",
         )
-        if enviado:
-            return
-    await send_whatsapp_message(remote_jid, texto)
+    return await send_whatsapp_message(remote_jid, texto)
 
 
-async def handle_text_message(remote_jid: str, text: str):
+# ── Agrupamiento de ráfagas ─────────────────────────────────────────────────
+# La gente escribe por partes: "Hola Mimi" / "Cómo estás?" / "Para cuándo tenés
+# turno?". Cada mensaje disparaba una respuesta completa e independiente, así
+# que llegaban tres, cruzadas entre sí —la respuesta a "cómo estás" DESPUÉS de
+# la del turno— y a veces repitiendo la misma pregunta.
+#
+# Ahora se espera un silencio corto y se contesta al conjunto. El tope existe
+# para que alguien que escribe sin parar reciba respuesta igual.
+
+SILENCIO_ANTES_DE_RESPONDER = 3.0   # segundos sin escribir
+ESPERA_MAXIMA = 10.0                # desde la primera parte del lote
+
+_lotes: dict[str, dict] = {}
+# Cada parte nueva y cada intervención humana suben la versión. Una respuesta
+# que se generó para una versión vieja ya no corresponde: quedó contestando algo
+# que la persona corrigió.
+_version_conversacion: dict[str, int] = {}
+
+
+def version_actual(remote_jid: str) -> int:
+    return _version_conversacion.get(remote_jid, 0)
+
+
+def nueva_version(remote_jid: str) -> int:
+    v = version_actual(remote_jid) + 1
+    _version_conversacion[remote_jid] = v
+    return v
+
+
+# Cuando se aviso por ultima vez que no se puede leer un archivo. Un mensaje
+# repetido cuatro veces es peor que no contestar.
+VENTANA_DE_AVISO = 60.0   # segundos
+_ultimo_aviso: dict[str, float] = {}
+
+
+def _corresponde_avisar(remote_jid: str) -> bool:
+    ahora = time.monotonic()
+    if ahora - _ultimo_aviso.get(remote_jid, -VENTANA_DE_AVISO) < VENTANA_DE_AVISO:
+        return False
+    _ultimo_aviso[remote_jid] = ahora
+    return True
+
+
+async def encolar_texto(remote_jid: str, text: str):
+    """Suma una parte al lote y reinicia la espera."""
+    nueva_version(remote_jid)
+    lote = _lotes.get(remote_jid)
+    if lote is None:
+        lote = _lotes[remote_jid] = {"partes": [], "desde": time.monotonic(), "tarea": None}
+    lote["partes"].append(text)
+
+    if lote["tarea"] and not lote["tarea"].done():
+        lote["tarea"].cancel()
+    lote["tarea"] = asyncio.create_task(_responder_al_lote(remote_jid))
+
+
+async def _responder_al_lote(remote_jid: str):
+    lote = _lotes.get(remote_jid)
+    if lote is None:
+        return
+    transcurrido = time.monotonic() - lote["desde"]
+    espera = max(0.0, min(SILENCIO_ANTES_DE_RESPONDER, ESPERA_MAXIMA - transcurrido))
+    try:
+        await asyncio.sleep(espera)
+    except asyncio.CancelledError:
+        return  # llegó otra parte: la responde el lote nuevo
+
+    lote = _lotes.pop(remote_jid, None)
+    if not lote or not lote["partes"]:
+        return
+    partes = lote["partes"]
+    if len(partes) > 1:
+        logger.info("🧵 %s mensajes de %s agrupados en uno",
+                    len(partes), ofuscar_telefono(remote_jid))
+    await handle_text_message(remote_jid, "\n".join(partes), partes=partes)
+
+
+async def handle_text_message(remote_jid: str, text: str, partes: list[str] | None = None):
     # Acquire lock for this user
     if remote_jid not in user_locks:
         user_locks[remote_jid] = asyncio.Lock()
@@ -683,8 +829,14 @@ async def handle_text_message(remote_jid: str, text: str):
                 return
 
             history = load_history(db, session.id)
-            
-            save_message(db, session.id, MessageRole.user, text)
+
+            # El historial guarda cada parte tal como la escribió la persona;
+            # al modelo se le pasa el conjunto. Si se guardara solo el texto
+            # unido, la conversación quedaría registrada distinto de como pasó.
+            for parte in (partes or [text]):
+                save_message(db, session.id, MessageRole.user, parte)
+
+            version = version_actual(remote_jid)
             
             if get_config("BOT_IS_ACTIVE", "true") == "false":
                 logger.info(f"⏸️ Bot pausado (global). Mensaje de {remote_jid} guardado, sin responder.")
@@ -722,6 +874,13 @@ async def handle_text_message(remote_jid: str, text: str):
             )
             logger.info(f"🤖 IA respondió: {response[:50]}...")
 
+            # 0) Un cierre no reabre nada. Si el paciente solo agradeció o
+            # acusó recibo, se responde corto y no se consulta ninguna
+            # herramienta ni se vuelve a enumerar el turno.
+            if es_solo_un_cierre(text) and history:
+                response = "¡De nada! Cualquier cosa, escribime. 😊"
+                opciones = None
+
             # 1) Si la charla ya venía empezada, no se vuelve a presentar.
             if history:
                 response = quitar_presentacion(response)
@@ -745,6 +904,32 @@ async def handle_text_message(remote_jid: str, text: str):
             estado_nuevo = dict(estado_nuevo or {})
             estado_nuevo[CLAVE_ULTIMAS_OPCIONES] = _firma_opciones(opciones)
             _guardar_estado(db, session, estado_nuevo)
+
+            # La pausa se chequeo al entrar, pero la llamada al modelo tarda
+            # segundos: en ese rato la secretaria puede haber tomado el chat.
+            # Con un solo chequeo al principio, su intervencion no evitaba que
+            # despues saliera la respuesta del bot encima. Se vuelve a mirar
+            # aca, contra la base, antes de guardar y enviar.
+            db.refresh(session)
+            if bot_silenciado(remote_jid) or (
+                session.paused_until and session.paused_until > datetime.utcnow()
+            ):
+                logger.info(
+                    "⏸️ La conversación %s pasó a atención humana mientras se "
+                    "generaba la respuesta: no se envía.", remote_jid,
+                )
+                return
+
+            # Llegó otro mensaje mientras se generaba: esta respuesta contesta
+            # algo que la persona ya corrigió ("11" / "perdón, 12"). La descarta
+            # el lote nuevo, que sí tiene el mensaje completo.
+            if version_actual(remote_jid) != version:
+                logger.info(
+                    "↩️ %s escribió de nuevo mientras se generaba la respuesta: "
+                    "se descarta la vieja.", ofuscar_telefono(remote_jid),
+                )
+                return
+
             save_message(db, session.id, MessageRole.assistant, response)
             await _responder(remote_jid, response, opciones)
         except Exception as e:
@@ -765,7 +950,9 @@ async def handle_text_message(remote_jid: str, text: str):
 async def handle_audio_message(remote_jid: str, url: str):
     text = await transcribe_audio_url(url)
     if text:
-        await handle_text_message(remote_jid, f"[Audio Transcrito]: {text}")
+        # Tambien por el agrupador: un audio seguido de un texto que lo
+        # corrige tienen que contestarse juntos.
+        await encolar_texto(remote_jid, f"[Audio Transcrito]: {text}")
     elif not bot_silenciado(remote_jid):
         # El aviso de "no pude procesar tu audio" tambien es una respuesta del
         # bot: si esta pausado, tampoco corresponde mandarlo.

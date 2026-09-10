@@ -50,3 +50,6 @@ artifacts/
 
 # Datos de pacientes (PII) - nunca subir al repo
 imagenes-turnos/
+
+# Backups de la base: tienen datos de pacientes.
+backups/

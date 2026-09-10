@@ -346,23 +346,78 @@ def get_chairs_per_location(db: Session) -> int:
         return 1
 
 
+def sede_por_defecto(db: Session) -> str | None:
+    """El nombre de la unica sede activa, o None si hay varias.
+
+    El consultorio tiene una sola sede. El bot, sin embargo, traia
+    "San Rafael" escrito a mano en cuatro lugares, mientras la agenda real se
+    cargaba como "Silprodent": dos nombres para el mismo lugar, dos agendas
+    separadas, y el bot ofreciendo como libres horarios ya tomados.
+
+    Con una sola sede activa el backend la resuelve solo y el bot no puede
+    equivocarse. Si algun dia hay dos, esto devuelve None y el parametro vuelve
+    a mandar.
+    """
+    from backend.models.clinic_location import ClinicLocation
+
+    activas = db.query(ClinicLocation).filter(
+        ClinicLocation.is_active == True,   # noqa: E712
+        ClinicLocation.is_deleted == False,  # noqa: E712
+    ).all()
+    return activas[0].name if len(activas) == 1 else None
+
+
+def sede_efectiva(db: Session, pedida: str | None) -> str | None:
+    """La sede que corresponde usar, mande lo que mande quien llama.
+
+    Con una sola sede activa, esa gana siempre: es la unica que existe, y
+    aceptar otro nombre solo sirve para volver a partir la agenda.
+    """
+    unica = sede_por_defecto(db)
+    if unica:
+        return unica
+    return pedida
+
+
+def misma_sede(a: str | None, b: str | None) -> bool:
+    """Si dos nombres de sede se refieren al mismo lugar.
+
+    La comparacion era `location == location` a secas, y eso partio la agenda
+    en dos: la misma sede esta cargada como "San Rafael" (382 turnos),
+    "Silprodent" (194) y "Silproden" (16, con la 't' faltante). El bot agenda
+    siempre en "San Rafael", asi que no veia el 87% de los turnos futuros y
+    ofrecia como libres horarios ya tomados. Paso de verdad: el turno del
+    01/09 a las 11:00 se agendo encima de uno de 10:30 a 11:30 cargado como
+    "Silprodent".
+
+    Una sede en NULL cuenta como cualquiera: son los turnos que se cargaron
+    antes de que el formulario pidiera sede, y contarlos como ocupados es lo
+    conservador.
+
+    Esto NO unifica sedes distintas de verdad: solo hace que una diferencia de
+    mayusculas, acentos, espacios o un typo deje de crear una agenda paralela.
+    """
+    if a is None or b is None:
+        return True
+    return _sin_acentos(" ".join(a.split())).lower() == _sin_acentos(" ".join(b.split())).lower()
+
+
 def get_day_appointments(db: Session, day, location: str | None):
     """Turnos activos de una sede en un dia, para calcular ocupacion.
 
-    Incluye los que tienen la sede en NULL: son los que se cargaron desde el
-    panel antes de que el formulario pidiera sede, y en SQL `location = 'X'`
-    nunca matchea NULL, asi que quedaban invisibles y se ofrecian horarios ya
-    tomados. Contarlos como ocupados es lo conservador.
+    El filtro por sede se hace en Python y no en SQL para poder normalizar el
+    nombre: ver misma_sede(). Un dia tiene pocas decenas de turnos, asi que
+    traerlos y filtrarlos no cambia nada en la practica.
     """
     start_of_day = datetime.combine(day, py_time(0, 0))
     end_of_day = datetime.combine(day, py_time(23, 59, 59))
-    return db.query(Appointment).filter(
-        or_(Appointment.location == location, Appointment.location.is_(None)),
+    del_dia = db.query(Appointment).filter(
         Appointment.is_deleted == False,
         Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
         Appointment.start_time >= start_of_day,
         Appointment.start_time <= end_of_day,
     ).all()
+    return [a for a in del_dia if misma_sede(a.location, location)]
 
 
 def overlapping_appointments(appointments, start: datetime, duration_minutes: int, exclude_id=None):
@@ -728,6 +783,7 @@ def create_appointment_logic(
     duration_minutes: int = 30,
     requester_phone: str = None,
     profesional_pedido: str = None,
+    preferencia_horaria: str = None,
 ):
     # Garantia dura: si la obra social no esta entre las activas, el turno se
     # agenda como Particular. El prompt le pide al modelo que lo verifique con
@@ -746,6 +802,16 @@ def create_appointment_logic(
         start = datetime.fromisoformat(preferred_date.strip())
     except Exception:
         return {"error": f"Formato de fecha inválido: '{preferred_date}'. Usar formato YYYY-MM-DD HH:MM."}
+
+    # Las restricciones se verifican TAMBIEN al crear, no solo al ofrecer.
+    # Validarlas en un solo lado deja pasar el turno si el modelo elige una
+    # fecha por su cuenta: es lo que produjo el turno del martes que la
+    # paciente habia descartado.
+    excluidos = dias_excluidos(preferencia_horaria)
+    if start.weekday() in excluidos:
+        nombre = DIAS_SEMANA[start.weekday()] if start.weekday() < len(DIAS_SEMANA) else ""
+        return {"error": f"El paciente pidió que no fuera {nombre}. "
+                         f"Ofrecele un día que sí le sirva."}
 
     candidatos = find_professionals_for_reason(reason, db)
     if not candidatos:
@@ -945,6 +1011,40 @@ def _franjas_del_profesional(db: Session, professional_id, weekday: int, clinic_
     return _intersectar_franjas(clinic_shifts, del_dia)
 
 
+DIAS_POR_NOMBRE = {
+    "lunes": 0, "martes": 1, "miercoles": 2, "jueves": 3,
+    "viernes": 4, "sabado": 5, "domingo": 6,
+}
+
+
+def dias_excluidos(preferencia) -> set[int]:
+    """Los dias de la semana que el paciente descarto explicitamente.
+
+    "a la tarde, menos martes y jueves" -> {1, 3}
+
+    Paso en produccion: una paciente pidio exactamente eso y el turno quedo el
+    martes. La franja horaria si se respetaba —hay codigo para eso— pero la
+    exclusion de dias no tenia por donde entrar, asi que se ignoraba entera.
+
+    Es una restriccion DURA: se mantiene hasta que la persona la cambie. Solo
+    cuenta lo que viene despues de "menos", "excepto", "salvo" o "sin"; en
+    "martes o jueves" esos dias son lo que quiere, no lo que descarta.
+    """
+    if not preferencia:
+        return set()
+    texto = _sin_acentos(str(preferencia)).lower()
+
+    marcas = ("menos ", "excepto ", "salvo ", "sin ", "que no sea ", "no puedo ")
+    posiciones = [texto.find(m) + len(m) for m in marcas if m in texto]
+    if not posiciones:
+        return set()
+
+    # Desde la primera marca de exclusion hasta el final: "menos martes y
+    # jueves" descarta los dos, no solo el primero.
+    cola = texto[min(posiciones):]
+    return {n for dia, n in DIAS_POR_NOMBRE.items() if dia in cola}
+
+
 def interpretar_preferencia(preferencia):
     """Traduce lo que pidio el paciente a un rango (desde, hasta) en minutos.
 
@@ -953,21 +1053,35 @@ def interpretar_preferencia(preferencia):
     """
     if not preferencia:
         return None
-    p = _sin_acentos(str(preferencia)).strip()
+    p = _sin_acentos(str(preferencia)).strip().lower()
     if not p:
         return None
-    if "manana" in p or "temprano" in p:
-        return (0, 12 * 60 + 30)
+
+    # "mañana a la tarde" son dos cosas distintas: el DIA de mañana y la franja
+    # de la tarde. Sin esto, la palabra "manana" ganaba y se le ofrecia la
+    # manana a alguien que habia pedido la tarde. El dia lo resuelve la fecha;
+    # aca solo interesa la franja.
     if "tarde" in p or "noche" in p:
         return (12 * 60 + 30, 24 * 60)
+    if "manana" in p or "temprano" in p:
+        return (0, 12 * 60 + 30)
 
     # "despues de las 18:45", "18:45", "18hs", "a las 18"
     import re as _re
-    m = _re.search(r"(\d{1,2})(?:[:.](\d{2}))?", p)
+    # Una fecha ("despues del 16", "el 16 de septiembre") no es una hora. Se
+    # descartan los numeros que vienen precedidos por "del"/"el" y los que
+    # siguen a un dia del mes, salvo que traigan minutos o "hs"/":".
+    m = _re.search(r"(?:a las?\s+)?(\d{1,2})[:.](\d{2})", p)
+    if not m:
+        # Exige "la/las" delante: eso distingue una hora ("de las 17") de una
+        # fecha ("del 16"), que era justamente lo que se confundia.
+        m = _re.search(r"\b(?:a|de|desde|hasta|antes de|despues de)\s+las?\s+(\d{1,2})\b", p)
+    if not m:
+        m = _re.search(r"\b(\d{1,2})\s*(?:hs|hrs|horas?)\b", p)
     if not m:
         return None
     hora = int(m.group(1))
-    minuto = int(m.group(2) or 0)
+    minuto = int(m.group(2) if m.lastindex and m.lastindex > 1 else 0)
     if hora > 23 or minuto > 59:
         return None
     desde = hora * 60 + minuto
@@ -1070,7 +1184,17 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         }
 
     weekday = day.weekday() # 0=Mon, 2=Wed
-        
+
+    # Dias que el paciente descarto ("menos martes y jueves"). Es una
+    # restriccion dura: no se afloja sola. Si no queda ningun dia, el que
+    # llama se entera por el mensaje, no ofreciendole un dia que no queria.
+    excluidos = dias_excluidos(preferencia_horaria)
+    if weekday in excluidos:
+        if recursive_depth < 14:
+            nombre = DIAS_SEMANA[weekday] if weekday < len(DIAS_SEMANA) else ""
+            return siguiente(f"pediste que no fuera {nombre}")
+        return respuesta([], "No hay turnos en los días que pediste.")
+
     # Regla PAMI: solo viernes
     if obra_social and obra_social.upper() == "PAMI" and weekday != 4:
         if recursive_depth < 14:

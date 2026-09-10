@@ -156,6 +156,12 @@ const API = {
     contarPatients(q = '') {
         return this.get(`/clinic/patients/count${q ? `?q=${encodeURIComponent(q)}` : ''}`);
     },
+    getDerivaciones(incluirResueltas = false) {
+        return this.get(`/clinic/derivaciones${incluirResueltas ? '?incluir_resueltas=true' : ''}`);
+    },
+    resolverDerivacion(id, datos) {
+        return this.post(`/clinic/derivaciones/${id}/resolver`, datos);
+    },
     getPatient(id) { return this.get(`/clinic/patients/${id}`); },
     createPatient(data) { return this.post('/clinic/patients', data); },
     updatePatient(id, data) { return this.put(`/clinic/patients/${id}`, data); },

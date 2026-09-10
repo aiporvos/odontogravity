@@ -5,11 +5,14 @@ from fastapi import Body, APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
+from pydantic import BaseModel
+from typing import Optional
 import os
 import logging
 
 from backend.database import get_db
 from backend.services.appointment_service import (
+    sede_efectiva,
     create_appointment_logic, get_available_slots, route_professional,
     find_professionals_for_reason, motivo_no_agendable, duracion_para_motivo,
     get_clinic_now, profesional_libre,
@@ -383,6 +386,20 @@ def _validar_dni_y_telefono(dni, phone, requester_phone):
     return d
 
 
+def _es_la_misma_persona(ficha, nombre: str | None, apellido: str | None) -> bool:
+    """Si el nombre que paso el bot es el de esa ficha (o no vino ninguno).
+
+    Sin nombre, el turno es para quien ya usa el telefono: es el caso normal.
+    Con un nombre distinto, es otra persona aunque comparta el numero.
+    """
+    from backend.services.appointment_service import _nombre_normalizado
+
+    pedido = _nombre_normalizado(nombre, apellido)
+    if not pedido:
+        return True
+    return pedido == _nombre_normalizado(ficha.first_name, ficha.last_name)
+
+
 @router.post("/appointments", dependencies=[Depends(verify_bot_key)])
 def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(get_db)):
     # Paciente que ya existe: no hace falta que tipee nada. Si el numero de
@@ -392,12 +409,43 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
     apellido = data.patient_last_name
     if not (data.dni or "").strip():
         conocido, opciones = resolver_paciente(db, None, data.requester_phone)
-        if conocido:
+        # El DNI de la ficha del telefono se reutiliza SOLO si el turno es para
+        # esa misma persona. Antes se tomaba siempre, aunque el bot hubiera
+        # pasado otro nombre: como el alta busca primero por DNI, el turno del
+        # familiar terminaba cargado en la ficha del dueño del telefono, y su
+        # historia clinica se mezclaba con la de otro.
+        #
+        # Un telefono es un contacto, no un paciente: en una familia lo comparten.
+        if conocido and _es_la_misma_persona(conocido, nombre, apellido):
             dni_normalizado = conocido.dni
             nombre = nombre or conocido.first_name
             apellido = apellido or conocido.last_name
+        elif conocido and (nombre or "").strip() and (apellido or "").strip():
+            # Turno para otra persona desde el mismo telefono: ficha propia, sin
+            # heredar el DNI. Queda pendiente para que lo cargue recepcion.
+            dni_normalizado = None
+        elif conocido:
+            raise HTTPException(400, (
+                "Este número ya tiene una ficha. Si el turno es para esa misma "
+                "persona no hace falta nada más; si es para otra, preguntale "
+                "UNA sola cosa: a nombre de quién agendás el turno."
+            ))
         elif opciones:
-            raise HTTPException(400, _elegir_entre(opciones))
+            # Varias personas comparten el numero. Si el bot ya dijo de quien es
+            # el turno, no hay nada que preguntar: se busca entre ellas.
+            elegida = next(
+                (o for o in opciones if _es_la_misma_persona(o, nombre, apellido)),
+                None,
+            ) if (nombre or "").strip() and (apellido or "").strip() else None
+            if elegida is not None:
+                dni_normalizado = elegida.dni
+                nombre = nombre or elegida.first_name
+                apellido = apellido or elegida.last_name
+            elif (nombre or "").strip() and (apellido or "").strip():
+                # Una tercera persona del mismo grupo familiar: ficha propia.
+                dni_normalizado = None
+            else:
+                raise HTTPException(400, _elegir_entre(opciones))
         elif (nombre or "").strip() and (apellido or "").strip():
             # Paciente nuevo con nombre y apellido: alcanza para reservar. El
             # DNI queda pendiente y lo completa recepcion cuando llega, con el
@@ -421,13 +469,14 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
         dni=dni_normalizado,
         phone=data.phone,
         reason=data.reason,
-        location=data.location,
+        location=sede_efectiva(db, data.location),
         insurance_name=data.insurance_name,
         preferred_date=data.preferred_date,
         duration_minutes=data.duration_minutes,
         channel=AppointmentChannel.bot_whatsapp,
         requester_phone=data.requester_phone,
         profesional_pedido=data.profesional_pedido,
+        preferencia_horaria=data.preferencia_horaria,
     )
     if "error" in result:
         raise HTTPException(404, result["error"])
@@ -759,13 +808,48 @@ def bot_verificar_obra_social(data: dict = Body(...), db: Session = Depends(get_
     }
 
 
+class BotDerivarRequest(BaseModel):
+    motivo: str
+    resumen: str
+    datos_aportados: Optional[str] = None
+    requester_phone: Optional[str] = None
+
+
+@router.post("/derivar", dependencies=[Depends(verify_bot_key)])
+def bot_derivar(data: BotDerivarRequest, db: Session = Depends(get_db)):
+    """Deja el caso para recepcion y devuelve si quedo registrado.
+
+    El bot solo puede decirle al paciente que dejo la consulta si esto
+    respondio ok. Antes "ya avisé" significaba nada mas que el bot se callaba.
+    """
+    from backend.models.derivacion import MotivoDerivacion
+    from backend.services.derivaciones import crear_derivacion
+
+    try:
+        motivo = MotivoDerivacion(data.motivo)
+    except ValueError:
+        motivo = MotivoDerivacion.otro
+
+    telefono = data.requester_phone or ""
+    jid = telefono if "@" in telefono else f"{''.join(filter(str.isdigit, telefono))}@s.whatsapp.net"
+
+    d = crear_derivacion(db, jid, motivo, data.resumen,
+                         data.datos_aportados, telefono)
+    if not d:
+        raise HTTPException(500, "No se pudo registrar la consulta para recepción.")
+    return {"status": "ok", "derivacion_id": str(d.id), "motivo": motivo.value}
+
+
 @router.post("/availability", dependencies=[Depends(verify_bot_key)])
 def bot_get_availability(data: BotAvailabilityRequest, db: Session = Depends(get_db)):
     # Always use Argentina timezone (UTC-3) as the reference date, never UTC
     from backend.services.appointment_service import get_clinic_now
     argentina_now = get_clinic_now()
     target_date = data.date if data.date else argentina_now.date().isoformat()
-    return get_available_slots(db, target_date, data.location, data.reason,
+    # La sede la resuelve el backend: con una sola activa, lo que mande el bot
+    # no puede partir la agenda en dos.
+    from backend.services.appointment_service import sede_efectiva
+    return get_available_slots(db, target_date, sede_efectiva(db, data.location), data.reason,
                               data.obra_social,
                               preferencia_horaria=data.preferencia_horaria,
                               profesional_pedido=data.profesional_pedido)
