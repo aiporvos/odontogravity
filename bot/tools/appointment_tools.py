@@ -400,44 +400,46 @@ def consultar_mis_turnos(dni: str = "") -> str:
         return f"❌ Error de conexión: {e}. Esto NO significa que no tenga turnos."
 
 
-def _profesional_en_lo_dicho() -> str:
-    """El profesional que el paciente nombro, buscando en lo que dijo.
+def _profesional_en(texto: str) -> str:
+    """El profesional que nombra ese texto, resuelto contra las fichas cargadas.
 
-    Se resuelve contra las fichas cargadas, no con una lista escrita a mano:
-    si mañana entra otro profesional, esto lo reconoce igual.
+    Contra las fichas y no contra una lista escrita a mano: si mañana entra
+    otro profesional, esto lo reconoce igual.
     """
     from backend.database import SessionLocal
     from backend.services.appointment_service import buscar_profesional
 
+    if not (texto or "").strip():
+        return ""
     db = SessionLocal()
     try:
-        for dicho in reversed(_dichos_por_el_paciente.get() or (_ultimo_mensaje.get(),)):
-            if not dicho:
-                continue
-            encontrado = buscar_profesional(db, dicho)
-            if encontrado:
-                return encontrado.full_name
-        return ""
+        encontrado = buscar_profesional(db, texto)
+        return encontrado.full_name if encontrado else ""
     except Exception:
         return ""
     finally:
         db.close()
 
 
-def _fecha_en_lo_dicho() -> str:
-    """El dia que pidio el paciente, en YYYY-MM-DD, o vacio."""
+def _fecha_en(texto: str) -> str:
+    """El dia que nombra ese texto, en YYYY-MM-DD, o vacio."""
     from backend.services.appointment_service import fecha_dicha_por_el_paciente
 
     try:
-        for dicho in reversed(_dichos_por_el_paciente.get() or (_ultimo_mensaje.get(),)):
-            if not dicho:
-                continue
-            fecha = fecha_dicha_por_el_paciente(dicho)
-            if fecha:
-                return fecha.isoformat()
-        return ""
+        fecha = fecha_dicha_por_el_paciente(texto)
+        return fecha.isoformat() if fecha else ""
     except Exception:
         return ""
+
+
+def _buscando_en_todo(extraer) -> str:
+    """Lo mas reciente que el paciente dijo al respecto en toda la charla."""
+    for dicho in reversed(_dichos_por_el_paciente.get() or (_ultimo_mensaje.get(),)):
+        if not dicho:
+            continue
+        if valor := extraer(dicho):
+            return valor
+    return ""
 
 
 def consultar_disponibilidad(
@@ -468,15 +470,34 @@ def consultar_disponibilidad(
                 preferencia_horaria = franja
                 break
 
-    # El profesional y el dia salen del texto del paciente si el modelo no los
-    # reenvio. Sin esto, "y para silvestro el lunes??" se consultaba como una
-    # busqueda generica —o no se consultaba— y el modelo inventaba la respuesta:
-    # cada profesional atiende dias distintos, asi que la consulta sin
-    # profesional devuelve horarios que no son de quien se pidio.
-    if not (profesional or "").strip():
-        profesional = _profesional_en_lo_dicho() or ""
-    if not (date or "").strip():
-        date = _fecha_en_lo_dicho() or ""
+    # ── El profesional y el dia los decide el paciente, no el modelo ──────
+    #
+    # Conversacion real del 10/09:
+    #
+    #   paciente: quiero un turno con Murad para el jueves
+    #   paciente: extraccion
+    #   bot:      no hay disponibilidad para extracción el martes 15...
+    #             pero tengo turnos para el miércoles 16 a las 10:30...
+    #
+    # El paciente dijo JUEVES y el modelo mando date=2026-09-15, que era
+    # martes. Y no mando el profesional, asi que la busqueda salio generica y
+    # devolvio los horarios del otro profesional. Reproducido: con esos dos
+    # parametros, el backend produce ese mensaje palabra por palabra.
+    #
+    # Lo que el paciente dijo EN ESTE MENSAJE gana sobre lo que mande el
+    # modelo. Lo que dijo antes solo completa si el modelo no mando nada: si no,
+    # un "jueves" de tres mensajes atras pisaria el dia que acaba de aceptar.
+    ahora = _ultimo_mensaje.get() or ""
+
+    if prof_ahora := _profesional_en(ahora):
+        profesional = prof_ahora
+    elif not (profesional or "").strip():
+        profesional = _buscando_en_todo(_profesional_en)
+
+    if fecha_ahora := _fecha_en(ahora):
+        date = fecha_ahora
+    elif not (date or "").strip():
+        date = _buscando_en_todo(_fecha_en)
 
     if not (_estado_conversacion.get() or {}).get("motivo"):
         return (
