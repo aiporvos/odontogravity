@@ -190,6 +190,38 @@ def _texto_parece_busqueda(texto: str) -> str:
 # vez de texto. Mismo patron que _requester_phone: contextvar por conversacion.
 _opciones_ofrecidas: contextvars.ContextVar = contextvars.ContextVar("opciones_ofrecidas", default=None)
 
+# Lo que consultar_disponibilidad devolvio de verdad en este turno.
+#
+# Existe porque el modelo escribio horarios y fechas que ninguna herramienta le
+# habia dado. Conversacion real del 10/09: le ofrecio al paciente "el lunes 12
+# de septiembre" —que era sabado— y despues, cuando pregunto por la Dra. Murad,
+# repitio los horarios del Dr. Silvestro sin volver a consultar. Murad no
+# atiende los miercoles.
+#
+# Con esto, lo que sale por WhatsApp se puede comparar contra lo que el sistema
+# realmente respondio.
+_disponibilidad_del_turno: contextvars.ContextVar = contextvars.ContextVar(
+    "disponibilidad_del_turno", default=None)
+
+
+def reiniciar_disponibilidad():
+    _disponibilidad_del_turno.set([])
+
+
+def registrar_disponibilidad(profesional, fecha_iso, fecha_texto, slots):
+    actuales = list(_disponibilidad_del_turno.get() or [])
+    actuales.append({
+        "profesional": profesional or "",
+        "fecha": fecha_iso or "",
+        "fecha_texto": fecha_texto or "",
+        "slots": list(slots or []),
+    })
+    _disponibilidad_del_turno.set(actuales)
+
+
+def disponibilidad_consultada():
+    return list(_disponibilidad_del_turno.get() or [])
+
 
 def set_opciones_ofrecidas(opciones, siempre: bool = False,
                            titulo: str | None = None, boton: str | None = None,
@@ -427,6 +459,10 @@ def consultar_disponibilidad(
 
         # Se publican para que el webhook pueda ofrecerlos como lista tocable.
         set_opciones_ofrecidas(slots)
+        # Y se registra lo que se devolvio, para poder verificar despues que el
+        # mensaje al paciente no diga horarios ni fechas que nadie le dio.
+        registrar_disponibilidad(
+            data.get("professional"), date_iso, fecha_texto, slots)
 
         aviso = ""
         if data.get("salto_sin_explicar"):
@@ -455,7 +491,11 @@ def consultar_disponibilidad(
             f"Al escribirle al paciente usá EXACTAMENTE '{fecha_texto}'. PROHIBIDO calcular vos "
             f"el día de la semana. Cuando elija un horario, combiná {date_iso} con ese horario "
             f"para formar preferred_date en formato YYYY-MM-DD HH:MM. "
-            f"NO llames a esta herramienta de nuevo."
+            f"No la vuelvas a llamar para LO MISMO. Pero SÍ tenés que llamarla de "
+            f"nuevo si cambia el profesional, el motivo, la fecha o la franja: "
+            f"cada profesional atiende días distintos, así que estos horarios NO "
+            f"valen para otro. 🚫 PROHIBIDO reusar estos horarios para responder "
+            f"por otro profesional."
         )
     except Exception as e:
         return f"Error consultando disponibilidad: {e}"

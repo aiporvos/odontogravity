@@ -14,6 +14,7 @@ from bot.tools.appointment_tools import (
     TOOL_DEFINITIONS, execute_tool, set_requester_phone, tomar_opciones_ofrecidas,
     set_estado_conversacion, get_estado_conversacion, resumen_estado,
     set_ultimo_mensaje, set_dichos_por_el_paciente,
+    reiniciar_disponibilidad, disponibilidad_consultada,
 )
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
@@ -1314,6 +1315,118 @@ def chat(user_message: str, history: list[dict] | None = None,
         "directamente."
     )
 
+    # ── Los horarios que salen tienen que ser los que devolvio el sistema ──
+    #
+    # Conversacion real del 10/09, con el bot ya corregido:
+    #
+    #   paciente: lunes
+    #   bot:      No hay disponibilidad para el lunes 12 de septiembre. Pero
+    #             tengo turnos para el miércoles 16 a las 10:30, 11:30 o 12:00.
+    #   paciente: y para la doctora murad?
+    #   bot:      Para la Dra. Murad, tengo disponibilidad el miércoles 16 a las
+    #             10:30, 11:30 o 12:00.
+    #
+    # Tres inventos en dos mensajes: el 12 de septiembre era SABADO, no lunes;
+    # la segunda respuesta no consulto nada —el log tiene UNA sola llamada a
+    # /availability en toda la conversacion— y Murad no atiende los miercoles.
+    #
+    # El agregar el parametro `profesional` no alcanzo: era un pedido, no una
+    # garantia. Esto compara lo que sale con lo que el sistema realmente
+    # devolvio, y si no coincide no sale.
+
+    def _sin_tildes(texto: str) -> str:
+        import unicodedata
+        return "".join(
+            c for c in unicodedata.normalize("NFD", texto or "")
+            if unicodedata.category(c) != "Mn"
+        )
+
+    _OFRECE_HORARIOS = re.compile(
+        r"(tengo|hay|queda[nr]?|disponibilidad|disponibles?|turnos?\s+para|"
+        r"horarios?)", re.IGNORECASE,
+    )
+    _HORA = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
+
+    def _horarios_inventados(texto: str, consultado: list) -> list[str]:
+        """Los horarios del mensaje que ninguna herramienta devolvio."""
+        if not texto or not _OFRECE_HORARIOS.search(texto):
+            return []
+        dichos = {f"{int(h):02d}:{m}" for h, m in _HORA.findall(texto)}
+        if not dichos:
+            return []
+        reales = {s for d in consultado for s in d.get("slots", [])}
+        return sorted(dichos - reales)
+
+    def _apellidos_activos() -> set[str]:
+        """Los apellidos de los profesionales, para reconocerlos en el texto."""
+        tratamientos = {"dr", "dra", "doctor", "doctora", "de", "la", "el", "del"}
+        db = SessionLocal()
+        try:
+            from backend.models.professional import Professional
+            activos = db.query(Professional).filter(
+                Professional.is_deleted == False,  # noqa: E712
+                Professional.is_active == True,    # noqa: E712
+            ).all()
+            return {
+                palabra
+                for p in activos
+                for palabra in _sin_tildes(p.full_name).lower().split()
+                if palabra not in tratamientos and len(palabra) >= 4
+            }
+        except Exception:
+            return set()
+        finally:
+            db.close()
+
+    def _atribucion_falsa(texto: str, consultado: list) -> str | None:
+        """El profesional que el mensaje nombra sin haberlo consultado.
+
+        Es el caso exacto del 10/09: los horarios eran REALES —los de
+        Silvestro— pero el mensaje los presentaba como de la Dra. Murad, que no
+        atiende ese dia. Verificar los horarios no alcanza cuando el invento
+        esta en a quien se le atribuyen.
+        """
+        if not texto or not _OFRECE_HORARIOS.search(texto) or not _HORA.search(texto):
+            return None
+
+        palabras = set(_sin_tildes(texto).lower().replace(",", " ").replace(".", " ").split())
+        nombrados = palabras & _apellidos_activos()
+        if not nombrados:
+            return None   # no le atribuye los horarios a nadie en particular
+
+        consultados = {
+            palabra
+            for d in consultado
+            for palabra in _sin_tildes(d.get("profesional") or "").lower().split()
+        }
+        sin_consultar = nombrados - consultados
+        return ", ".join(sorted(sin_consultar)) if sin_consultar else None
+
+    def _mensaje_con_los_horarios_reales(consultado: list) -> str | None:
+        """Rearma el ofrecimiento desde el ultimo resultado real."""
+        if not consultado:
+            return None
+        ultimo = consultado[-1]
+        slots = ultimo.get("slots") or []
+        if not slots:
+            return None
+        quien = ultimo.get("profesional") or ""
+        con_quien = f" con {quien}" if quien and "cualquier" not in quien.lower() else ""
+        horarios = ", ".join(slots[:-1]) + (f" o {slots[-1]}" if len(slots) > 1 else slots[0])
+        if len(slots) == 1:
+            horarios = slots[0]
+        return (f"Tengo turno{con_quien} el {ultimo.get('fecha_texto')} "
+                f"a las {horarios}. ¿Cuál te sirve?")
+
+    _SIN_HORARIOS = (
+        "Dejame que lo verifique bien y te confirmo los horarios en un momento."
+    )
+
+    _OTRO_PROFESIONAL = (
+        "Dejame chequear la agenda de ese profesional, porque cada uno atiende "
+        "días distintos. Te confirmo en un momento."
+    )
+
     _SIN_RESPALDO = (
         "Perdón, no llegué a confirmar ese turno: todavía no quedó agendado. "
         "¿Me repetís el día y la hora que querés y con qué profesional, así lo "
@@ -1331,6 +1444,10 @@ def chat(user_message: str, history: list[dict] | None = None,
             # ── Function calling loop ────────────────────────────────
             # Copy messages so each provider attempt starts fresh
             conv = list(messages)
+            # Lo que devolvio consultar_disponibilidad en este intento. Se
+            # reinicia por proveedor: si se cae y reintenta, lo del intento
+            # anterior no vale.
+            reiniciar_disponibilidad()
             # Si en este turno se creo un turno de verdad. Lo unico que cuenta
             # es que agendar_turno haya devuelto exito, no que el modelo diga
             # que lo hizo.
@@ -1365,6 +1482,26 @@ def chat(user_message: str, history: list[dict] | None = None,
                             "crear la derivación. Mensaje bloqueado: %s", result[:200],
                         )
                         return _AVISO_SIN_CASO, None, get_estado_conversacion()
+
+                    consultado = disponibilidad_consultada()
+                    inventados = _horarios_inventados(result, consultado)
+                    if inventados:
+                        logger.error(
+                            "AI_AGENT -> El modelo ofreció horarios que NINGUNA "
+                            "herramienta devolvió (%s). Consultado: %s. Mensaje: %s",
+                            ", ".join(inventados), consultado, result[:200],
+                        )
+                        rearmado = _mensaje_con_los_horarios_reales(consultado)
+                        return (rearmado or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
+
+                    atribuido = _atribucion_falsa(result, consultado)
+                    if atribuido:
+                        logger.error(
+                            "AI_AGENT -> Atribuyó horarios a '%s' sin haber consultado "
+                            "por esa persona. Consultado: %s. Mensaje: %s",
+                            atribuido, consultado, result[:200],
+                        )
+                        return _OTRO_PROFESIONAL, None, get_estado_conversacion()
                     logger.info(f"AI_AGENT -> Respuesta final (ronda {round_num + 1}): {result[:80]}...")
                     return result, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
@@ -1424,6 +1561,26 @@ def chat(user_message: str, history: list[dict] | None = None,
                     "derivación. Mensaje bloqueado: %s", final[:200],
                 )
                 return _AVISO_SIN_CASO, None, get_estado_conversacion()
+
+            consultado = disponibilidad_consultada()
+            inventados = _horarios_inventados(final, consultado)
+            if inventados:
+                logger.error(
+                    "AI_AGENT -> Ofreció horarios que NINGUNA herramienta devolvió "
+                    "(%s) tras agotar las rondas. Mensaje: %s",
+                    ", ".join(inventados), final[:200],
+                )
+                rearmado = _mensaje_con_los_horarios_reales(consultado)
+                return (rearmado or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
+
+            atribuido = _atribucion_falsa(final, consultado)
+            if atribuido:
+                logger.error(
+                    "AI_AGENT -> Atribuyó horarios a '%s' sin consultar por esa "
+                    "persona, tras agotar las rondas. Mensaje: %s",
+                    atribuido, final[:200],
+                )
+                return _OTRO_PROFESIONAL, None, get_estado_conversacion()
             return final, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
         except Exception as e:

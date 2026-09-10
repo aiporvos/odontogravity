@@ -695,6 +695,24 @@ def bot_resolver_motivo(data: dict = Body(...), db: Session = Depends(get_db)):
     if not propuesto:
         return {"ok": False, "motivo": None, "razon": "vacio"}
 
+    # El nombre de un profesional NO es un motivo. Paso en produccion: el
+    # paciente escribio "para silverte" —queria turno con el Dr. Silvestro— y
+    # el bot contesto "Perfecto, ya tengo el motivo". Nunca supo para que era
+    # la consulta, y de eso depende cuanto dura el turno.
+    from backend.services.appointment_service import buscar_profesional
+
+    if buscar_profesional(db, propuesto) is not None:
+        return {
+            "ok": False,
+            "motivo": None,
+            "razon": (
+                f"'{propuesto}' es el nombre de un profesional, no el motivo de "
+                f"la consulta. Pasalo como `profesional` cuando consultes "
+                f"disponibilidad, y preguntale aparte PARA QUÉ es el turno "
+                f"(limpieza, control, extracción, conducto...)."
+            ),
+        }
+
     tipo_propuesto = _tipo_para_motivo(db, propuesto)
 
     # Sin nada dicho por el paciente no hay con que comparar (Telegram, o el

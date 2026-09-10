@@ -58,6 +58,17 @@ class _LlamadaAHerramienta:
 
 
 def _correr(monkeypatch, guion, resultado_tool="✅ Turno agendado"):
+    # Un mensaje que ofrece horarios tiene que estar respaldado por una
+    # consulta real (ver test_horarios_inventados.py). Acá se registra la que
+    # corresponde para que la barrera de horarios no se meta con estos casos,
+    # que prueban otra cosa.
+    from bot.tools import appointment_tools as _tools
+    _tools.reiniciar_disponibilidad()
+    _tools.registrar_disponibilidad(
+        "Dr. Martin Silvestro", "2026-09-17", "jueves 17 de septiembre de 2026",
+        ["09:00", "10:00", "11:00"])
+    monkeypatch.setattr(ai_agent, "reiniciar_disponibilidad", lambda: None)
+
     monkeypatch.setattr(ai_agent, "_build_client",
                         lambda p: (_Cliente(guion), "modelo-de-prueba"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: resultado_tool)

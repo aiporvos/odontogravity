@@ -731,8 +731,16 @@ async def _responder(remote_jid: str, texto: str, publicadas: dict | None):
 # Ahora se espera un silencio corto y se contesta al conjunto. El tope existe
 # para que alguien que escribe sin parar reciba respuesta igual.
 
-SILENCIO_ANTES_DE_RESPONDER = 3.0   # segundos sin escribir
-ESPERA_MAXIMA = 10.0                # desde la primera parte del lote
+# 3 segundos resultaron cortos con gente real: "si quiero un turno" y "para
+# silverte" llegaron separados y recibieron dos respuestas, una de ellas
+# contradiciendo a la otra. Alguien que escribe dos ideas seguidas tarda más que
+# eso en tipear la segunda. 8 segundos cubre ese caso sin que la espera se note
+# como demora; el tope evita que quien escribe sin parar quede sin respuesta.
+#
+# Configurables desde el panel: cuánto tarda en escribir la gente es algo que se
+# mide en uso, no se adivina desde acá.
+SILENCIO_ANTES_DE_RESPONDER = 8.0   # segundos sin escribir
+ESPERA_MAXIMA = 25.0                # desde la primera parte del lote
 
 _lotes: dict[str, dict] = {}
 # Cada parte nueva y cada intervención humana suben la versión. Una respuesta
@@ -778,12 +786,19 @@ async def encolar_texto(remote_jid: str, text: str):
     lote["tarea"] = asyncio.create_task(_responder_al_lote(remote_jid))
 
 
+def _segundos_de_silencio() -> float:
+    try:
+        return float(get_config("SEGUNDOS_ANTES_DE_RESPONDER", "") or SILENCIO_ANTES_DE_RESPONDER)
+    except (TypeError, ValueError):
+        return SILENCIO_ANTES_DE_RESPONDER
+
+
 async def _responder_al_lote(remote_jid: str):
     lote = _lotes.get(remote_jid)
     if lote is None:
         return
     transcurrido = time.monotonic() - lote["desde"]
-    espera = max(0.0, min(SILENCIO_ANTES_DE_RESPONDER, ESPERA_MAXIMA - transcurrido))
+    espera = max(0.0, min(_segundos_de_silencio(), ESPERA_MAXIMA - transcurrido))
     try:
         await asyncio.sleep(espera)
     except asyncio.CancelledError:

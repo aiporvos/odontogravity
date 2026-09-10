@@ -149,7 +149,8 @@ def test_si_la_derivacion_fallo_no_se_promete(monkeypatch):
 
 
 def test_un_mensaje_normal_no_se_toca(monkeypatch):
-    normal = "Tengo turnos el jueves a las 09:00 o 10:00. ¿Cuál te sirve?"
+    """Sin horarios: la barrera de disponibilidad no tiene nada que verificar."""
+    normal = "Perfecto, ¿tenés obra social?"
     assert _correr(monkeypatch, normal, tool=None) == normal
 
 
