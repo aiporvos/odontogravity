@@ -32,6 +32,19 @@ SOLAPADOS = text("""
 """)
 
 
+
+# Los que la restriccion NO exceptua: estos si son un problema.
+SOLAPADOS_SIN_MARCAR = text("""
+    SELECT count(*) FROM appointments a
+    JOIN appointments b ON a.professional_id = b.professional_id AND a.id < b.id
+     AND tsrange(a.start_time, a.start_time + make_interval(mins => COALESCE(a.duration_minutes, 30)))
+      && tsrange(b.start_time, b.start_time + make_interval(mins => COALESCE(b.duration_minutes, 30)))
+    WHERE a.is_deleted = false AND b.is_deleted = false
+      AND a.status NOT IN ('cancelled', 'no_show')
+      AND b.status NOT IN ('cancelled', 'no_show')
+      AND a.is_overbooking = false AND b.is_overbooking = false
+""")
+
 def _titulo(t):
     print(f"\n── {t} " + "─" * max(0, 66 - len(t)))
 
@@ -62,8 +75,12 @@ def main():
             print("    superpuestos. Solo valida el código de la aplicación.")
 
         solapados = db.execute(SOLAPADOS).scalar()
-        print(f"  Pares de turnos vivos superpuestos: {solapados}")
-        if solapados and not definicion:
+        sin_marcar = db.execute(SOLAPADOS_SIN_MARCAR).scalar()
+        print(f"  Pares de turnos superpuestos: {solapados}")
+        print(f"    marcados como sobreturno (la restricción los exceptúa): "
+              f"{solapados - sin_marcar}")
+        print(f"    SIN marcar (estos sí serían un problema): {sin_marcar}")
+        if sin_marcar and not definicion:
             print("    ← esta es la razón por la que la restricción no se pudo crear:")
             print("      la migración detecta los solapamientos previos y se saltea.")
 

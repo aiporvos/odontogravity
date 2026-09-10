@@ -1,7 +1,10 @@
 # Estado del encargo
 
-Rama `encargo/asistente-etapas`, sobre `061c184`. **Nada desplegado.**
+**Desplegado el 09/09/2026 23:23** (`3c8fa41`, alembic `f8a9b0c1d2e3`).
 449 tests verdes (eran 332 al empezar).
+
+Backup de producción tomado y **verificado restaurándolo** antes y después del
+deploy. Backup diario automático instalado en el VPS (03:15, retiene 30 días).
 
 ## Entregado
 
@@ -19,6 +22,8 @@ Rama `encargo/asistente-etapas`, sobre `061c184`. **Nada desplegado.**
 | 10 | El turno que no aparece se deriva, no se niega | I02 | — |
 | 11 | El bot no reanuda con un caso abierto | H06 | 1 |
 | 12 | «Gracias» y «Ok» cierran en vez de reabrir | N01-N03, N08 | 28 |
+| 13 | La barrera EXCLUDE de la base, por fin creada | R15, A07, A08 | ensayo |
+| 14 | Backup diario verificado, en el VPS y en cron | Etapa 3 | ensayo |
 
 ### Lo que cada uno arregla, en una línea
 
@@ -34,6 +39,8 @@ Rama `encargo/asistente-etapas`, sobre `061c184`. **Nada desplegado.**
 10. «No tenés turnos» cuando en realidad no se lo podía identificar.
 11. Vencía la pausa y volvía a ofrecer turnos con el caso sin resolver.
 12. «Ok» a un recordatorio abría otra admisión desde cero.
+13. La agenda no tenía ninguna protección a nivel base. Ahora sí.
+14. Perder el volumen de Postgres borraba todo sin recuperación.
 
 ## Lo que NO se hizo, y por qué
 
@@ -51,11 +58,24 @@ Por indicación explícita, no se implementa lo que el plan pide de más:
 
 | Qué falta | De quién depende |
 | --- | --- |
-| Crear la restricción `EXCLUDE` en producción | Resolver los 11 solapamientos futuros: decidir cuáles son error de carga y cuáles sobreturno real |
 | Catálogo operativo (alias, precios, dirección) | Contenido de la clínica: qué alias, de quién, vigente desde cuándo |
 | Protocolo clínico (dolor, prótesis) | Aprobación del equipo odontológico: qué preguntar y qué orientar |
 | Instalar el prompt | Que el estado de conversación esté completo |
 | Desplegar | Decisión de alcance y momento |
+
+## Verificado en producción después del deploy
+
+```
+alembic_version                    : f8a9b0c1d2e3
+no_solapar_turnos_por_profesional  : PRESENTE (exceptúa sobreturnos)
+Pares superpuestos                 : 107, todos marcados, 0 sin marcar
+Turnos por sede                    : Silprodent 593  (era 382/195/16)
+Sedes activas                      : 1
+Tabla derivaciones                 : creada
+```
+
+Y comprobado sobre una copia restaurada: la restricción **rechaza** una doble
+reserva nueva y **deja pasar** un sobreturno marcado.
 
 ## Al desplegar
 
@@ -66,5 +86,6 @@ pero conviene que sea un deploy mirado.
 Después del deploy, `python scripts/verificar_realidad.py` dentro del contenedor
 dice qué quedó realmente aplicado.
 
-El bot está apagado (`BOT_IS_ACTIVE = false`) desde el 08/09. Conviene
-encenderlo contra un número de prueba antes de volver a habilitarlo.
+**El bot sigue apagado** (`BOT_IS_ACTIVE = false`) desde que recepción lo
+desactivó el 08/09 a las 16:57. Todo lo de arriba está desplegado pero no se
+ejercitó con pacientes: conviene encenderlo primero contra un número de prueba.
