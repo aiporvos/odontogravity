@@ -25,6 +25,12 @@ from backend.schemas.schemas import AppointmentCreate, AppointmentUpdate
 from conftest import proximo_dia_habil, turno
 
 
+class _Recepcion:
+    """El usuario del panel que autoriza el sobreturno."""
+    email = "recepcion@silprodent.test"
+    full_name = "Recepción"
+
+
 def _alta(db, paciente, profesional, cuando, force=False, duracion=30):
     return create_appointment(AppointmentCreate(
         patient_id=paciente.id,
@@ -33,7 +39,7 @@ def _alta(db, paciente, profesional, cuando, force=False, duracion=30):
         duration_minutes=duracion,
         location="San Rafael",
         force=force,
-    ), db=db)
+    ), db=db, usuario=_Recepcion())
 
 
 # ── La barrera de la base tiene que estar puesta de verdad ──────────────────
@@ -187,7 +193,8 @@ async def test_mover_un_sobreturno_a_un_horario_libre_lo_deja_de_ser(
     sobre = _alta(db, otro_paciente, silvestro, cuando, force=True)
 
     movido = await update_appointment(
-        sobre.id, AppointmentUpdate(start_time=cuando + timedelta(hours=2)), db=db)
+        sobre.id, AppointmentUpdate(start_time=cuando + timedelta(hours=2)),
+        db=db, usuario=_Recepcion())
     assert movido.is_overbooking is False, (
         "Se corrio a un horario libre: ya no esta encima de nadie"
     )
@@ -203,9 +210,107 @@ async def test_mover_un_turno_normal_encima_de_otro_pide_insistir(
     suelto = turno(db, otro_paciente, silvestro, cuando + timedelta(hours=2))
 
     with pytest.raises(HTTPException) as e:
-        await update_appointment(suelto.id, AppointmentUpdate(start_time=cuando), db=db)
+        await update_appointment(suelto.id, AppointmentUpdate(start_time=cuando),
+                                 db=db, usuario=_Recepcion())
     assert e.value.status_code == 409
 
     movido = await update_appointment(
-        suelto.id, AppointmentUpdate(start_time=cuando, force=True), db=db)
+        suelto.id, AppointmentUpdate(start_time=cuando, force=True),
+        db=db, usuario=_Recepcion())
     assert movido.is_overbooking is True
+
+
+# ── Un sobreturno solo puede salir del panel ────────────────────────────────
+# Pedido explícito: "el sobreturno marcado debería ser solo si se hace del
+# dashboard". En el código ya era así, pero nada lo impedía a nivel base.
+#
+# La regla NO puede ser "el canal no es de bot": `channel` dice quién CREÓ el
+# turno, y recepción puede legítimamente mover a un horario ocupado un turno que
+# el bot había creado. Lo que se exige es que haya una persona que lo autorizó.
+
+def test_la_base_rechaza_un_sobreturno_sin_autorizacion(db, clinica, silvestro, paciente):
+    from sqlalchemy.exc import IntegrityError
+
+    db.add(Appointment(
+        patient_id=paciente.id, professional_id=silvestro.id,
+        start_time=proximo_dia_habil(), duration_minutes=30,
+        location="San Rafael", status=AppointmentStatus.confirmed,
+        is_overbooking=True,                 # marcado…
+        overbooking_autorizado_por=None,     # …y sin nadie detrás
+    ))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
+
+
+def test_con_autorizacion_entra(db, clinica, silvestro, paciente):
+    db.add(Appointment(
+        patient_id=paciente.id, professional_id=silvestro.id,
+        start_time=proximo_dia_habil(), duration_minutes=30,
+        location="San Rafael", status=AppointmentStatus.confirmed,
+        is_overbooking=True,
+        overbooking_autorizado_por="recepcion@silprodent.test",
+    ))
+    db.commit()   # no levanta
+
+
+def test_el_panel_deja_registrado_quien_autorizo(db, clinica, silvestro, paciente, otro_paciente):
+    cuando = proximo_dia_habil()
+    turno(db, paciente, silvestro, cuando)
+    sobre = _alta(db, otro_paciente, silvestro, cuando, force=True)
+
+    assert sobre.is_overbooking is True
+    assert sobre.overbooking_autorizado_por == "recepcion@silprodent.test", (
+        "Un sobreturno tiene que decir quién lo autorizó"
+    )
+
+
+def test_un_turno_normal_no_queda_con_autorizacion(db, clinica, silvestro, paciente):
+    a = _alta(db, paciente, silvestro, proximo_dia_habil())
+    assert a.is_overbooking is False
+    assert a.overbooking_autorizado_por is None
+
+
+@pytest.mark.asyncio
+async def test_al_moverlo_a_un_horario_libre_se_limpia(
+    db, clinica, silvestro, paciente, otro_paciente
+):
+    """Deja de ser sobreturno: la autorización tampoco tiene por qué quedar."""
+    from datetime import timedelta
+    cuando = proximo_dia_habil()
+    turno(db, paciente, silvestro, cuando)
+    sobre = _alta(db, otro_paciente, silvestro, cuando, force=True)
+
+    movido = await update_appointment(
+        sobre.id, AppointmentUpdate(start_time=cuando + timedelta(hours=3)),
+        db=db, usuario=_Recepcion())
+    assert movido.is_overbooking is False
+    assert movido.overbooking_autorizado_por is None
+
+
+def test_el_alta_del_bot_nunca_marca_sobreturno(db, clinica, silvestro, paciente):
+    """Explícito en create_appointment_logic, no por default de la columna."""
+    from backend.services.appointment_service import create_appointment_logic
+
+    r = create_appointment_logic(
+        db, paciente.first_name, paciente.last_name, paciente.dni, "",
+        "Extracción", "San Rafael", insurance_name="Particular",
+        preferred_date=proximo_dia_habil().strftime("%Y-%m-%d %H:%M"),
+        requester_phone=paciente.phone,
+    )
+    assert r.get("status") == "ok", r
+    creado = db.query(Appointment).filter(Appointment.id == r["appointment_id"]).first()
+    assert creado.is_overbooking is False
+    assert creado.overbooking_autorizado_por is None
+
+
+def test_la_restriccion_esta_puesta(db):
+    """Que exista de verdad, no solo que la migración figure aplicada."""
+    from sqlalchemy import text
+
+    definicion = db.execute(text(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE conname = 'solo_el_panel_marca_sobreturnos'"
+    )).scalar()
+    assert definicion, "La restricción no está creada"
+    assert "overbooking_autorizado_por" in definicion

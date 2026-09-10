@@ -355,6 +355,17 @@ def _assert_slot_free(db: Session, start: datetime, duration_minutes: int,
         raise _ocupado(start, motivo)
 
 
+def _quien_autoriza(usuario) -> str:
+    """Con que nombre queda registrado el sobreturno.
+
+    Sale de la sesion del panel, no de nada que venga en el request: es lo que
+    hace que un sobreturno tenga siempre una persona identificable detras.
+    """
+    return (getattr(usuario, "email", None)
+            or getattr(usuario, "full_name", None)
+            or "panel")
+
+
 def _ocupado(start: datetime, motivo: str) -> HTTPException:
     """El 409 de horario ocupado, en un formato que el panel sabe leer.
 
@@ -387,7 +398,8 @@ def _guardar_turno(db: Session, appt: Appointment) -> Appointment:
 
 
 @router.post("/appointments", response_model=AppointmentRead, status_code=201)
-def create_appointment(data: AppointmentCreate, db: Session = Depends(get_db)):
+def create_appointment(data: AppointmentCreate, db: Session = Depends(get_db),
+                       usuario=Depends(require_clinic)):
     # Validate patient and professional exist
     if not db.query(Patient).filter(Patient.id == data.patient_id, Patient.is_deleted == False).first():
         raise HTTPException(404, "Paciente no encontrado")
@@ -410,11 +422,17 @@ def create_appointment(data: AppointmentCreate, db: Session = Depends(get_db)):
     # Forzar un horario que estaba libre no crea ningun sobreturno: la marca
     # sale de que HAYA habido un conflicto, no de que se haya mandado force.
     campos["is_overbooking"] = bool(conflicto)
+    # Y queda registrado quien lo autorizo. La base lo exige para que
+    # is_overbooking pueda ser true, asi que un sobreturno sin una persona
+    # detras no puede existir — y el bot no tiene como escribir este dato.
+    campos["overbooking_autorizado_por"] = _quien_autoriza(usuario) if conflicto else None
     return _guardar_turno(db, Appointment(**campos))
 
 
 @router.put("/appointments/{appt_id}", response_model=AppointmentRead)
-async def update_appointment(appt_id: UUID, data: AppointmentUpdate, db: Session = Depends(get_db)):
+async def update_appointment(appt_id: UUID, data: AppointmentUpdate,
+                             db: Session = Depends(get_db),
+                             usuario=Depends(require_clinic)):
     a = db.query(Appointment).filter(Appointment.id == appt_id, Appointment.is_deleted == False).first()
     if not a:
         raise HTTPException(404, "Turno no encontrado")
@@ -441,7 +459,12 @@ async def update_appointment(appt_id: UUID, data: AppointmentUpdate, db: Session
         # Se recalcula en cada movida: un sobreturno que se corre a un horario
         # libre deja de ser un sobreturno, y al reves. Si no, la marca quedaba
         # pegada al turno para siempre.
+        #
+        # Recepcion puede mover a un horario ocupado un turno que creo el bot:
+        # la decision es suya, no del canal por el que se cargo el turno. Por
+        # eso lo que se registra es quien autoriza, no de donde vino el turno.
         campos["is_overbooking"] = bool(conflicto)
+        campos["overbooking_autorizado_por"] = _quien_autoriza(usuario) if conflicto else None
 
     for key, val in campos.items():
         setattr(a, key, val)

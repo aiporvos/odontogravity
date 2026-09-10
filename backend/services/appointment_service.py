@@ -922,6 +922,12 @@ def create_appointment_logic(
         insurance_name=insurance_name,
         channel=channel,
         status=AppointmentStatus.confirmed,
+        # Explicito, no por default: un sobreturno es una decision que se toma
+        # desde el panel, mirando la agenda. Este es el camino del bot y nunca
+        # puede producir uno. Si alguna vez alguien agrega un parametro para
+        # forzarlo por aca, esta linea lo pisa igual, y la base tambien
+        # (restriccion solo_el_panel_marca_sobreturnos).
+        is_overbooking=False,
     )
     db.add(appt)
     try:

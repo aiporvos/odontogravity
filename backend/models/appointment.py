@@ -52,6 +52,12 @@ class Appointment(Base):
     # unicas que pueden pisar a otra. Todo lo demas —el bot incluido— sigue sin
     # poder superponer nada.
     is_overbooking: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Quien autorizo el sobreturno. Lo escribe el panel; el bot no tiene como.
+    # La base exige que este cargado para que is_overbooking pueda ser true
+    # (restriccion solo_el_panel_marca_sobreturnos), asi que un sobreturno sin
+    # una persona detras no puede existir.
+    overbooking_autorizado_por: Mapped[str | None] = mapped_column(
+        String(120), nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
