@@ -1,5 +1,6 @@
 
-from datetime import datetime, timedelta, time as py_time
+import re
+from datetime import date, datetime, timedelta, time as py_time
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
@@ -1023,6 +1024,60 @@ DIAS_POR_NOMBRE = {
 }
 
 
+def fecha_dicha_por_el_paciente(texto: str, desde=None):
+    """La fecha que nombro el paciente, o None si no nombro ninguna.
+
+    "el lunes" -> el proximo lunes. "hoy", "mañana", "pasado mañana", y una
+    fecha explicita como "el 16" o "16/09" tambien.
+
+    Existe porque el modelo escribia fechas por su cuenta: pidieron "el jueves"
+    y contesto "no hay disponibilidad el martes 15", que no era ni el dia
+    pedido ni ninguno relacionado. Con esto la fecha sale del texto del
+    paciente, no de la aritmetica del modelo.
+    """
+    if not texto:
+        return None
+    hoy = (desde or get_clinic_now()).date()
+    t = _sin_acentos(texto).lower()
+
+    if "pasado manana" in t:
+        return hoy + timedelta(days=2)
+    # "manana" como dia solo cuenta si no viene como franja ("a la manana").
+    if re.search(r"\bmanana\b", t) and not re.search(r"(a la|por la|de la)\s+manana", t):
+        return hoy + timedelta(days=1)
+    if re.search(r"\bhoy\b", t):
+        return hoy
+
+    for dia, numero in DIAS_POR_NOMBRE.items():
+        if re.search(rf"\b{dia}\b", t):
+            adelanto = (numero - hoy.weekday()) % 7 or 7
+            return hoy + timedelta(days=adelanto)
+
+    # "el 16", "el 16/09", "16 de septiembre"
+    m = re.search(r"\b(?:el\s+)?([0-3]?\d)\s*(?:/|de\s+)([01]?\d|[a-z]{4,10})", t)
+    if not m:
+        m = re.search(r"\b(?:el|para el)\s+([0-3]?\d)\b", t)
+    if m:
+        try:
+            dia = int(m.group(1))
+            mes = hoy.month
+            if m.lastindex and m.lastindex > 1:
+                crudo = m.group(2)
+                if crudo.isdigit():
+                    mes = int(crudo)
+                else:
+                    for i, nombre in enumerate(MESES, start=1):
+                        if _sin_acentos(nombre).lower().startswith(crudo[:4]):
+                            mes = i
+                            break
+            anio = hoy.year + (1 if mes < hoy.month else 0)
+            candidata = date(anio, mes, dia)
+            return candidata if candidata >= hoy else None
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def dias_excluidos(preferencia) -> set[int]:
     """Los dias de la semana que el paciente descarto explicitamente.
 
@@ -1230,7 +1285,22 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             return respuesta([], f"No encuentro a ningún profesional con ese nombre "
                                  f"({profesional_pedido}).")
         if pedido.id not in [c.id for c in candidatos]:
-            return respuesta([], f"{pedido.full_name} no atiende {reason}.")
+            # Decir quien SI lo hace: "Murad no atiende Extraccion" a secas deja
+            # al paciente sin saber que hacer, y el modelo terminaba inventando
+            # una respuesta. Paso en produccion: pidio extraccion con Murad y el
+            # bot le ofrecio horarios de otro dia sin aclarar nada.
+            quienes = [c.full_name for c in candidatos]
+            if quienes:
+                lo_hacen = quienes[0] if len(quienes) == 1 else \
+                    ", ".join(quienes[:-1]) + f" o {quienes[-1]}"
+                return respuesta([], (
+                    f"{pedido.full_name} no hace {reason}. Eso lo atiende "
+                    f"{lo_hacen}. Preguntale al paciente si quiere el turno con "
+                    f"{lo_hacen}, y recien si dice que si volve a consultar "
+                    f"disponibilidad pasando ese profesional. "
+                    f"🚫 PROHIBIDO ofrecerle horarios sin que lo acepte."
+                ))
+            return respuesta([], f"{pedido.full_name} no hace {reason}.")
         candidatos = [pedido]
 
     prof = candidatos[0] if candidatos else None

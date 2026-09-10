@@ -208,13 +208,14 @@ def reiniciar_disponibilidad():
     _disponibilidad_del_turno.set([])
 
 
-def registrar_disponibilidad(profesional, fecha_iso, fecha_texto, slots):
+def registrar_disponibilidad(profesional, fecha_iso, fecha_texto, slots, motivo=None):
     actuales = list(_disponibilidad_del_turno.get() or [])
     actuales.append({
         "profesional": profesional or "",
         "fecha": fecha_iso or "",
         "fecha_texto": fecha_texto or "",
         "slots": list(slots or []),
+        "motivo": motivo or "",
     })
     _disponibilidad_del_turno.set(actuales)
 
@@ -399,6 +400,46 @@ def consultar_mis_turnos(dni: str = "") -> str:
         return f"❌ Error de conexión: {e}. Esto NO significa que no tenga turnos."
 
 
+def _profesional_en_lo_dicho() -> str:
+    """El profesional que el paciente nombro, buscando en lo que dijo.
+
+    Se resuelve contra las fichas cargadas, no con una lista escrita a mano:
+    si mañana entra otro profesional, esto lo reconoce igual.
+    """
+    from backend.database import SessionLocal
+    from backend.services.appointment_service import buscar_profesional
+
+    db = SessionLocal()
+    try:
+        for dicho in reversed(_dichos_por_el_paciente.get() or (_ultimo_mensaje.get(),)):
+            if not dicho:
+                continue
+            encontrado = buscar_profesional(db, dicho)
+            if encontrado:
+                return encontrado.full_name
+        return ""
+    except Exception:
+        return ""
+    finally:
+        db.close()
+
+
+def _fecha_en_lo_dicho() -> str:
+    """El dia que pidio el paciente, en YYYY-MM-DD, o vacio."""
+    from backend.services.appointment_service import fecha_dicha_por_el_paciente
+
+    try:
+        for dicho in reversed(_dichos_por_el_paciente.get() or (_ultimo_mensaje.get(),)):
+            if not dicho:
+                continue
+            fecha = fecha_dicha_por_el_paciente(dicho)
+            if fecha:
+                return fecha.isoformat()
+        return ""
+    except Exception:
+        return ""
+
+
 def consultar_disponibilidad(
     motivo_confirmado_por_paciente: str,
     location: str = "",
@@ -426,6 +467,16 @@ def consultar_disponibilidad(
             if franja := _franja_en_el_texto(dicho):
                 preferencia_horaria = franja
                 break
+
+    # El profesional y el dia salen del texto del paciente si el modelo no los
+    # reenvio. Sin esto, "y para silvestro el lunes??" se consultaba como una
+    # busqueda generica —o no se consultaba— y el modelo inventaba la respuesta:
+    # cada profesional atiende dias distintos, asi que la consulta sin
+    # profesional devuelve horarios que no son de quien se pidio.
+    if not (profesional or "").strip():
+        profesional = _profesional_en_lo_dicho() or ""
+    if not (date or "").strip():
+        date = _fecha_en_lo_dicho() or ""
 
     if not (_estado_conversacion.get() or {}).get("motivo"):
         return (
@@ -462,7 +513,11 @@ def consultar_disponibilidad(
         # Y se registra lo que se devolvio, para poder verificar despues que el
         # mensaje al paciente no diga horarios ni fechas que nadie le dio.
         registrar_disponibilidad(
-            data.get("professional"), date_iso, fecha_texto, slots)
+            data.get("professional"), date_iso, fecha_texto, slots,
+            # Por que se corrio el dia: "el Dr. Silvestro no atiende el lunes
+            # 14. Atiende miercoles, jueves y viernes". Se guarda para poder
+            # decirselo al paciente aunque el modelo se lo saltee.
+            motivo=data.get("motivo_salto") if data.get("movido") else None)
 
         aviso = ""
         if data.get("salto_sin_explicar"):

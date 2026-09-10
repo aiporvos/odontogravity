@@ -1403,7 +1403,14 @@ def chat(user_message: str, history: list[dict] | None = None,
         return ", ".join(sorted(sin_consultar)) if sin_consultar else None
 
     def _mensaje_con_los_horarios_reales(consultado: list) -> str | None:
-        """Rearma el ofrecimiento desde el ultimo resultado real."""
+        """Rearma el ofrecimiento desde el ultimo resultado real.
+
+        Si el dia pedido no era del profesional, se lo dice y se le ofrece el
+        proximo que si atiende: "el Dr. Silvestro no atiende el lunes 14.
+        Atiende miercoles, jueves y viernes". Eso lo calcula el backend y viene
+        en `motivo`; sin incluirlo, el paciente ve que le cambian el dia y no
+        entiende por que.
+        """
         if not consultado:
             return None
         ultimo = consultado[-1]
@@ -1412,19 +1419,45 @@ def chat(user_message: str, history: list[dict] | None = None,
             return None
         quien = ultimo.get("profesional") or ""
         con_quien = f" con {quien}" if quien and "cualquier" not in quien.lower() else ""
-        horarios = ", ".join(slots[:-1]) + (f" o {slots[-1]}" if len(slots) > 1 else slots[0])
-        if len(slots) == 1:
-            horarios = slots[0]
-        return (f"Tengo turno{con_quien} el {ultimo.get('fecha_texto')} "
+        horarios = (slots[0] if len(slots) == 1
+                    else ", ".join(slots[:-1]) + f" o {slots[-1]}")
+
+        aclaracion = ""
+        motivo = (ultimo.get("motivo") or "").strip()
+        if motivo:
+            aclaracion = motivo.rstrip(".") + ". "
+
+        return (f"{aclaracion}Tengo turno{con_quien} el {ultimo.get('fecha_texto')} "
                 f"a las {horarios}. ¿Cuál te sirve?")
 
-    _SIN_HORARIOS = (
-        "Dejame que lo verifique bien y te confirmo los horarios en un momento."
-    )
+    def _consultar_yo_mismo() -> str | None:
+        """Si el modelo no consulto, consulta el codigo y arma la respuesta.
 
-    _OTRO_PROFESIONAL = (
-        "Dejame chequear la agenda de ese profesional, porque cada uno atiende "
-        "días distintos. Te confirmo en un momento."
+        Antes esto devolvia "dejame que lo verifique y te confirmo en un
+        momento", y ese momento no llegaba nunca: el paciente quedaba esperando
+        una respuesta que nadie iba a mandar. Era la misma promesa vacia que se
+        saco de todo el resto del sistema, y la habia puesto yo.
+
+        El motivo sale del estado de la conversacion —ya verificado contra lo
+        que dijo el paciente— y el profesional y el dia, de sus propias
+        palabras. Con eso alcanza para preguntarle al sistema de verdad.
+        """
+        motivo = (get_estado_conversacion() or {}).get("motivo")
+        if not motivo:
+            return None
+        try:
+            from bot.tools.appointment_tools import consultar_disponibilidad
+            reiniciar_disponibilidad()
+            consultar_disponibilidad(motivo_confirmado_por_paciente=motivo)
+        except Exception as e:
+            logger.error("AI_AGENT -> No se pudo consultar disponibilidad por "
+                         "nuestra cuenta: %s", e, exc_info=True)
+            return None
+        return _mensaje_con_los_horarios_reales(disponibilidad_consultada())
+
+    _SIN_HORARIOS = (
+        "Perdón, no pude confirmar los horarios en este momento. "
+        "¿Me repetís qué día te viene bien y con qué profesional?"
     )
 
     _SIN_RESPALDO = (
@@ -1491,7 +1524,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                             "herramienta devolvió (%s). Consultado: %s. Mensaje: %s",
                             ", ".join(inventados), consultado, result[:200],
                         )
-                        rearmado = _mensaje_con_los_horarios_reales(consultado)
+                        rearmado = (_mensaje_con_los_horarios_reales(consultado)
+                                    or _consultar_yo_mismo())
                         return (rearmado or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
 
                     atribuido = _atribucion_falsa(result, consultado)
@@ -1501,7 +1535,9 @@ def chat(user_message: str, history: list[dict] | None = None,
                             "por esa persona. Consultado: %s. Mensaje: %s",
                             atribuido, consultado, result[:200],
                         )
-                        return _OTRO_PROFESIONAL, None, get_estado_conversacion()
+                        propio = _consultar_yo_mismo()
+                        return ((propio or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
+                                get_estado_conversacion())
                     logger.info(f"AI_AGENT -> Respuesta final (ronda {round_num + 1}): {result[:80]}...")
                     return result, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
@@ -1570,7 +1606,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                     "(%s) tras agotar las rondas. Mensaje: %s",
                     ", ".join(inventados), final[:200],
                 )
-                rearmado = _mensaje_con_los_horarios_reales(consultado)
+                rearmado = (_mensaje_con_los_horarios_reales(consultado)
+                            or _consultar_yo_mismo())
                 return (rearmado or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
 
             atribuido = _atribucion_falsa(final, consultado)
@@ -1580,7 +1617,9 @@ def chat(user_message: str, history: list[dict] | None = None,
                     "persona, tras agotar las rondas. Mensaje: %s",
                     atribuido, final[:200],
                 )
-                return _OTRO_PROFESIONAL, None, get_estado_conversacion()
+                propio = _consultar_yo_mismo()
+                return ((propio or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
+                        get_estado_conversacion())
             return final, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
         except Exception as e:

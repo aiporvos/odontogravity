@@ -31,7 +31,7 @@ from tests.test_no_confirmar_lo_que_no_se_hizo import (
 )
 
 
-def _correr(monkeypatch, texto, disponibilidad=None):
+def _correr(monkeypatch, texto, disponibilidad=None, estado=None):
     """Corre un turno con lo que la herramienta devolvió de verdad."""
     tools.reiniciar_disponibilidad()
     for d in (disponibilidad or []):
@@ -42,7 +42,7 @@ def _correr(monkeypatch, texto, disponibilidad=None):
     monkeypatch.setattr(ai_agent, "_build_client", lambda p: (_Cliente(guion), "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "ok")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
-    monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: {})
+    monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: estado or {})
     # reiniciar_disponibilidad corre dentro de chat(): se preserva lo cargado.
     monkeypatch.setattr(ai_agent, "reiniciar_disponibilidad", lambda: None)
     return ai_agent.chat("hola", [], "5492604590071")[0]
@@ -76,10 +76,11 @@ def test_rearma_el_mensaje_con_los_horarios_de_verdad(monkeypatch):
 
 
 def test_sin_ninguna_consulta_no_ofrece_nada(monkeypatch):
-    """Ni una sola llamada a la herramienta: no hay con qué rearmar."""
+    """Ni una sola llamada, y sin motivo no se puede consultar: se pregunta."""
     salida = _correr(monkeypatch, "Tengo turnos el lunes a las 10:00 u 11:00.", [])
     assert "10:00" not in salida
-    assert "verifique" in salida.lower()
+    assert "no pude confirmar" in salida.lower()
+    assert "qué día te viene bien" in salida
 
 
 # ── Lo que tiene que pasar intacto ─────────────────────────────────────────
@@ -136,7 +137,9 @@ def test_no_le_atribuye_a_murad_los_horarios_de_silvestro(
     salida = _correr(monkeypatch, texto, REAL)
 
     assert "Murad" not in salida, f"Dejó pasar la atribución falsa: {salida}"
-    assert "cada uno atiende días distintos" in salida
+    # Sin motivo en el estado no se puede consultar de nuevo: se pregunta, no
+    # se promete un aviso que no va a llegar.
+    assert "no pude confirmar" in salida.lower()
 
 
 def test_si_se_consulto_por_ese_profesional_pasa(monkeypatch, db, clinica, silvestro, murad):
@@ -167,3 +170,52 @@ def test_hablar_de_los_dias_de_un_profesional_no_es_ofrecer_horarios(
     """Sin horarios en el mensaje, no hay nada que verificar."""
     texto = "La Dra. Murad atiende lunes, martes y viernes."
     assert _correr(monkeypatch, texto, REAL) == texto
+
+
+# ── La barrera ya no deja al paciente esperando ────────────────────────────
+# "Dejame que lo verifique bien y te confirmo los horarios en un momento" era
+# una promesa que no se cumplía nunca: el paciente quedaba esperando algo que
+# nadie iba a mandar. Era el mismo vicio que se sacó del resto del sistema.
+
+def test_si_el_modelo_no_consulto_consulta_el_codigo(monkeypatch):
+    """El caso del reclamo: no hubo ninguna consulta y se inventaron horarios."""
+    consultas = []
+
+    def _consultar(motivo_confirmado_por_paciente, **kw):
+        consultas.append(motivo_confirmado_por_paciente)
+        tools.registrar_disponibilidad(
+            "Dr. Martin Silvestro", "2026-09-16",
+            "miércoles 16 de septiembre de 2026", ["10:30", "12:00"],
+            motivo="el Dr. Silvestro no atiende el lunes 14. Atiende miércoles, jueves y viernes")
+        return "ok"
+
+    monkeypatch.setattr(tools, "consultar_disponibilidad", _consultar)
+    salida = _correr(monkeypatch, "Para el lunes tengo a las 10:00 o 11:00.", [],
+                     estado={"motivo": "Extracción"})
+
+    assert consultas == ["Extracción"], "No consultó por su cuenta"
+    assert "10:30" in salida and "12:00" in salida
+    assert "verifique" not in salida.lower(), "Dejó la promesa colgada"
+
+
+def test_el_mensaje_explica_por_que_cambio_el_dia(monkeypatch):
+    """«no atiende el lunes. Atiende miércoles, jueves y viernes»."""
+    def _consultar(motivo_confirmado_por_paciente, **kw):
+        tools.registrar_disponibilidad(
+            "Dr. Martin Silvestro", "2026-09-16",
+            "miércoles 16 de septiembre de 2026", ["10:30"],
+            motivo="el Dr. Silvestro no atiende el lunes 14. Atiende miércoles, jueves y viernes")
+        return "ok"
+
+    monkeypatch.setattr(tools, "consultar_disponibilidad", _consultar)
+    salida = _correr(monkeypatch, "Para el lunes tengo a las 10:00.", [],
+                     estado={"motivo": "Extracción"})
+    assert "no atiende el lunes" in salida
+    assert "miércoles, jueves y viernes" in salida
+
+
+def test_sin_motivo_no_puede_consultar_y_lo_dice_sin_prometer(monkeypatch):
+    monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: estado or {})
+    salida = _correr(monkeypatch, "Tengo turnos a las 10:00.", [])
+    assert "no pude confirmar" in salida.lower()
+    assert "qué día te viene bien" in salida
