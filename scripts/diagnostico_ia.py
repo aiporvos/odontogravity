@@ -91,23 +91,28 @@ def main():
             return
 
         print("\nProbando con una consulta real...")
-        from bot.ai_agent import get_agent
+        # Esto llamaba a get_agent(), que dejó de existir cuando el agente pasó
+        # a armarse con _build_client(). O sea que --probar venía tirando
+        # ImportError desde entonces: justo la opción que dice si la clave
+        # sirve de verdad, que es lo único que no se puede deducir mirando.
+        from bot.ai_agent import _build_client
         for proveedor in utilizables:
             try:
-                agent = get_agent(proveedor)
-                if not agent:
-                    print(f"  {proveedor:<12} ✗ get_agent() devolvió None")
+                client, modelo = _build_client(proveedor)
+                if not client:
+                    print(f"  {proveedor:<12} ✗ no se pudo construir el cliente")
                     continue
-                agent.invoke({
-                    "input": "Respondé solamente: ok",
-                    "chat_history": [],
-                    "today": "test",
-                    "insurances": "Particular",
-                    "especialistas": "equipo de prueba",
-                })
-                print(f"  {proveedor:<12} ✓ responde correctamente")
+                r = client.chat.completions.create(
+                    model=modelo,
+                    messages=[{"role": "user", "content": "Respondé solamente: ok"}],
+                    max_tokens=5,
+                )
+                print(f"  {proveedor:<12} ✓ responde correctamente "
+                      f"({r.choices[0].message.content!r})")
             except Exception as e:
-                print(f"  {proveedor:<12} ✗ {type(e).__name__}: {str(e)[:160]}")
+                # El motivo importa: una clave revocada y un modelo que ya no
+                # existe se parecen desde afuera y se arreglan distinto.
+                print(f"  {proveedor:<12} ✗ {type(e).__name__}: {str(e)[:200]}")
     finally:
         db.close()
 
