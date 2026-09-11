@@ -1222,12 +1222,22 @@ def chat(user_message: str, history: list[dict] | None = None,
     dia_semana = DIAS_ES[clinic_now.weekday()]
 
     # Build system prompt with dynamic data
+    #
+    # Este texto tiene que quedar IDENTICO byte a byte en todas las llamadas: es
+    # el prefijo que OpenAI cachea (mitad de precio arriba de 1024 tokens), y son
+    # ~10.000 tokens entre el prompt y las 11 herramientas que se reenvian hasta
+    # 8 veces por cada mensaje del paciente. El caché funciona por prefijo: se
+    # corta en el primer byte que cambia y desde ahi se paga todo entero.
+    #
+    # Por eso el estado de la conversacion ya NO se pega aca. Estaba como un
+    # `system_content +=` y cambiaba dentro de la misma charla cada vez que el
+    # paciente daba un dato, o sea que metia un bloque mutable justo delante de
+    # las herramientas. Ahora viaja en el bloque [SISTEMA] del ultimo mensaje,
+    # que es donde ya viajaban la fecha, el saludo y si la clinica esta abierta.
     system_content = SYSTEM_PROMPT.format(
         especialistas=get_especialistas_texto(),
         sedes=get_sedes_texto(),
     )
-    # Lo que ya se sabe de este paciente, para que no lo vuelva a preguntar.
-    system_content += f"\n\n### 📌 ESTADO DE ESTA CONVERSACIÓN:\n{resumen_estado(estado or {})}"
 
     # Build messages array (OpenAI format)
     messages = [{"role": "system", "content": system_content}]
@@ -1265,12 +1275,15 @@ def chat(user_message: str, history: list[dict] | None = None,
             f"usá EXACTAMENTE esas fórmulas, no inventes otra. "
         )
 
+    # Lo que ya se sabe de este paciente, para que no lo vuelva a preguntar.
+    # Viaja aca y no en el system prompt para no romperle el caché al prefijo.
     dated_message = (
         f"{marca_nueva}"
         f"[SISTEMA - FECHA ACTUAL: {dia_semana} {clinic_now.strftime('%Y-%m-%d')} "
         f"hora Argentina: {clinic_now.strftime('%H:%M')}. "
         f"{instruccion_saludo}"
-        f"{estado_clinica}]\n"
+        f"{estado_clinica}\n"
+        f"📌 ESTADO DE ESTA CONVERSACIÓN: {resumen_estado(estado or {})}]\n"
         f"{user_message}"
     )
     messages.append({"role": "user", "content": dated_message})
@@ -1466,6 +1479,33 @@ def chat(user_message: str, history: list[dict] | None = None,
         "cargo bien?"
     )
 
+    # ── Cuánto consume cada mensaje ─────────────────────────────────────────
+    # Nadie estaba midiendo esto, y sin medirlo cualquier decisión sobre el
+    # modelo o sobre MAX_TOOL_ROUNDS es a ciegas. Lo que importa acá no es el
+    # total sino `cached`: el prompt y las 11 herramientas son ~10.000 tokens
+    # que se reenvían en cada ronda, y si el caché está pegando salen a mitad
+    # de precio. Si `cached` da 0 sostenido, algo volvió a romper el prefijo.
+    uso = {"llamadas": 0, "in": 0, "cached": 0, "out": 0}
+
+    def _registrar_uso(response, etapa: str) -> None:
+        u = getattr(response, "usage", None)
+        if not u:   # algunos proveedores de la cascada no lo devuelven
+            return
+        detalle = getattr(u, "prompt_tokens_details", None)
+        cached = getattr(detalle, "cached_tokens", 0) or 0
+        uso["llamadas"] += 1
+        uso["in"] += u.prompt_tokens or 0
+        uso["cached"] += cached
+        uso["out"] += u.completion_tokens or 0
+        pct = round(100 * cached / u.prompt_tokens) if u.prompt_tokens else 0
+        logger.info(
+            "AI_AGENT_USO -> %s | %s %s | in=%s (cache %s = %s%%) out=%s | "
+            "acumulado del mensaje: %s llamadas, in=%s cache=%s out=%s",
+            etapa, provider, model, u.prompt_tokens, cached, pct,
+            u.completion_tokens, uso["llamadas"], uso["in"], uso["cached"],
+            uso["out"],
+        )
+
     for attempt, provider in enumerate(providers, 1):
         try:
             logger.info(f"AI_AGENT -> Intentando proveedor {attempt}/{len(providers)}: {provider}")
@@ -1496,6 +1536,7 @@ def chat(user_message: str, history: list[dict] | None = None,
                     temperature=0.3,
                     max_tokens=1000,
                 )
+                _registrar_uso(response, f"ronda {round_num + 1}/{MAX_TOOL_ROUNDS}")
 
                 choice = response.choices[0]
                 msg = choice.message
@@ -1584,6 +1625,7 @@ def chat(user_message: str, history: list[dict] | None = None,
                 temperature=0.3,
                 max_tokens=1000,
             )
+            _registrar_uso(response, "cierre sin tools")
             final = response.choices[0].message.content or ""
             if _promete_sin_cumplir(final, agendo_de_verdad):
                 logger.error(
