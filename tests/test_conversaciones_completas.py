@@ -19,7 +19,13 @@ verifican las invariantes duras, y al final se verifica el objetivo.
 
 ## Cómo se corre
 
+Hacen falta DOS cosas, no una. La API key es la obvia; la otra es el backend
+corriendo, porque las herramientas del bot van por HTTP contra él. Sin backend
+los tests se saltean con un mensaje que lo explica, en vez de dar resultados
+engañosos.
+
     export OPENAI_API_KEY=sk-...        # o el proveedor que corresponda
+    export API_BASE_URL=http://localhost:8000   # donde escuche el backend
     TEST_DATABASE_URL="postgresql://test:test@localhost:55432/dentibot_test" \\
         .venv/bin/python -m pytest tests/test_conversaciones_completas.py -v -s -m conversacion
 
@@ -61,10 +67,46 @@ def _hay_proveedor() -> bool:
                ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"))
 
 
+def _backend_responde() -> bool:
+    """Si el backend no está arriba, estos tests MIENTEN. Por eso se chequea.
+
+    Las herramientas del bot no son funciones locales: cada una hace HTTP contra
+    el backend (`API_BASE`, por defecto http://backend:8000, que es un hostname
+    de la red de Docker y no resuelve desde afuera). Sin backend, todas fallan
+    con "No pude consultar la ficha" y el modelo queda dando vueltas.
+
+    Eso pasó la primera vez que se corrió esto, el 11/09: parecía que el modelo
+    repetía preguntas y no avanzaba, y en realidad ninguna herramienta
+    funcionaba. Un arnés que da resultados así es peor que no tener arnés,
+    porque lleva a arreglar el prompt por un problema de infraestructura.
+    """
+    import urllib.error
+    import urllib.request
+    from bot.tools.appointment_tools import API_BASE
+
+    try:
+        with urllib.request.urlopen(f"{API_BASE}/health", timeout=3) as r:
+            return r.status < 500
+    except urllib.error.HTTPError:
+        return True          # responde algo: está vivo
+    except Exception:
+        return False
+
+
 requiere_modelo = pytest.mark.skipif(
     not _hay_proveedor(),
     reason="Sin API key de ningún proveedor: no se puede hablar con el modelo. "
            "Exportá OPENAI_API_KEY (u OPENROUTER_API_KEY / GROQ_API_KEY).",
+)
+
+requiere_backend = pytest.mark.skipif(
+    not _backend_responde(),
+    reason=(
+        "El backend no responde y las herramientas del bot van por HTTP contra "
+        "él: sin backend, todas fallan y la conversación no prueba nada. "
+        "Levantalo y apuntá API_BASE_URL a donde esté escuchando, por ejemplo "
+        "API_BASE_URL=http://localhost:8000."
+    ),
 )
 
 
@@ -175,6 +217,7 @@ class Charla:
 # ── Guión 1: el turno normal, que es el 80% de lo que pasa ──────────────────
 
 @requiere_modelo
+@requiere_backend
 def test_turno_normal_de_punta_a_punta(db, clinica, silvestro, paciente):
     """Lo más común: alguien que quiere un turno y lo consigue.
 
@@ -200,6 +243,7 @@ def test_turno_normal_de_punta_a_punta(db, clinica, silvestro, paciente):
 # ── Guión 2: el caso Murad, que costó tres rondas ───────────────────────────
 
 @requiere_modelo
+@requiere_backend
 def test_el_dia_y_el_profesional_los_decide_el_paciente(db, clinica, silvestro,
                                                         murad, paciente):
     """La conversación del 10/09 que motivó tres rondas de arreglos.
@@ -226,6 +270,7 @@ def test_el_dia_y_el_profesional_los_decide_el_paciente(db, clinica, silvestro,
 # ── Guión 3: cancelar, que es donde se perdió Taboada ───────────────────────
 
 @requiere_modelo
+@requiere_backend
 def test_cancelar_un_turno_que_existe(db, clinica, silvestro, paciente):
     """Caso del 08/09: escribió para cancelar y el bot la interrogó sin derivar."""
     from conftest import turno as crear_turno
@@ -244,6 +289,7 @@ def test_cancelar_un_turno_que_existe(db, clinica, silvestro, paciente):
 # ── Guión 4: cuando no se puede resolver, derivar y no dar vueltas ──────────
 
 @requiere_modelo
+@requiere_backend
 def test_lo_que_no_puede_resolver_lo_deriva(db, clinica, silvestro, paciente):
     """Dar vueltas en círculo es peor que derivar."""
     charla = Charla(db)
@@ -263,6 +309,7 @@ def test_lo_que_no_puede_resolver_lo_deriva(db, clinica, silvestro, paciente):
 # ── Guión 5: turno para otra persona ────────────────────────────────────────
 
 @requiere_modelo
+@requiere_backend
 def test_turno_para_un_familiar(db, clinica, silvestro, paciente):
     """"Es para mi mamá" no puede terminar con el turno a nombre del que escribe."""
     charla = Charla(db)

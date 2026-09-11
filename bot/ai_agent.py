@@ -1270,9 +1270,15 @@ def chat(user_message: str, history: list[dict] | None = None,
             f"Seguí la charla donde quedó. Si te despedís, usá \"{despedida}\". "
         )
     else:
+        # "Saludá con X y despedite con Y" era una sola orden con dos verbos, y
+        # un modelo literal la cumple entera en la misma respuesta: el primer
+        # mensaje salia "Buen día, ¿en qué te puedo ayudar? Que tengas un buen
+        # día." — saludando y despidiendo a alguien que recien llegaba.
+        # La despedida es condicional, como ya decia la rama de arriba.
         instruccion_saludo = (
-            f"Saludá diciendo \"{saludo}\" y despedite con \"{despedida}\" — "
-            f"usá EXACTAMENTE esas fórmulas, no inventes otra. "
+            f"Saludá diciendo \"{saludo}\" — usá EXACTAMENTE esa fórmula, no "
+            f"inventes otra. NO te despidas: la conversación recién empieza. "
+            f"Si más adelante hay que despedirse, la fórmula es \"{despedida}\". "
         )
 
     # Lo que ya se sabe de este paciente, para que no lo vuelva a preguntar.
