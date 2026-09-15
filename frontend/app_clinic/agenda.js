@@ -49,11 +49,6 @@ Router.register('agenda', async (container) => {
                     <option value="">Todos los profesionales</option>
                     ${professionals.map(p => `<option value="${p.id}">${p.full_name}</option>`).join('')}
                 </select>
-                <select id="agenda-location">
-                    <option value="">Todas las sedes</option>
-                    <option value="San Rafael">San Rafael</option>
-                    <option value="Alvear">Alvear</option>
-                </select>
                 <select id="agenda-status">
                     <option value="">Todos los estados</option>
                     <option value="pending">Pendiente</option>
@@ -78,7 +73,9 @@ Router.register('agenda', async (container) => {
     async function loadAgenda({ silencioso = false } = {}) {
         const date = state.currentDate;
         const profId = document.getElementById('agenda-prof').value;
-        const location = document.getElementById('agenda-location').value;
+        // Una sola sede (Silprodent): el filtro "Todas las sedes" era ruido y
+        // además listaba nombres viejos (San Rafael / Alvear) que ya no existen.
+        const location = '';
         const status = document.getElementById('agenda-status').value;
 
         const d = new Date(date + 'T12:00:00');
@@ -493,7 +490,7 @@ Router.register('agenda', async (container) => {
         loadAgenda();
     };
 
-    ['agenda-date', 'agenda-prof', 'agenda-location', 'agenda-status', 'agenda-grouping'].forEach(id => {
+    ['agenda-date', 'agenda-prof', 'agenda-status', 'agenda-grouping'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', (e) => {
             if (id === 'agenda-date') state.currentDate = e.target.value;
             loadAgenda();
@@ -614,12 +611,16 @@ const AgendaPage = {
                         <label>Duración (min)</label>
                         <input id="edit-duration" type="number" class="form-control" value="${a.duration_minutes || 30}" min="15" step="15">
                     </div>
+                    ${locations.length <= 1 ? `
+                    <input type="hidden" id="edit-location" value="${attr(a.location || locations[0]?.name || '')}">
+                    ` : `
                     <div class="form-group">
                         <label>Sede${a.location ? '' : ' ⚠️ sin asignar'}</label>
                         <select id="edit-location" class="form-control">
                             <option value="">Sin asignar</option>${locOptions}
                         </select>
                     </div>
+                    `}
                     <div class="form-group"><label>Motivo</label><input id="edit-reason" class="form-control" value="${attr(a.reason)}"></div>
                     <div class="form-group">
                         <label>Estado</label>
@@ -930,17 +931,18 @@ const AgendaPage = {
                     <label>Duración (min)</label>
                     <input type="number" name="duration_minutes" value="30" min="15" step="15">
                 </div>
-                <div class="form-group">
-                    <label>Sede${(this._locations || []).length > 0 ? ' *' : ''}</label>
-                    <select name="location" ${(this._locations || []).length > 0 ? 'required' : ''}>
-                        ${(this._locations || []).length === 0
-                            ? '<option value="">Sin asignar</option>'
-                            : (this._locations || []).map((l, i) =>
-                                `<option value="${l.name}" ${i === 0 ? 'selected' : ''}>${l.name}</option>`).join('')}
+                ${(this._locations || []).length <= 1
+                    ? `<input type="hidden" name="location" value="${(this._locations || [])[0]?.name || ''}">`
+                    : `<div class="form-group">
+                    <label>Sede *</label>
+                    <select name="location" required>
+                        ${(this._locations || []).map((l, i) =>
+                            `<option value="${l.name}" ${i === 0 ? 'selected' : ''}>${l.name}</option>`).join('')}
                     </select>
-                    ${(this._locations || []).length === 0
-                        ? '<small style="color:var(--danger);">No hay sedes cargadas: revisá Configuración → Sedes.</small>' : ''}
-                </div>
+                </div>`}
+                ${(this._locations || []).length === 0
+                    ? '<div class="form-group form-group-full"><small style="color:var(--danger);">No hay sedes cargadas: revisá Configuración → Sedes.</small></div>'
+                    : ''}
                 <div class="form-group form-group-full">
                     <label>Motivo</label>
                     <textarea name="reason"></textarea>
