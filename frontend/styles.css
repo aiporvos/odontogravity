@@ -550,6 +550,11 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
     transition: var(--transition);
 }
 .omnibox-result:hover { background: var(--slate-50); }
+.omnibox-result.activo {
+    background: var(--primary-light);
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+}
 .omnibox-result .result-type {
     font-size: .7rem;
     font-weight: 600;

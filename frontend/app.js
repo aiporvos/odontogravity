@@ -119,11 +119,24 @@
 
     // ── Omnibox Search ─────────────────────────────────
     let searchDebounce;
+    let omniboxIndex = -1;
     const omniboxInput = document.getElementById('omnibox-input');
     const omniboxResults = document.getElementById('omnibox-results');
 
+    const omniboxItems = () =>
+        [...(omniboxResults?.querySelectorAll('.omnibox-result[data-id]') || [])];
+
+    const pintarOmniboxActivo = () => {
+        const items = omniboxItems();
+        items.forEach((el, i) => el.classList.toggle('activo', i === omniboxIndex));
+        if (omniboxIndex >= 0 && items[omniboxIndex]) {
+            items[omniboxIndex].scrollIntoView({ block: 'nearest' });
+        }
+    };
+
     omniboxInput?.addEventListener('input', (e) => {
         clearTimeout(searchDebounce);
+        omniboxIndex = -1;
         const q = e.target.value.trim();
         if (q.length < 2) {
             omniboxResults.classList.remove('visible');
@@ -132,14 +145,17 @@
         searchDebounce = setTimeout(async () => {
             try {
                 const results = await API.search(q);
+                omniboxIndex = -1;
                 if (results.length === 0) {
                     omniboxResults.innerHTML = `<div class="omnibox-result"><span style="color:var(--slate-400);">Sin resultados</span></div>`;
                 } else {
                     omniboxResults.innerHTML = results.map(r => `
-                        <div class="omnibox-result" onclick="App.goToResult('${r.type}', '${r.id}')">
+                        <div class="omnibox-result" role="option" tabindex="-1"
+                             data-type="${r.type}" data-id="${r.id}"
+                             onclick="App.goToResult('${r.type}', '${r.id}')">
                             <span class="result-type">${r.type === 'patient' ? 'Paciente' : 'Profesional'}</span>
-                            <span class="result-label">${r.label}</span>
-                            <span class="result-detail">${r.detail || ''}</span>
+                            <span class="result-label">${UI.escape(r.label)}</span>
+                            <span class="result-detail">${UI.escape(r.detail || '')}</span>
                         </div>
                     `).join('');
                 }
@@ -150,10 +166,36 @@
         }, 300);
     });
 
+    // Flechas para recorrer resultados, Enter para abrir, Esc para cerrar.
+    omniboxInput?.addEventListener('keydown', (e) => {
+        if (!omniboxResults?.classList.contains('visible')) return;
+        const items = omniboxItems();
+        if (!items.length) return;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            omniboxIndex = Math.min(omniboxIndex + 1, items.length - 1);
+            pintarOmniboxActivo();
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            omniboxIndex = Math.max(omniboxIndex - 1, 0);
+            pintarOmniboxActivo();
+        } else if (e.key === 'Enter') {
+            if (omniboxIndex < 0) return;
+            e.preventDefault();
+            const el = items[omniboxIndex];
+            if (el) App.goToResult(el.dataset.type, el.dataset.id);
+        } else if (e.key === 'Escape') {
+            omniboxResults.classList.remove('visible');
+            omniboxIndex = -1;
+        }
+    });
+
     // Close omnibox on click outside
     document.addEventListener('click', (e) => {
         if (!e.target.closest('.omnibox')) {
             omniboxResults?.classList.remove('visible');
+            omniboxIndex = -1;
         }
     });
 
@@ -193,6 +235,7 @@
         async goToResult(type, id) {
             omniboxResults.classList.remove('visible');
             omniboxInput.value = '';
+            omniboxIndex = -1;
 
             // Antes el resultado se tocaba y no pasaba nada visible: guardaba el
             // id en la clave que usa el odontograma y redibujaba la lista entera
