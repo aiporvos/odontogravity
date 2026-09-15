@@ -95,6 +95,25 @@ from backend.models.professional import Professional  # noqa: E402
 from backend.models.schedule import ClinicSchedule, ClinicHoliday  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _contexto_de_conversacion_limpio():
+    """Los contextvars del bot no se limpian solos entre tests.
+
+    Las conversaciones completas dejan estado (motivo, dichos del paciente,
+    último mensaje) en los ContextVar del módulo de herramientas. El siguiente
+    test que lea ese estado hereda datos de una charla ajena: así
+    test_motivo_obligatorio pasaba solo cuando corría antes que las charlas.
+    """
+    from bot.tools import appointment_tools as _t
+    _t._estado_conversacion.set({})
+    _t._dichos_por_el_paciente.set(None)
+    _t._ultimo_mensaje.set("")
+    _t._opciones_ofrecidas.set(None)
+    _t._disponibilidad_del_turno.set(None)
+    _t._requester_phone.set(None)
+    yield
+
+
 @pytest.fixture(scope="session")
 def esquema():
     """Crea el esquema una vez y aplica las migraciones, igual que el arranque real.
