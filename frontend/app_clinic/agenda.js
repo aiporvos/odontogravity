@@ -611,6 +611,10 @@ const AgendaPage = {
                     <div class="form-group"><label>Profesional</label><select id="edit-prof" class="form-control">${profOptions}</select></div>
                     <div class="form-group"><label>Fecha/Hora</label>${AgendaPage._dateTimeFieldsHTML('edit', startVal, 'id="edit-start"')}</div>
                     <div class="form-group">
+                        <label>Duración (min)</label>
+                        <input id="edit-duration" type="number" class="form-control" value="${a.duration_minutes || 30}" min="15" step="15">
+                    </div>
+                    <div class="form-group">
                         <label>Sede${a.location ? '' : ' ⚠️ sin asignar'}</label>
                         <select id="edit-location" class="form-control">
                             <option value="">Sin asignar</option>${locOptions}
@@ -680,6 +684,8 @@ const AgendaPage = {
                 status: val('edit-status'),
             };
             if (startVal) apptData.start_time = startVal;
+            const dur = parseInt(val('edit-duration'), 10);
+            if (dur >= 15) apptData.duration_minutes = dur;
             const loc = val('edit-location');
             if (loc) apptData.location = loc;
             await this._guardarConSobreturno(apptData, (d) => API.updateAppointment(apptId, d));
