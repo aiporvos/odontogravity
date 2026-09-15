@@ -1170,7 +1170,15 @@ def _build_client(provider: str):
         logger.error(f"AI_AGENT -> {provider} omitido: no hay API Key cargada.")
         return None, None
 
-    kwargs = {"api_key": api_key}
+    # Sin timeout, un proveedor trabado deja al paciente esperando sin límite
+    # y la cascada nunca pasa al siguiente. Con max_retries=1 se reintenta una
+    # sola vez antes de ceder el turno al próximo proveedor.
+    try:
+        timeout_s = float(get_config("AI_TIMEOUT_SECONDS", "45"))
+    except (TypeError, ValueError):
+        timeout_s = 45.0
+
+    kwargs = {"api_key": api_key, "timeout": timeout_s, "max_retries": 1}
     if base_url:
         kwargs["base_url"] = base_url
 
