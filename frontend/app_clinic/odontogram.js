@@ -42,9 +42,11 @@ let odontogramState = {
 
 Router.register('odontogram', async (container) => {
     const storedPatientId = sessionStorage.getItem('odontogram_patient_id');
-    let patients = [];
-    try { patients = await API.getPatients(); } catch (e) {}
-    odontogramState.patients = patients;
+    // Ya no se carga la primera página al entrar: con cientos de fichas el
+    // select era inutilizable y el buscador filtraba encima de un recorte.
+    // Se busca contra el servidor a medida que se escribe.
+    odontogramState.patients = [];
+    odontogramState.patientId = null;
 
     container.innerHTML = `
         <div class="page-header">
@@ -66,15 +68,15 @@ Router.register('odontogram', async (container) => {
                 </div>
             </div>
 
-            <!-- Patient Selector -->
+            <!-- Patient Selector: un solo buscador con resultados, sin select -->
             <div class="card">
-                <div class="odontogram-patient-select" style="flex-wrap:wrap;">
+                <div class="odontogram-patient-select">
                     <label style="font-weight:600;color:var(--slate-700);">Paciente:</label>
-                    <input type="text" id="odo-patient-search" placeholder="Buscar por nombre, apellido o DNI..." style="padding:.5rem .85rem;border:1px solid var(--slate-300);border-radius:var(--radius);min-width:260px;font-size:.9rem;">
-                    <select id="odo-patient" style="padding:.5rem .85rem;border:1px solid var(--slate-300);border-radius:var(--radius);min-width:300px;font-size:.9rem;">
-                        <option value="">Seleccionar paciente...</option>
-                        ${patients.map(p => `<option value="${p.id}" ${p.id === storedPatientId ? 'selected' : ''}>${p.last_name}, ${p.first_name} — DNI: ${p.dni}</option>`).join('')}
-                    </select>
+                    <div class="odo-patient-picker" id="odo-patient">
+                        <input type="text" id="odo-patient-search" placeholder="Buscar por nombre, apellido o DNI..." autocomplete="off">
+                        <div class="odo-patient-results" id="odo-patient-results"></div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-ghost hidden" id="odo-patient-clear" title="Cambiar de paciente">✕</button>
                     <div id="odo-insurance" style="font-weight:600;color:var(--primary);"></div>
                 </div>
             </div>
@@ -201,79 +203,153 @@ Router.register('odontogram', async (container) => {
         </div>
     `;
 
-    // Buscador: filtra las opciones del selector a medida que se tipea
-    // Mismo caso que el buscador del modal de turnos: filtrar en el navegador
-    // solo mira la primera pagina de /clinic/patients (50 fichas), asi que el
-    // paciente buscado casi nunca aparecia. La busqueda va al servidor.
+    // Buscador con resultados debajo: el select se fue porque con cientos de
+    // fichas no se podía elegir a nadie, y el input solo recortaba el select.
     const odoSearch = document.getElementById('odo-patient-search');
-    if (odoSearch) {
-        let timer = null;
-        let token = 0;
-        odoSearch.addEventListener('input', (e) => {
-            const q = e.target.value.trim();
-            clearTimeout(timer);
-            timer = setTimeout(async () => {
-                const sel = document.getElementById('odo-patient');
-                if (!sel) return;
-                const mio = ++token;
+    const odoResults = document.getElementById('odo-patient-results');
+    const odoClear = document.getElementById('odo-patient-clear');
+    let timer = null;
+    let token = 0;
 
-                let list;
-                if (!q) {
-                    list = odontogramState.patients;
-                } else {
-                    try {
-                        list = await API.getPatients(q, 200);
-                    } catch (err) {
-                        const n = q.toLowerCase();
-                        list = odontogramState.patients.filter(p =>
-                            `${p.last_name} ${p.first_name} ${p.dni || ''}`.toLowerCase().includes(n));
-                    }
-                }
-                // Respuesta vieja que llego tarde: descartarla.
-                if (mio !== token) return;
+    const cerrarResultados = () => odoResults.classList.remove('visible');
 
-                const conocidos = new Set(odontogramState.patients.map(p => p.id));
-                list.forEach(p => { if (!conocidos.has(p.id)) odontogramState.patients.push(p); });
+    odoSearch.addEventListener('input', (e) => {
+        // Si ya hay paciente elegido y el usuario empieza a tipear otra cosa,
+        // se suelta la selección para no mezclar fichas.
+        if (odontogramState.patientId) OdontogramPage.limpiarPaciente({mantenerTexto: true});
 
-                const current = sel.value;
-                sel.innerHTML = (list.length === 0
-                        ? '<option value="">Sin resultados</option>'
-                        : '<option value="">Seleccionar paciente...</option>') +
-                    list.map(p => `<option value="${p.id}" ${p.id === current ? 'selected' : ''}>${p.last_name}, ${p.first_name} — DNI: ${p.dni || 's/d'}</option>`).join('');
-                if (list.length === 1) {
-                    sel.value = list[0].id;
-                    sel.dispatchEvent(new Event('change'));
-                }
-            }, 250);
-        });
-    }
-
-    // Listen for patient change
-    document.getElementById('odo-patient').addEventListener('change', (e) => {
-        odontogramState.patientId = e.target.value || null;
-        odontogramState.selectedFaces = [];
-        if (odontogramState.patientId) {
-            const p = patients.find(p => p.id === odontogramState.patientId);
-            document.getElementById('odo-insurance').textContent = p ? `Obra Social: ${p.insurance_name || 'Particular'}` : '';
-            OdontogramPage.loadEntries();
-        } else {
-            document.getElementById('odo-insurance').textContent = '';
-            OdontogramPage.clearChart();
-            OdontogramPage.updateSelectionUI();
+        const q = e.target.value.trim();
+        clearTimeout(timer);
+        if (q.length < 2) {
+            cerrarResultados();
+            return;
         }
+        timer = setTimeout(async () => {
+            const mio = ++token;
+            let list = [];
+            try {
+                list = await API.getPatients(q, 30);
+            } catch (err) {
+                odoResults.innerHTML = `<div class="odo-patient-empty">Error al buscar</div>`;
+                odoResults.classList.add('visible');
+                return;
+            }
+            if (mio !== token) return;
+
+            const conocidos = new Set(odontogramState.patients.map(p => p.id));
+            list.forEach(p => { if (!conocidos.has(p.id)) odontogramState.patients.push(p); });
+
+            if (!list.length) {
+                odoResults.innerHTML = `<div class="odo-patient-empty">Sin resultados</div>`;
+            } else {
+                odoResults.innerHTML = list.map(p => {
+                    const detalle = p.dni ? `DNI ${UI.escape(p.dni)}` : (p.phone || 'sin DNI');
+                    return `<button type="button" class="odo-patient-result"
+                        onclick="OdontogramPage.seleccionarPaciente('${p.id}')">
+                        <span class="odo-patient-name">${UI.escape(p.last_name)}, ${UI.escape(p.first_name)}</span>
+                        <span class="odo-patient-detail">${UI.escape(detalle)}</span>
+                    </button>`;
+                }).join('');
+            }
+            odoResults.classList.add('visible');
+        }, 250);
     });
 
+    odoSearch.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') cerrarResultados();
+    });
+
+    document.addEventListener('click', function odoClickFuera(e) {
+        // Se desengancha solo al salir del odontograma, para no acumular
+        // listeners cada vez que se entra a la pantalla.
+        if (!document.getElementById('odo-patient')) {
+            document.removeEventListener('click', odoClickFuera);
+            return;
+        }
+        if (!e.target.closest('#odo-patient')) cerrarResultados();
+    });
+
+    odoClear.addEventListener('click', () => OdontogramPage.limpiarPaciente());
+
     if (storedPatientId) {
-        odontogramState.patientId = storedPatientId;
         sessionStorage.removeItem('odontogram_patient_id');
-        const p = patients.find(p => p.id === storedPatientId);
-        if (p) document.getElementById('odo-insurance').textContent = `Obra Social: ${p.insurance_name || 'Particular'}`;
-        OdontogramPage.loadEntries();
+        OdontogramPage.cargarPacientePorId(storedPatientId);
     }
 });
 
 
 const OdontogramPage = {
+    _etiquetaPaciente(p) {
+        return `${p.last_name}, ${p.first_name}`;
+    },
+
+    async cargarPacientePorId(id) {
+        let p = odontogramState.patients.find(x => x.id === id);
+        if (!p) {
+            try { p = await API.getPatient(id); }
+            catch (err) { UI.toast(err.message, 'error'); return; }
+            odontogramState.patients.push(p);
+        }
+        this.seleccionarPaciente(p.id);
+    },
+
+    seleccionarPaciente(id) {
+        const p = odontogramState.patients.find(x => x.id === id);
+        if (!p) return;
+
+        odontogramState.patientId = p.id;
+        odontogramState.selectedFaces = [];
+
+        const search = document.getElementById('odo-patient-search');
+        const results = document.getElementById('odo-patient-results');
+        const clear = document.getElementById('odo-patient-clear');
+        if (search) {
+            search.value = this._etiquetaPaciente(p);
+            search.blur();
+        }
+        results?.classList.remove('visible');
+        clear?.classList.remove('hidden');
+
+        const insurance = document.getElementById('odo-insurance');
+        if (insurance) insurance.textContent = `Obra Social: ${p.insurance_name || 'Particular'}`;
+
+        this.loadEntries();
+        this.updateSelectionUI();
+    },
+
+    limpiarPaciente({mantenerTexto = false} = {}) {
+        odontogramState.patientId = null;
+        odontogramState.selectedFaces = [];
+        odontogramState.entries = [];
+
+        const search = document.getElementById('odo-patient-search');
+        const clear = document.getElementById('odo-patient-clear');
+        const insurance = document.getElementById('odo-insurance');
+        if (search && !mantenerTexto) search.value = '';
+        clear?.classList.add('hidden');
+        if (insurance) insurance.textContent = '';
+
+        this.clearChart();
+        this.updateSelectionUI();
+
+        const entries = document.getElementById('odo-entries-table');
+        if (entries) {
+            entries.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">🦷</div>
+                    <div class="empty-state-text">Seleccioná un paciente para ver su ficha</div>
+                </div>`;
+        }
+        const pending = document.getElementById('odo-pending-treatments');
+        if (pending) {
+            pending.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">📋</div>
+                    <div class="empty-state-text">Seleccioná un paciente para ver sus trabajos pendientes</div>
+                </div>`;
+        }
+    },
+
     renderTooth(number) {
         return `
             <div class="tooth" id="tooth-${number}" data-tooth="${number}">

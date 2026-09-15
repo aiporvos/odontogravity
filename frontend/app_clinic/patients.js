@@ -36,6 +36,10 @@ const PatientsPage = {
         const container = document.getElementById('patients-table');
         try {
             const patients = await API.getAllPatients(q);
+            // La edición en la celda necesita el valor real del campo: el texto
+            // que se ve puede ser el cartel "falta DNI" y no el dato.
+            PatientsPage._lista = patients;
+            PatientsPage._filtro = q;
             UI.tabla('patients-table', {
                 filas: patients,
                 vacio: 'No se encontraron pacientes',
@@ -44,13 +48,15 @@ const PatientsPage = {
                      valor: p => `${p.last_name}, ${p.first_name}`,
                      html: p => `<strong>${UI.escape(p.last_name)}, ${UI.escape(p.first_name)}</strong>`},
                     {titulo: 'DNI', valor: p => p.dni,
+                     tdAttrs: p => `class="celda-editable" title="Clic para editar el DNI" onclick="PatientsPage.editarEnLinea(this, '${p.id}', 'dni')"`,
                      html: p => p.dni
                         ? UI.escape(p.dni)
-                        : '<span class="badge badge-cancelled" title="Falta completar el DNI cuando el paciente venga">falta DNI</span>'},
+                        : '<span class="badge badge-cancelled">falta DNI</span>'},
                     {titulo: 'Teléfono', valor: p => p.phone,
+                     tdAttrs: p => `class="celda-editable" title="Clic para editar el teléfono" onclick="PatientsPage.editarEnLinea(this, '${p.id}', 'phone')"`,
                      html: p => p.phone
                         ? UI.escape(p.phone)
-                        : '<span class="badge badge-cancelled" title="Sin teléfono no recibe recordatorios">falta teléfono</span>'},
+                        : '<span class="badge badge-cancelled">falta teléfono</span>'},
                     {titulo: 'Obra Social', valor: p => p.insurance_name,
                      html: p => UI.escape(p.insurance_name || '-')},
                     {titulo: 'Acciones', orden: false, valor: () => '', html: p => `
@@ -62,6 +68,63 @@ const PatientsPage = {
         } catch (err) {
             container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
         }
+    },
+
+    // ── Editar el DNI y el teléfono en la misma celda ──────────────────────
+    // Completar ocho dígitos abría un formulario de once campos. Son los dos
+    // datos que faltan en casi todas las fichas que vienen de la agenda de
+    // papel, así que se cargan donde se ven.
+    _CAMPOS_EN_LINEA: {
+        dni: {nombre: 'DNI', placeholder: 'DNI, sin puntos'},
+        phone: {nombre: 'Teléfono', placeholder: '+54 9 260 ...'},
+    },
+
+    editarEnLinea(td, id, campo) {
+        if (td.querySelector('input')) return;
+
+        const paciente = (PatientsPage._lista || []).find(p => p.id === id);
+        const valorPrevio = (paciente && paciente[campo]) || '';
+        const original = td.innerHTML;
+        const {nombre, placeholder} = PatientsPage._CAMPOS_EN_LINEA[campo];
+
+        td.innerHTML = `<input type="text" class="celda-input" value="${UI.escape(valorPrevio)}"
+            placeholder="${placeholder}" aria-label="${nombre}">`;
+        const input = td.querySelector('input');
+        input.focus();
+        input.select();
+
+        // `cerrado` evita que el blur que dispara el propio guardado vuelva a
+        // entrar acá y guarde dos veces.
+        let cerrado = false;
+        const cancelar = () => {
+            if (cerrado) return;
+            cerrado = true;
+            td.innerHTML = original;
+        };
+        const guardar = async () => {
+            if (cerrado) return;
+            cerrado = true;
+            const valor = input.value.trim();
+            if (valor === valorPrevio) {
+                td.innerHTML = original;
+                return;
+            }
+            td.innerHTML = '<span class="celda-guardando">guardando…</span>';
+            try {
+                await API.updatePatient(id, {[campo]: valor || null});
+                UI.toast(`${nombre} actualizado`, 'success');
+                PatientsPage.loadList(PatientsPage._filtro || '');
+            } catch (err) {
+                UI.toast(err.message, 'error');
+                td.innerHTML = original;
+            }
+        };
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); guardar(); }
+            else if (e.key === 'Escape') { e.preventDefault(); cancelar(); }
+        });
+        input.addEventListener('blur', guardar);
     },
 
     async showForm(id = null) {

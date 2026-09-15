@@ -190,13 +190,22 @@
 
     // ── Global App Object ──────────────────────────────
     window.App = {
-        goToResult(type, id) {
+        async goToResult(type, id) {
             omniboxResults.classList.remove('visible');
             omniboxInput.value = '';
+
+            // Antes el resultado se tocaba y no pasaba nada visible: guardaba el
+            // id en la clave que usa el odontograma y redibujaba la lista entera
+            // de pacientes, sin abrir ni resaltar al que se habia buscado. Buscar
+            // a alguien y que te lleve a su ficha es todo el sentido del buscador.
+            //
+            // El await importa: navigate() cierra cualquier modal al entrar, asi
+            // que la ficha se abre recien cuando la pagina termino de renderizar.
             if (type === 'patient') {
-                sessionStorage.setItem('odontogram_patient_id', id);
-                Router.currentPage = null;
-                Router.navigate('patients');
+                await Router.navigate('patients');
+                PatientsPage.showForm(id);
+            } else if (type === 'professional') {
+                await Router.navigate('professionals');
             }
         },
     };

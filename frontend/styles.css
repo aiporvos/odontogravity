@@ -1130,6 +1130,68 @@ tbody tr:hover { background: var(--bg-inset); }
     flex-wrap: wrap;
 }
 
+.odo-patient-picker {
+    position: relative;
+    flex: 1 1 320px;
+    min-width: 260px;
+    max-width: 480px;
+}
+
+.odo-patient-picker input {
+    width: 100%;
+    padding: .5rem .85rem;
+    border: 1px solid var(--slate-300);
+    border-radius: var(--radius);
+    font-size: .9rem;
+    font-family: inherit;
+}
+.odo-patient-picker input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 25%, transparent);
+}
+
+.odo-patient-results {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 40;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.12));
+    max-height: 280px;
+    overflow-y: auto;
+}
+.odo-patient-results.visible { display: block; }
+
+.odo-patient-result {
+    display: flex;
+    justify-content: space-between;
+    gap: .75rem;
+    width: 100%;
+    padding: .65rem .85rem;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+}
+.odo-patient-result:hover,
+.odo-patient-result:focus {
+    background: var(--bg-inset, var(--slate-50));
+    outline: none;
+}
+.odo-patient-name { font-weight: 600; color: var(--slate-800); }
+.odo-patient-detail { font-size: .82rem; color: var(--slate-500); white-space: nowrap; }
+.odo-patient-empty {
+    padding: .75rem .85rem;
+    color: var(--slate-400);
+    font-size: .85rem;
+}
+
 .odontogram-chart {
     background: var(--bg-surface);
     border: 2px solid var(--border-color);
@@ -1698,6 +1760,22 @@ tbody tr:hover { background: var(--bg-inset); }
     transition: var(--transition);
 }
 .ficha-repetida:hover { border-color: var(--primary); background: var(--primary); color: #231f20; }
+
+/* ── Celdas que se editan con un clic ─────────────────────────────────────── */
+.celda-editable { cursor: text; }
+.celda-editable:hover { box-shadow: inset 0 0 0 1px var(--primary); border-radius: var(--radius); }
+
+.celda-input {
+    width: 100%;
+    padding: .25rem .4rem;
+    border: 1px solid var(--primary);
+    border-radius: var(--radius);
+    font-size: .9rem;
+    font-family: inherit;
+}
+.celda-input:focus { outline: none; }
+
+.celda-guardando { font-size: .82rem; color: var(--slate-500); }
 
 /* ── Tablas con orden y paginado ──────────────────────────────────────────── */
 .th-ordenable { cursor: pointer; user-select: none; white-space: nowrap; }

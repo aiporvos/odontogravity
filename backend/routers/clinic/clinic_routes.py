@@ -822,10 +822,12 @@ def omnibox_search(q: str = Query(min_length=2), db: Session = Depends(get_db)):
         )
     ).limit(10).all()
     for p in patients:
+        # 380 de las 446 fichas activas vienen de la agenda de papel y no tienen
+        # DNI: el detalle del resultado decia literalmente "DNI: None".
         results.append(SearchResult(
             type="patient", id=p.id,
             label=f"{p.last_name}, {p.first_name}",
-            detail=f"DNI: {p.dni}"
+            detail=f"DNI: {p.dni}" if p.dni else (p.phone or "sin DNI ni teléfono"),
         ))
 
     # Search professionals
