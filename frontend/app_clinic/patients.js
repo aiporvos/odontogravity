@@ -127,6 +127,76 @@ const PatientsPage = {
         input.addEventListener('blur', guardar);
     },
 
+    // Resultado del buscador de arriba: la ficha + si tiene turnos, no solo el
+    // formulario de edición. Desde acá se puede editar, abrir odontograma o
+    // saltar al detalle de un turno.
+    async showDesdeBusqueda(id) {
+        try {
+            const [paciente, turnos] = await Promise.all([
+                API.getPatient(id),
+                API.getAppointments({ patient_id: id, limit: 20 }),
+            ]);
+            const ahora = Date.now();
+            const activos = (turnos || []).filter(t => t.status !== 'cancelled');
+            const futuros = activos
+                .filter(t => new Date(t.start_time).getTime() >= ahora)
+                .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+            const pasados = activos
+                .filter(t => new Date(t.start_time).getTime() < ahora)
+                .sort((a, b) => new Date(b.start_time) - new Date(a.start_time))
+                .slice(0, 5);
+
+            const estado = {
+                pending: 'Pendiente', confirmed: 'Confirmado', completed: 'Realizado',
+                cancelled: 'Cancelado', no_show: 'No asistió',
+            };
+            const fila = (t) => {
+                const prof = t.professional ? UI.escape(t.professional.full_name) : '—';
+                const motivo = UI.escape(t.reason || '—');
+                return `<tr>
+                    <td>${UI.formatDateTime(t.start_time)}</td>
+                    <td>${t.duration_minutes || 30} min</td>
+                    <td>${prof}</td>
+                    <td>${motivo}</td>
+                    <td>${estado[t.status] || t.status}</td>
+                    <td><button class="btn btn-sm btn-ghost" onclick="UI.closeModal(); AgendaPage.showAppointment('${t.id}')">Ver</button></td>
+                </tr>`;
+            };
+            const tabla = (lista, vacio) => lista.length
+                ? `<div class="table-container" style="margin-top:.5rem;">
+                    <table>
+                        <thead><tr>
+                            <th>Fecha</th><th>Duración</th><th>Profesional</th><th>Motivo</th><th>Estado</th><th></th>
+                        </tr></thead>
+                        <tbody>${lista.map(fila).join('')}</tbody>
+                    </table>
+                   </div>`
+                : `<p style="color:var(--slate-500);margin:.4rem 0 0;">${vacio}</p>`;
+
+            const dni = paciente.dni || 'falta DNI';
+            const tel = paciente.phone || 'falta teléfono';
+            const obra = paciente.insurance_name || 'Particular';
+
+            UI.showModal(`${UI.escape(paciente.last_name)}, ${UI.escape(paciente.first_name)}`, `
+                <div style="display:flex;flex-wrap:wrap;gap:1rem 1.5rem;margin-bottom:1rem;font-size:.9rem;">
+                    <div><strong>DNI:</strong> ${UI.escape(dni)}</div>
+                    <div><strong>Teléfono:</strong> ${UI.escape(tel)}</div>
+                    <div><strong>Obra social:</strong> ${UI.escape(obra)}</div>
+                </div>
+                <h3 style="margin:0;font-size:.95rem;">Próximos turnos</h3>
+                ${tabla(futuros, 'Sin turnos futuros')}
+                <h3 style="margin:1.2rem 0 0;font-size:.95rem;">Últimos turnos</h3>
+                ${tabla(pasados, 'Sin turnos anteriores')}
+            `, `
+                <button class="btn btn-secondary" onclick="UI.closeModal()">Cerrar</button>
+                <button class="btn btn-ghost" onclick="UI.closeModal(); PatientsPage.viewOdontogram('${paciente.id}')">🦷 Odontograma</button>
+                <button class="btn btn-primary" onclick="UI.closeModal(); PatientsPage.showForm('${paciente.id}')">Editar ficha</button>
+            `);
+        } catch (err) {
+            UI.toast(err.message, 'error');
+        }
+    },
+
     async showForm(id = null) {
         let patient = { first_name: '', last_name: '', dni: '', phone: '', email: '', date_of_birth: '', address: '', city: '', insurance_name: '', insurance_number: '', medical_notes: '' };
         if (id) {

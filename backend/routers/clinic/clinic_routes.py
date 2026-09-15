@@ -282,6 +282,7 @@ def list_appointments(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     professional_id: Optional[UUID] = None,
+    patient_id: Optional[UUID] = None,
     status: Optional[str] = None,
     location: Optional[str] = None,
     skip: int = 0,
@@ -295,6 +296,8 @@ def list_appointments(
         query = query.filter(Appointment.start_time <= date_to)
     if professional_id:
         query = query.filter(Appointment.professional_id == professional_id)
+    if patient_id:
+        query = query.filter(Appointment.patient_id == patient_id)
     if status:
         query = query.filter(Appointment.status == status)
     if location:
@@ -809,37 +812,70 @@ def clinic_delete_insurance(ins_id: UUID, db: Session = Depends(get_db)):
 # ═══════════════════════════════════════════════════════
 @router.get("/search", response_model=list[SearchResult])
 def omnibox_search(q: str = Query(min_length=2), db: Session = Depends(get_db)):
+    from backend.services.appointment_service import get_clinic_now
+
     results: list[SearchResult] = []
     pattern = f"%{q}%"
+    ahora = get_clinic_now()
 
-    # Search patients
+    # Search patients — también por "apellido nombre" de corrido, como la lista.
+    entero = func.concat(Patient.last_name, " ", Patient.first_name)
+    invertido = func.concat(Patient.first_name, " ", Patient.last_name)
     patients = db.query(Patient).filter(
-        Patient.is_deleted == False,
+        Patient.is_deleted == False,  # noqa: E712
         or_(
             Patient.first_name.ilike(pattern),
             Patient.last_name.ilike(pattern),
             Patient.dni.ilike(pattern),
+            entero.ilike(pattern),
+            invertido.ilike(pattern),
         )
-    ).limit(10).all()
+    ).order_by(Patient.last_name, Patient.first_name).limit(10).all()
+
     for p in patients:
         # 380 de las 446 fichas activas vienen de la agenda de papel y no tienen
         # DNI: el detalle del resultado decia literalmente "DNI: None".
+        base = f"DNI: {p.dni}" if p.dni else (p.phone or "sin DNI ni teléfono")
+        prox = (
+            db.query(Appointment)
+            .filter(
+                Appointment.patient_id == p.id,
+                Appointment.is_deleted == False,  # noqa: E712
+                Appointment.start_time >= ahora,
+                Appointment.status != AppointmentStatus.cancelled,
+            )
+            .order_by(Appointment.start_time)
+            .first()
+        )
+        if prox:
+            cuando = prox.start_time.strftime("%d/%m %H:%M")
+            quien = prox.professional.full_name if prox.professional else ""
+            motivo = (prox.reason or "").strip()
+            partes = [f"próximo: {cuando}"]
+            if quien:
+                partes.append(quien)
+            if motivo:
+                partes.append(motivo)
+            detail = " · ".join(partes)
+        else:
+            detail = f"{base} · sin turnos futuros"
+
         results.append(SearchResult(
             type="patient", id=p.id,
             label=f"{p.last_name}, {p.first_name}",
-            detail=f"DNI: {p.dni}" if p.dni else (p.phone or "sin DNI ni teléfono"),
+            detail=detail,
         ))
 
     # Search professionals
     profs = db.query(Professional).filter(
-        Professional.is_deleted == False,
+        Professional.is_deleted == False,  # noqa: E712
         Professional.full_name.ilike(pattern),
     ).limit(5).all()
     for pr in profs:
         results.append(SearchResult(
             type="professional", id=pr.id,
             label=pr.full_name,
-            detail=", ".join(pr.specialties),
+            detail=", ".join(pr.specialties or []),
         ))
 
     return results

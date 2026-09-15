@@ -196,14 +196,13 @@
 
             // Antes el resultado se tocaba y no pasaba nada visible: guardaba el
             // id en la clave que usa el odontograma y redibujaba la lista entera
-            // de pacientes, sin abrir ni resaltar al que se habia buscado. Buscar
-            // a alguien y que te lleve a su ficha es todo el sentido del buscador.
+            // de pacientes, sin abrir ni resaltar al que se habia buscado.
             //
             // El await importa: navigate() cierra cualquier modal al entrar, asi
             // que la ficha se abre recien cuando la pagina termino de renderizar.
             if (type === 'patient') {
                 await Router.navigate('patients');
-                PatientsPage.showForm(id);
+                PatientsPage.showDesdeBusqueda(id);
             } else if (type === 'professional') {
                 await Router.navigate('professionals');
             }
