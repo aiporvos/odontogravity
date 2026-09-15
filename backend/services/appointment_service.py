@@ -1053,6 +1053,14 @@ def fecha_dicha_por_el_paciente(texto: str, desde=None):
             adelanto = (numero - hoy.weekday()) % 7 or 7
             return hoy + timedelta(days=adelanto)
 
+    # "la semana que viene" sin dia concreto -> el lunes proximo. Sin esto el
+    # modelo re-consultaba sin fecha y ofrecia horarios de HOY a alguien que
+    # pidio explicitamente la semana siguiente (corrida del arnes, 15/09).
+    # Va despues del loop de dias para que "el viernes de la semana que viene"
+    # siga devolviendo el viernes.
+    if re.search(r"semana\s+que\s+viene|proxima\s+semana|semana\s+proxima|semana\s+siguiente", t):
+        return hoy + timedelta(days=(7 - hoy.weekday()))
+
     # "el 16", "el 16/09", "16 de septiembre"
     m = re.search(r"\b(?:el\s+)?([0-3]?\d)\s*(?:/|de\s+)([01]?\d|[a-z]{4,10})", t)
     if not m:

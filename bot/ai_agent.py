@@ -394,6 +394,10 @@ Si da una respuesta ambigua y necesitás diferenciar duración o especialidad, p
 
 Si `quien_me_escribe` ya proporcionó una obra social válida, usala directamente y NO la preguntes nuevamente.
 
+**"Particular" también cuenta.** Si la ficha del paciente ya dice "Particular"
+(o el estado de la conversación ya tiene la cobertura), la cobertura YA ESTÁ
+resuelta: no llames a `preguntar_cobertura` ni vuelvas a preguntarla.
+
 Si el paciente menciona espontáneamente una obra social, llamá a:
 
 `verificar_obra_social(obra_social)`
@@ -403,6 +407,14 @@ antes de asumir que está cubierta.
 También guardala con `recordar_dato`.
 
 ## Si necesitás preguntarla
+
+Solo preguntá la cobertura si NO la conocés: ni en la ficha (`quien_me_escribe`)
+ni en el estado de la conversación. Si la ficha dice "Particular", eso vale como
+respuesta y no se pregunta.
+
+Preguntala UNA sola vez. Si el paciente contesta otra cosa (una fecha, un
+horario), guardá ese dato y seguí avanzando con la búsqueda del turno; no
+bloquees la conversación repitiendo la pregunta.
 
 El flujo es de dos escalones. NO empieces mostrando obras sociales.
 
@@ -502,9 +514,13 @@ Usá:
 
 cuando necesites buscar un turno nuevo.
 
-Solo llamala cuando tengas un motivo suficientemente claro y confirmado por el paciente.
+El motivo tiene que haberlo dicho el paciente. Si ya lo dijo con sus palabras
+("quiero un turno para una extracción"), **eso ES la confirmación**: registralo
+con `recordar_dato('motivo', ...)` y llamá a esta herramienta en esa misma
+ronda. 🚫 PROHIBIDO pedirle que "confirme" un motivo que ya dijo: eso es dar
+vueltas en círculo.
 
-🚫 No llames `consultar_disponibilidad` si todavía no sabés el motivo y ese motivo afecta la duración.
+🚫 No llames `consultar_disponibilidad` si el paciente todavía no dijo el motivo.
 
 La herramienta recibe:
 
@@ -512,7 +528,8 @@ La herramienta recibe:
 * location;
 * date;
 * obra_social;
-* preferencia_horaria.
+* preferencia_horaria;
+* profesional (si el paciente pidió a alguien por nombre).
 
 ---
 
@@ -541,6 +558,13 @@ No calcules manualmente el nombre del día de la semana.
 `consultar_disponibilidad` devuelve la fecha en palabras.
 
 Copiala tal cual.
+
+## "El primero que tengas"
+
+Si el paciente ya dijo "el primero que tengas", "cuando puedas", "lo antes
+posible" o equivalente, **ya eligió**: no le muestres la lista para preguntarle
+cuál. Consultá disponibilidad, tomá el PRIMER horario y agendalo directamente
+con `agendar_turno`. Después contale qué quedó reservado.
 
 ---
 
@@ -914,7 +938,7 @@ Usá inicialmente la identificación por número de WhatsApp.
 
 ---
 
-## `consultar_disponibilidad(motivo_confirmado_por_paciente, location, date, obra_social, preferencia_horaria)`
+## `consultar_disponibilidad(motivo_confirmado_por_paciente, location, date, obra_social, preferencia_horaria, profesional)`
 
 Consulta disponibilidad para un nuevo turno.
 
@@ -922,7 +946,10 @@ Campo obligatorio:
 
 * `motivo_confirmado_por_paciente`
 
-Solo llamala cuando el motivo esté suficientemente claro y confirmado.
+Si el paciente pidió a un profesional por nombre, pasalo en `profesional`.
+
+Si el paciente ya dijo el motivo con sus palabras, eso cuenta como confirmado:
+no le pidas que lo confirme de nuevo.
 
 No vuelvas a llamarla cuando el paciente simplemente esté seleccionando una opción que ya fue ofrecida.
 
@@ -1060,11 +1087,23 @@ Si después de intentar resolver una situación no podés avanzar de manera segu
 
 * no entres en un loop;
 * no inventes;
-* no sigas interrogando al paciente indefinidamente.
+* no sigas interrogando al paciente indefinidamente;
+* 🚫 nunca repitas una pregunta idéntica: si el paciente contestó otra cosa,
+  guardá ese dato con `recordar_dato` y reformulá o avanzá por otro lado.
 
-Podés decir:
+En ese caso **llamá a `derivar_a_recepcion(motivo, resumen)`**. Eso crea un caso
+real que una persona de la clínica va a ver. Decir "te va a ayudar una persona"
+SIN llamar a la herramienta deja al paciente esperando algo que nunca llega.
 
-"Con esto prefiero que te ayude directamente una persona de la clínica para no darte información incorrecta."
+Casos típicos que se derivan, no se responden:
+
+* precios, presupuestos y costos de tratamientos;
+* coberturas que no podés verificar con las herramientas;
+* urgencias o situaciones clínicas que exceden un turno.
+
+Después de llamarla, podés decir:
+
+"Con esto prefiero que te ayude directamente una persona de la clínica para no darte información incorrecta. Ya dejé tu consulta registrada para que te contacten."
 
 ---
 
@@ -1103,6 +1142,9 @@ Antes de enviar cada respuesta al paciente, comprobá internamente:
 * ¿El paciente ya lo dijo con otras palabras?
 * ¿Puedo avanzar sin preguntarlo?
 * ¿Estoy agregando un paso que no cambia la acción siguiente?
+* ¿Estoy por repetir una pregunta que ya hice? 🚫 NUNCA repitas una pregunta
+  con las mismas palabras. Si sigue siendo imprescindible, reformulala e
+  incorporá lo nuevo que el paciente dijo; si no lo es, avanzá sin ella.
 
 Si la respuesta a cualquiera de esas preguntas indica que la pregunta es innecesaria, NO la hagas.
 
@@ -1317,9 +1359,15 @@ def chat(user_message: str, history: list[dict] | None = None,
     # O sea que el paciente se fue creyendo que tenia un turno que no existia, y
     # ademas con un profesional que los lunes no atiende. Un prompt no alcanza:
     # esto lo tiene que garantizar el codigo.
+    # El lookbehind de "que " distingue la oferta de la confirmación:
+    # "¿Te gustaría que te agende con el Dr. Silvestro?" es una pregunta a
+    # futuro y bloquearla dejaba al paciente con el mensaje enlatado de error
+    # (falso positivo del 15/09, caso Murad). "Te agendé para el lunes" sí es
+    # una afirmación y se sigue bloqueando si el turno no existe.
     _CONFIRMA_TURNO = re.compile(
-        r"\b(te\s+agend|qued(o|ó)\s+agendad|te\s+reserv|te\s+anot|"
-        r"turno\s+confirmad|agendad[oa]\s+para)", re.IGNORECASE,
+        r"((?<!que\s)\bte\s+agend|\bqued(o|ó)\s+agendad|(?<!que\s)\bte\s+reserv|"
+        r"(?<!que\s)\bte\s+anot|\bturno\s+confirmad|\bagendad[oa]\s+para)",
+        re.IGNORECASE,
     )
 
     def _promete_sin_cumplir(texto: str, agendo_de_verdad: bool) -> bool:

@@ -524,6 +524,13 @@ def consultar_disponibilidad(
         date_iso = data.get("date", "")
         fecha_texto = data.get("fecha_texto") or date_iso
         if not slots:
+            # El backend explica POR QUE no hay lugar ("Murad no hace Extracción,
+            # eso lo atiende Silvestro..."). Pisar esa explicación con un texto
+            # genérico dejaba al modelo sin la información: en producción dijo
+            # "no tengo turnos con la Dra. Murad" sin aclarar que ella no hace
+            # extracciones ni ofrecer al que sí.
+            if data.get("message"):
+                return data["message"]
             return (
                 f"No hay turnos disponibles en {location} en las próximas dos semanas. "
                 f"Decíselo al paciente y ofrecele que deje sus datos para que lo contacten."
@@ -560,8 +567,28 @@ def consultar_disponibilidad(
                 f"el {fecha_texto}, que es el próximo día con lugar. "
             )
 
+        # Si el paciente ya dijo "el primero que tengas", volver a preguntarle
+        # cuál es dar la vuelta en círculo que este mensaje mismo prohíbe. Se
+        # detecta acá porque es el punto exacto donde el modelo decide entre
+        # listar y agendar, y las tres corridas del arnés mostraron que sin
+        # esto lista y repregunta.
+        import re as _re
+        from backend.services.appointment_service import _sin_acentos
+        quiere_el_primero = any(
+            _re.search(r"\b(el\s+)?primer[oa]?(\s+que\s+(tengas|haya|salga))?\b"
+                       r"|cualquier\s+horario|el\s+que\s+sea|lo\s+antes\s+posible",
+                       _sin_acentos(d or "").lower())
+            for d in ((_dichos_por_el_paciente.get() or ()) or (_ultimo_mensaje.get(),))
+        )
+        elegir_por_el = ""
+        if quiere_el_primero and slots:
+            elegir_por_el = (
+                f"⚡ El paciente YA DIJO que quiere el primer turno disponible: "
+                f"llamá `agendar_turno` AHORA con preferred_date='{date_iso} {slots[0]}' "
+                f"sin volver a preguntarle cuál. "
+            )
         return (
-            f"{aviso}"
+            f"{aviso}{elegir_por_el}"
             f"[FECHA GARANTIZADA FUTURA: {date_iso} = {fecha_texto}] "
             f"Turnos disponibles en {location} para el {fecha_texto}: {', '.join(slots)}. "
             f"Al escribirle al paciente usá EXACTAMENTE '{fecha_texto}'. PROHIBIDO calcular vos "
@@ -662,7 +689,32 @@ def preguntar_cobertura() -> str:
     Ademas convierte "Particular" en una eleccion explicita del paciente. Antes
     se asignaba en silencio por dos caminos —el default del parametro y el
     fallback cuando el nombre no matcheaba— sin que nadie lo decidiera.
+
+    Barrera contra el loop de cobertura (15/09): el modelo llamaba a esta
+    herramienta dos veces seguidas y el paciente recibia la MISMA pregunta
+    textual aunque hubiera contestado otra cosa en el medio. Como la pregunta
+    la arma la herramienta, la barrera va aca y no en el prompt: si la
+    cobertura ya se conoce o ya se pregunto, la herramienta se niega y le dice
+    al modelo como seguir.
     """
+    estado = _estado_conversacion.get() or {}
+    if estado.get("obra_social"):
+        return (
+            f"✋ La cobertura ya se conoce: {estado['obra_social']}. "
+            "NO se la preguntes de nuevo: seguí con el turno usando esa cobertura."
+        )
+    if estado.get("cobertura_preguntada"):
+        return (
+            "✋ Ya le preguntaste la cobertura y el paciente contestó otra cosa. "
+            "🚫 PROHIBIDO repetir la misma pregunta. Registrá con `recordar_dato` "
+            "lo que sí dijo (fecha, horario, motivo) y llamá a "
+            "`consultar_disponibilidad` usando obra_social='Particular' de forma "
+            "provisoria. Si hace falta confirmar la cobertura, hacelo con otras "
+            "palabras en la misma respuesta donde muestres los horarios."
+        )
+    estado = dict(estado)
+    estado["cobertura_preguntada"] = True
+    _estado_conversacion.set(estado)
     set_opciones_ofrecidas(
         ["Tengo obra social", "Particular"], siempre=True, tipo="botones",
     )
