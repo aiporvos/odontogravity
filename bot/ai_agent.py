@@ -15,6 +15,7 @@ from bot.tools.appointment_tools import (
     set_estado_conversacion, get_estado_conversacion, resumen_estado,
     set_ultimo_mensaje, set_dichos_por_el_paciente,
     reiniciar_disponibilidad, disponibilidad_consultada,
+    telefono_consultorio,
 )
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
@@ -1091,19 +1092,26 @@ Si después de intentar resolver una situación no podés avanzar de manera segu
 * 🚫 nunca repitas una pregunta idéntica: si el paciente contestó otra cosa,
   guardá ese dato con `recordar_dato` y reformulá o avanzá por otro lado.
 
-En ese caso **llamá a `derivar_a_recepcion(motivo, resumen)`**. Eso crea un caso
-real que una persona de la clínica va a ver. Decir "te va a ayudar una persona"
-SIN llamar a la herramienta deja al paciente esperando algo que nunca llega.
+En ese caso **llamá a `indicar_llamar_consultorio(motivo, resumen)`**. Eso te
+devuelve el teléfono del consultorio. Decile que llame. 🚫 NO digas que dejaste
+la consulta anotada ni que alguien lo va a contactar: no hay bandeja.
 
-Casos típicos que se derivan, no se responden:
+Usá esa herramienta SOLO si el tema NO es de los que resolvés vos (turnos,
+disponibilidad, cancelar, reprogramar, obras sociales). Si no hay turnos libres,
+decilo y listo: eso sí lo resolviste.
+
+Casos típicos para indicar llamar:
 
 * precios, presupuestos y costos de tratamientos;
 * coberturas que no podés verificar con las herramientas;
-* urgencias o situaciones clínicas que exceden un turno.
+* urgencias o situaciones clínicas que exceden un turno;
+* un turno que dice tener y no aparece en esta agenda.
 
-Después de llamarla, podés decir:
+Después de llamarla, podés decir algo como:
 
-"Con esto prefiero que te ayude directamente una persona de la clínica para no darte información incorrecta. Ya dejé tu consulta registrada para que te contacten."
+"Para eso necesitás llamar al consultorio al *2604-590071*."
+
+(Usá el teléfono que te devolvió la herramienta, no inventes otro.)
 
 ---
 
@@ -1373,21 +1381,21 @@ def chat(user_message: str, history: list[dict] | None = None,
     def _promete_sin_cumplir(texto: str, agendo_de_verdad: bool) -> bool:
         return bool(texto) and not agendo_de_verdad and bool(_CONFIRMA_TURNO.search(texto))
 
-    # Lo mismo para las derivaciones: "dejé la consulta para recepción" es una
-    # afirmación sobre algo que ocurrió o no ocurrió. Antes pausar el bot era
-    # todo lo que pasaba, y el paciente quedaba esperando a alguien que no
-    # sabía que lo estaban esperando.
+    # Lo mismo para promesas vacías de "te van a contactar" / "dejé la consulta":
+    # ya no hay bandeja de derivaciones. La única salida válida es indicar llamar
+    # (herramienta indicar_llamar_consultorio).
     _PROMETE_AVISO = re.compile(
         r"(dej[eé]\s+(la\s+)?consulta|le\s+aviso\s+a|avis[eé]\s+a\s+recepci|"
         r"qued[oó]\s+anotad|lo\s+deriv[eé]|te\s+van\s+a\s+(llamar|contactar)|"
-        r"recepci[oó]n\s+(te|lo|la)\s+(va\s+a\s+)?(llamar|contactar|revisar))",
+        r"recepci[oó]n\s+(te|lo|la)\s+(va\s+a\s+)?(llamar|contactar|revisar)|"
+        r"dej(e|ar)\s+tus\s+datos|cuando\s+haya\s+(disponibilidad|un\s+turno)|"
+        r"te\s+avise\s+cuando|para\s+que\s+te\s+contacten)",
         re.IGNORECASE,
     )
 
     _AVISO_SIN_CASO = (
-        "No pude dejar la consulta registrada. Para no hacerte esperar al pedo: "
-        "escribinos de nuevo en un rato o llamá al consultorio, así te atienden "
-        "directamente."
+        "Para eso necesitás hablar por teléfono con el consultorio. "
+        f"Podés llamar al *{telefono_consultorio()}* y te atienden directamente."
     )
 
     # ── Los horarios que salen tienen que ser los que devolvio el sistema ──
@@ -1614,8 +1622,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                         return _SIN_RESPALDO, None, get_estado_conversacion()
                     if result and not derivo_de_verdad and _PROMETE_AVISO.search(result):
                         logger.error(
-                            "AI_AGENT -> El modelo prometió avisarle a recepción sin "
-                            "crear la derivación. Mensaje bloqueado: %s", result[:200],
+                            "AI_AGENT -> Prometió contacto/derivación sin indicar "
+                            "llamar. Mensaje bloqueado: %s", result[:200],
                         )
                         return _AVISO_SIN_CASO, None, get_estado_conversacion()
 
@@ -1670,7 +1678,9 @@ def chat(user_message: str, history: list[dict] | None = None,
                     tool_result = execute_tool(tc.function.name, args)
                     if tc.function.name == "agendar_turno" and tool_result.startswith("✅"):
                         agendo_de_verdad = True
-                    if tc.function.name == "derivar_a_recepcion" and tool_result.startswith("✅"):
+                    if tc.function.name in (
+                        "indicar_llamar_consultorio", "derivar_a_recepcion",
+                    ) and tool_result.startswith("✅"):
                         derivo_de_verdad = True
                     logger.info(f"  🔧 {tc.function.name}({json.dumps(args, ensure_ascii=False)[:120]}) → {tool_result[:100]}...")
                     conv.append({
@@ -1697,8 +1707,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                 return _SIN_RESPALDO, None, get_estado_conversacion()
             if final and not derivo_de_verdad and _PROMETE_AVISO.search(final):
                 logger.error(
-                    "AI_AGENT -> Prometió avisarle a recepción sin crear la "
-                    "derivación. Mensaje bloqueado: %s", final[:200],
+                    "AI_AGENT -> Prometió contacto/derivación sin indicar "
+                    "llamar. Mensaje bloqueado: %s", final[:200],
                 )
                 return _AVISO_SIN_CASO, None, get_estado_conversacion()
 

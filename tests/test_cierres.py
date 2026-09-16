@@ -64,3 +64,39 @@ def test_un_cierre_con_pedido_no_es_un_cierre(mensaje):
 ])
 def test_no_confunde_otras_cosas_con_un_cierre(mensaje):
     assert es_solo_un_cierre(mensaje) is False
+
+
+# ── Aviso de demora (caso Kiara 16/09) ──────────────────────────────────────
+
+from backend.routers.evolution_router import es_aviso_de_demora
+
+
+@pytest.mark.parametrize("mensaje", [
+    "Llegamos un poquito más tarde, pero vamos",
+    "Buenos días!! Llegamos un poquito más tarde,pero vamos",
+    "voy un poco tarde",
+    "estamos en camino",
+    "ya vamos",
+    "me atrasé un toque",
+])
+def test_reconoce_aviso_de_demora(mensaje):
+    assert es_aviso_de_demora(mensaje) is True, f"No lo tomó como demora: {mensaje!r}"
+
+
+@pytest.mark.parametrize("mensaje", [
+    "quiero un turno",
+    "necesito cancelar",
+    "llegamos tarde, ¿me podés cambiar el turno?",
+    "Hola",
+    "Ok",
+])
+def test_no_confunde_pedido_con_demora(mensaje):
+    assert es_aviso_de_demora(mensaje) is False
+
+
+def test_indicar_llamar_no_crea_derivacion():
+    from bot.tools.appointment_tools import indicar_llamar_consultorio
+    r = indicar_llamar_consultorio("clinico", "le duele una muela")
+    assert r.startswith("✅")
+    assert "2604" in r or "llamar" in r.lower()
+    assert "anotada" not in r.lower() or "PROHIBIDO" in r

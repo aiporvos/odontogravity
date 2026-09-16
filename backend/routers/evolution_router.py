@@ -400,7 +400,8 @@ def _guardar_estado(db: Session, session, estado: dict | None):
 
 
 # Cuánto se calla el bot cuando una persona toma la conversación.
-PAUSA_INTERVENCION_HUMANA = timedelta(minutes=30)
+# El valor efectivo sale de MINUTOS_PAUSA_HUMANA (default 480 = 8 h).
+PAUSA_INTERVENCION_HUMANA = timedelta(minutes=480)
 
 
 def bot_silenciado(remote_jid: str) -> bool:
@@ -430,18 +431,9 @@ def bot_silenciado(remote_jid: str) -> bool:
             )
             return True
 
-        # Venció la pausa pero quedó algo esperando a recepción. Reanudar la
-        # admisión ahí es contradecir a quien todavía no pudo atenderlo: el
-        # paciente escribió porque su problema sigue sin resolverse, y el bot
-        # volvería a ofrecerle turnos como si nada. Se calla hasta que recepción
-        # cierre el caso.
-        from backend.services.derivaciones import hay_pendiente
-        if hay_pendiente(db, remote_jid):
-            logger.info(
-                "⏸️ %s tiene una derivación sin resolver: el bot no reanuda solo.",
-                ofuscar_telefono(remote_jid),
-            )
-            return True
+        # Venció la pausa. Ya no se mira una bandeja de derivaciones: esa
+        # bandeja dejó de usarse (solo se indica llamar). Si recepción tomó
+        # el chat, la pausa humana es lo que mantiene al bot callado.
         return False
     except Exception as e:
         logger.error(f"Error verificando si el bot está pausado: {e}", exc_info=True)
@@ -453,13 +445,14 @@ def bot_silenciado(remote_jid: str) -> bool:
 def _minutos_de_pausa() -> int:
     """Cuanto se calla el bot cuando alguien de la clinica toma la conversacion.
 
-    Configurable desde el panel: media hora alcanza para una consulta puntual,
-    pero si la secretaria se queda atendiendo el caso entero conviene subirlo.
+    Default 8 horas: con 30 minutos (caso Collado 16/09) recepción escribía a
+    la mañana y el bot retomaba al mediodía pisando una gestión humana
+    (firmar historia clínica / PAMI). Configurable desde el panel.
     """
     try:
-        return max(1, int((get_config("MINUTOS_PAUSA_HUMANA", "30") or "30").strip()))
+        return max(1, int((get_config("MINUTOS_PAUSA_HUMANA", "480") or "480").strip()))
     except (TypeError, ValueError):
-        return 30
+        return 480
 
 
 async def _pausar_por_intervencion_humana(remote_jid: str, texto: str):
@@ -510,11 +503,11 @@ async def _quizas_pausar_por_intervencion_humana(remote_jid: str, texto: str):
         # Si coincide con lo último que dijo el bot, es su propio eco.
         if ultimo_bot and ultimo_bot.content.strip()[:120] == texto[:120]:
             return
-        session.paused_until = datetime.utcnow() + PAUSA_INTERVENCION_HUMANA
+        session.paused_until = datetime.utcnow() + timedelta(minutes=_minutos_de_pausa())
         db.commit()
         logger.info(
             f"🔕 Una persona respondió a mano en {remote_jid}: el bot se calla "
-            f"{int(PAUSA_INTERVENCION_HUMANA.total_seconds() // 60)} minutos."
+            f"{_minutos_de_pausa()} minutos."
         )
     except Exception as e:
         logger.error(f"Error evaluando intervención humana: {e}")
@@ -592,6 +585,42 @@ def es_solo_un_cierre(texto: str) -> bool:
     if _PIDE_ALGO_MAS.search(limpio):
         return False
     return bool(_AGRADECE.match(limpio))
+
+
+# Aviso de demora / "vamos en camino" sobre un turno que ya tiene.
+# Caso real 16/09 (Kiara): "Llegamos un poquito más tarde, pero vamos" y el bot
+# abrió una admisión nueva buscando turnos de inflamación.
+_AVISO_DEMORA = re.compile(
+    r"\b("
+    r"llegamos?\s+(un\s+)?(poquito\s+|poco\s+)?(mas\s+)?tarde|"
+    r"voy\s+(un\s+)?(poquito\s+|poco\s+)?(mas\s+)?tarde|"
+    r"me\s+atras[eo]|nos\s+atrasamos|"
+    r"estamos?\s+en\s+camino|voy\s+en\s+camino|"
+    r"ya\s+(voy|vamos|salgo|salimos)|"
+    r"(pero\s+)?vamos\b|"
+    r"demor(o|amos|ando)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_PIDE_TURNO_NUEVO = re.compile(
+    r"\b(turno|cancel|reprogram|cambiar|precio|cuanto|alias|"
+    r"necesito|quiero\s+(un\s+)?turno|sacar\s+turno)\b",
+    re.IGNORECASE,
+)
+
+
+def es_aviso_de_demora(texto: str) -> bool:
+    """True si el paciente avisa que llega tarde / va en camino, sin pedido nuevo."""
+    limpio = _sin_acentos_simple(texto or "").strip()
+    if not limpio or len(limpio) > 160:
+        return False
+    if _PIDE_TURNO_NUEVO.search(limpio):
+        return False
+    return bool(_AVISO_DEMORA.search(limpio))
+
+
+RESPUESTA_DEMORA = "Dale, te esperamos. ¡Gracias por avisar! 😊"
 
 
 def _sin_acentos_simple(texto: str) -> str:
@@ -673,11 +702,27 @@ def debe_derivar_por_loop(respuesta: str, anteriores: list[str],
     return True
 
 
-SALIDA_DE_LOOP = (
-    "Perdón, me parece que no nos estamos entendiendo. 🙏\n"
-    "Le paso tu consulta a alguien del equipo para que te ayude directamente. "
-    "En un rato te escriben."
-)
+SALIDA_DE_LOOP = None  # se arma al enviar, con el teléfono actual
+
+
+def _mensaje_llamar(motivo_corto: str = "") -> str:
+    from bot.tools.appointment_tools import telefono_consultorio
+    tel = telefono_consultorio()
+    base = (
+        f"Para eso necesitás hablar por teléfono con el consultorio. "
+        f"Podés llamar al *{tel}* y te atienden directamente."
+    )
+    if motivo_corto:
+        return f"Perdón, me parece que no nos estamos entendiendo. 🙏\n{base}"
+    return base
+
+
+def _mensaje_pide_humano() -> str:
+    from bot.tools.appointment_tools import telefono_consultorio
+    return (
+        f"Dale. Para hablar con alguien del equipo, llamá al consultorio al "
+        f"*{telefono_consultorio()}*. Ahí te atienden."
+    )
 
 
 def _respuesta_ofrece(texto: str, opciones: list) -> list:
@@ -865,18 +910,23 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
                 )
                 return
 
-            # El paciente pide hablar con alguien: el bot se corre y avisa.
+            # El paciente pide hablar con alguien: el bot se corre e indica llamar.
+            # No hay bandeja ni promesa de que alguien escriba de vuelta.
             if _pide_humano(text):
-                session.paused_until = datetime.utcnow() + PAUSA_INTERVENCION_HUMANA
+                session.paused_until = datetime.utcnow() + timedelta(minutes=_minutos_de_pausa())
                 db.commit()
                 logger.info(f"🙋 {remote_jid} pidió hablar con una persona.")
-                await send_whatsapp_message(
-                    remote_jid,
-                    "Dale, aviso a la clínica para que te contacten. 😊 "
-                    "En breve te responde una persona del equipo.",
-                )
+                await send_whatsapp_message(remote_jid, _mensaje_pide_humano())
                 return
-            
+
+            # Aviso de demora / "vamos en camino": no abrir una admisión nueva.
+            if es_aviso_de_demora(text):
+                logger.info(f"🚶 {remote_jid} avisó demora/llegada: acuse corto.")
+                response, opciones, estado_nuevo = RESPUESTA_DEMORA, None, _cargar_estado(session)
+                save_message(db, session.id, MessageRole.assistant, response)
+                await send_whatsapp_message(remote_jid, response)
+                return
+
             logger.info(f"🧠 Consultando a la IA para {remote_jid}...")
             # Identidad de la conversación: número real de WhatsApp del remitente.
             # Sirve para que el backend verifique que el DNI pertenece a quien escribe.
@@ -911,10 +961,10 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # se derivara solo a una persona.
             ultimas = [m["content"] for m in history if m["role"] == "assistant"][-2:]
             if debe_derivar_por_loop(response, ultimas, opciones, estado_previo):
-                logger.warning(f"🔁 Respuesta repetida para {remote_jid}: se deriva a una persona.")
-                session.paused_until = datetime.utcnow() + PAUSA_INTERVENCION_HUMANA
+                logger.warning(f"🔁 Respuesta repetida para {remote_jid}: se indica llamar.")
+                session.paused_until = datetime.utcnow() + timedelta(minutes=_minutos_de_pausa())
                 db.commit()
-                response, opciones = SALIDA_DE_LOOP, None
+                response, opciones = _mensaje_llamar("loop"), None
 
             estado_nuevo = dict(estado_nuevo or {})
             estado_nuevo[CLAVE_ULTIMAS_OPCIONES] = _firma_opciones(opciones)

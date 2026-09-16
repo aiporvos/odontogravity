@@ -61,8 +61,9 @@ def test_la_pausa_dura_lo_configurado(db):
     assert 115 < faltan <= 120
 
 
-def test_media_hora_por_defecto(db):
-    assert _minutos_de_pausa() == 30
+def test_ocho_horas_por_defecto(db):
+    """30 min no alcanzaba: recepción escribía a la mañana y el bot retomaba al mediodía."""
+    assert _minutos_de_pausa() == 480
 
 
 def test_un_valor_invalido_no_rompe_el_arranque(db):
@@ -70,7 +71,7 @@ def test_un_valor_invalido_no_rompe_el_arranque(db):
 
     db.add(AppConfig(key="MINUTOS_PAUSA_HUMANA", value="un rato"))
     db.commit()
-    assert _minutos_de_pausa() == 30
+    assert _minutos_de_pausa() == 480
 
 
 def test_un_eco_sin_texto_igual_pausa(db):

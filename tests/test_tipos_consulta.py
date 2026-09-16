@@ -105,6 +105,29 @@ def test_un_conducto_va_a_elena(db, tipos, equipo):
     assert [p.id for p in find_professionals_for_reason("conducto", db)] == [elena.id]
 
 
+def test_conducto_muela_es_conducto_no_extraccion(db, tipos, equipo):
+    """Caso real 16/09: 'conducto muela' caía en Extracción por el sinónimo muela."""
+    from backend.services.appointment_service import _tipo_para_motivo, duracion_para_motivo
+
+    _, elena = equipo
+    tipo = _tipo_para_motivo(db, "tratamiento de conducto muela")
+    assert tipo is not None and tipo.nombre == "Conducto"
+    assert duracion_para_motivo("tratamiento de conducto muela", db) == 60
+    assert [p.id for p in find_professionals_for_reason(
+        "tratamiento de conducto muela", db)] == [elena.id]
+
+
+def test_sacar_una_muela_sigue_siendo_extraccion(db, tipos, equipo):
+    """El arreglo de 'conducto muela' no puede romper el caso típico de extracción."""
+    from backend.services.appointment_service import _tipo_para_motivo
+
+    martin, _ = equipo
+    tipo = _tipo_para_motivo(db, "sacarme una muela")
+    assert tipo is not None and tipo.nombre == "Extracción"
+    assert [p.id for p in find_professionals_for_reason(
+        "sacarme una muela", db)] == [martin.id]
+
+
 def test_los_brackets_van_a_elena(db, tipos, equipo):
     _, elena = equipo
     assert [p.id for p in find_professionals_for_reason("brackets", db)] == [elena.id]

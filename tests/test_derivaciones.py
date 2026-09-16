@@ -104,7 +104,7 @@ def test_si_falla_devuelve_None_para_que_no_se_prometa(db, monkeypatch):
 
 # ── El bot no puede decir que avisó sin haber avisado ──────────────────────
 
-def _correr(monkeypatch, texto, resultado_tool="✅ ok", tool="derivar_a_recepcion"):
+def _correr(monkeypatch, texto, resultado_tool="✅ ok", tool="indicar_llamar_consultorio"):
     from bot import ai_agent
     from tests.test_no_confirmar_lo_que_no_se_hizo import (
         _Cliente, _LlamadaAHerramienta, _Mensaje,
@@ -125,7 +125,7 @@ PROMESA = "No lo encuentro en esta agenda. Dejé la consulta para que recepción
 def test_no_deja_pasar_un_aviso_que_no_ocurrio(monkeypatch):
     texto = _correr(monkeypatch, PROMESA, tool=None)
     assert "Dejé la consulta" not in texto
-    assert "No pude dejar la consulta" in texto
+    assert "llamar" in texto.lower() or "2604" in texto
 
 
 @pytest.mark.parametrize("promesa", [
@@ -134,18 +134,24 @@ def test_no_deja_pasar_un_aviso_que_no_ocurrio(monkeypatch):
     "Lo derivé al equipo.",
     "Te van a llamar en un rato.",
     "Recepción te va a contactar.",
+    "Si querés puedo dejar tus datos para que te contacten.",
+    "¿Te gustaría que te avise cuando haya un turno disponible?",
 ])
 def test_reconoce_las_formas_de_prometer_el_aviso(monkeypatch, promesa):
-    assert "No pude dejar la consulta" in _correr(monkeypatch, promesa, tool=None)
+    texto = _correr(monkeypatch, promesa, tool=None)
+    assert "Dejé la consulta" not in texto
+    assert "van a contactar" not in texto.lower()
+    assert "llamar" in texto.lower() or "2604" in texto
 
 
-def test_si_la_derivacion_se_creo_el_mensaje_sale(monkeypatch):
+def test_si_indico_llamar_el_mensaje_sale(monkeypatch):
     assert _correr(monkeypatch, PROMESA) == PROMESA
 
 
-def test_si_la_derivacion_fallo_no_se_promete(monkeypatch):
-    texto = _correr(monkeypatch, PROMESA, resultado_tool="❌ NO se pudo registrar")
-    assert "No pude dejar la consulta" in texto
+def test_si_la_herramienta_fallo_no_se_promete(monkeypatch):
+    texto = _correr(monkeypatch, PROMESA, resultado_tool="❌ NO se pudo")
+    assert "Dejé la consulta" not in texto
+    assert "llamar" in texto.lower() or "2604" in texto
 
 
 def test_un_mensaje_normal_no_se_toca(monkeypatch):
@@ -154,14 +160,10 @@ def test_un_mensaje_normal_no_se_toca(monkeypatch):
     assert _correr(monkeypatch, normal, tool=None) == normal
 
 
-# ── El bot no reanuda la admisión con una tarea humana abierta ─────────────
+# ── Ya no se silencia por bandeja de derivaciones ───────────────────────────
 
-def test_el_bot_se_calla_mientras_haya_una_derivacion_pendiente(db, monkeypatch):
-    """Vencer el temporizador no resuelve el problema del paciente.
-
-    Si volviera a hablar, le ofrecería turnos como si nada a alguien que
-    escribió justamente porque su caso sigue sin resolverse.
-    """
+def test_una_derivacion_pendiente_ya_no_silencia_al_bot(db, monkeypatch):
+    """La bandeja dejó de usarse: el bot no se calla por filas viejas."""
     from backend.routers import evolution_router as er
 
     class _Sesion:
@@ -171,12 +173,7 @@ def test_el_bot_se_calla_mientras_haya_una_derivacion_pendiente(db, monkeypatch)
     monkeypatch.setattr(er, "get_or_create_session", lambda d, j: _Sesion())
     monkeypatch.setattr(er, "SessionLocal", lambda: db)
 
-    assert er.bot_silenciado(JID) is False
-
-    d = crear_derivacion(db, JID, MotivoDerivacion.identidad, "No puede cancelar.")
-    assert er.bot_silenciado(JID) is True, (
-        "Reanudó la admisión con un caso sin resolver"
+    crear_derivacion(db, JID, MotivoDerivacion.identidad, "Algo viejo.")
+    assert er.bot_silenciado(JID) is False, (
+        "Una derivación pendiente no puede dejar mudo al bot: ya no hay bandeja"
     )
-
-    resolver(db, d.id, por="recepcion")
-    assert er.bot_silenciado(JID) is False, "No volvió después de resolverlo"

@@ -365,14 +365,40 @@ def reprogramar_turno(appointment_id: str, new_datetime: str, dni: str = "") -> 
 #
 # Una paciente pidio cancelar el suyo del dia siguiente y la conversacion
 # termino en "¿podrías darme el nombre y apellido de otra persona?". El turno
-# existia. Nadie se entero.
+# existia. Nadie se entero. No hay bandeja de derivaciones: se indica llamar.
 _NO_APARECE = (
     "\n\n🚫 NO le digas que no tiene turnos ni que nunca los tuvo: puede tenerlos "
     "en una ficha que el sistema no puede vincular a este número. "
-    "Decile que NO LO ENCONTRÁS EN ESTA AGENDA y llamá a `derivar_a_recepcion` "
-    "con motivo 'identidad', poniendo en datos_aportados todo lo que ya te dijo "
-    "(nombre, DNI, día y hora del turno que dice tener)."
+    "Decile que NO LO ENCONTRÁS EN ESTA AGENDA y llamá a "
+    "`indicar_llamar_consultorio` con un motivo breve."
 )
+
+
+def telefono_consultorio() -> str:
+    """Teléfono que se le pasa al paciente cuando el bot no puede resolver.
+
+    Configurable desde el panel (TELEFONO_CONSULTORIO). Por defecto el número
+    productivo de WhatsApp del consultorio.
+    """
+    default = os.getenv("TELEFONO_CONSULTORIO") or os.getenv("YCLOUD_FROM_PHONE") or "2604590071"
+    try:
+        from backend.database import SessionLocal
+        from backend.models.config import AppConfig
+        db = SessionLocal()
+        try:
+            conf = db.query(AppConfig).filter(AppConfig.key == "TELEFONO_CONSULTORIO").first()
+            if conf and (conf.value or "").strip():
+                return conf.value.strip()
+        finally:
+            db.close()
+    except Exception:
+        pass
+    digitos = "".join(c for c in default if c.isdigit())
+    if len(digitos) >= 10:
+        # 5492604590071 → 2604-590071; 2604590071 → 2604-590071
+        local = digitos[-10:]
+        return f"{local[:4]}-{local[4:]}"
+    return default.strip()
 
 
 def consultar_mis_turnos(dni: str = "") -> str:
@@ -533,7 +559,10 @@ def consultar_disponibilidad(
                 return data["message"]
             return (
                 f"No hay turnos disponibles en {location} en las próximas dos semanas. "
-                f"Decíselo al paciente y ofrecele que deje sus datos para que lo contacten."
+                f"Decíselo al paciente con claridad. "
+                f"🚫 NO ofrezcas dejar datos, que lo contacten ni que lo anotes en "
+                f"ninguna bandeja. Sin turnos NO es motivo para indicar_llamar_consultorio: "
+                f"eso es algo que sí resolviste (no hay lugar)."
             )
 
         # Se publican para que el webhook pueda ofrecerlos como lista tocable.
@@ -939,27 +968,31 @@ def resumen_estado(estado: dict) -> str:
     return f"YA SABÉS TODO: {ya}. Podés agendar."
 
 
+def indicar_llamar_consultorio(motivo: str, resumen: str = "") -> str:
+    """Indica al modelo que ofrezca llamar: no hay bandeja ni promesa de contacto.
+
+    Solo para lo que el bot NO puede resolver (clínico, precios, identidad
+    imposible, pedido explícito de persona). Turnos, disponibilidad y
+    cancelaciones NO pasan por acá.
+    """
+    tel = telefono_consultorio()
+    detalle = (resumen or motivo or "").strip()
+    return (
+        f"✅ Indicá llamar. Decile al paciente, en una o dos frases, que para "
+        f"esto necesita hablar por teléfono con el consultorio al *{tel}*. "
+        f"🚫 PROHIBIDO decir que dejaste la consulta anotada, que recepción lo "
+        f"va a contactar o que lo van a llamar. No hay bandeja: solo el teléfono. "
+        f"Motivo interno (no se lo leas): {detalle[:200]}"
+    )
+
+
+# Alias: flujos viejos / tests que todavía nombran la tool anterior.
 def derivar_a_recepcion(motivo: str, resumen: str, datos_aportados: str = "") -> str:
-    """Deja la consulta para que la vea una persona de la clinica."""
-    payload = {
-        "motivo": motivo,
-        "resumen": resumen,
-        "datos_aportados": datos_aportados or None,
-        "requester_phone": _current_requester_phone(),
-    }
-    try:
-        r = httpx.post(f"{API_BASE}/api/bot/derivar", json=payload, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        return ("✅ La consulta quedó registrada para recepción. Recién AHORA podés "
-                "decirle al paciente que la dejaste anotada.")
-    except Exception as e:
-        # Importa que el modelo sepa que NO quedo registrada: prometer que se
-        # aviso cuando no se aviso es la promesa vacia que hay que evitar.
-        return (f"❌ NO se pudo registrar la consulta ({e}). NO le digas al paciente "
-                f"que quedó anotada. Pedile disculpas y sugerile llamar al consultorio.")
+    return indicar_llamar_consultorio(motivo, resumen or datos_aportados or "")
 
 
 _TOOL_MAP = {
+    "indicar_llamar_consultorio": indicar_llamar_consultorio,
     "derivar_a_recepcion": derivar_a_recepcion,
     "agendar_turno": agendar_turno,
     "cancelar_turno": cancelar_turno,
@@ -1128,15 +1161,15 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
-            "name": "derivar_a_recepcion",
+            "name": "indicar_llamar_consultorio",
             "description": (
-                "Deja la consulta anotada para que la resuelva una persona de la "
-                "clínica. Usala cuando: el paciente pide hablar con alguien; dice "
-                "tener un turno que no aparece; no se puede verificar quién es para "
-                "consultar o cancelar; refiere dolor, una prótesis que lastima u otra "
-                "molestia; o falta un dato que no tenés (precio, alias, dirección). "
-                "🚫 NUNCA le digas que dejaste la consulta sin haber llamado a esta "
-                "herramienta y recibido ✅."
+                "ÚNICA salida cuando el tema NO es de los que podés resolver "
+                "(turnos, disponibilidad, cancelar, reprogramar, obras sociales). "
+                "Usala SOLO si: pide hablar con una persona; no encontrás un turno "
+                "que dice tener; no podés verificar quién es; dolor/prótesis/urgencia "
+                "clínica; o falta un dato operativo que no tenés (precio, alias). "
+                "🚫 NO la uses porque no haya turnos libres: eso sí lo resolviste. "
+                "🚫 NUNCA prometas que recepción lo va a contactar ni que anotaste nada."
             ),
             "parameters": {
                 "type": "object",
@@ -1148,24 +1181,16 @@ TOOL_DEFINITIONS = [
                         "description": (
                             "identidad: no se pudo verificar quién escribe. "
                             "pedido_de_persona: pidió hablar con alguien. "
-                            "clinico: dolor, molestia, problema con un tratamiento. "
-                            "dato_faltante: falta un precio, alias o dato operativo."
+                            "clinico: dolor, molestia, urgencia. "
+                            "dato_faltante: falta precio, alias u otro dato operativo."
                         ),
                     },
                     "resumen": {
                         "type": "string",
                         "description": "Qué necesita, en una o dos frases y con sus palabras.",
                     },
-                    "datos_aportados": {
-                        "type": "string",
-                        "description": (
-                            "Todo lo que el paciente ya dio y no se pudo verificar: "
-                            "nombre, DNI, fecha del turno que dice tener. Así no tiene "
-                            "que repetirlo cuando lo atienda recepción."
-                        ),
-                    },
                 },
-                "required": ["motivo", "resumen"],
+                "required": ["motivo"],
             },
         },
     },

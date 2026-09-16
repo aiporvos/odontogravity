@@ -507,18 +507,52 @@ def tipos_consulta_activos(db: Session):
         return []
 
 
+# Sinónimos anatómicos débiles: solos apuntan a Extracción ("sacarme una muela"),
+# pero si el paciente también nombró un tratamiento ("conducto muela") no pueden
+# ganar. Caso real 16/09: "tratamiento de conducto muela" caía en Extracción
+# porque "muela" aparece antes que Conducto en la tabla.
+_SINONIMOS_DEBILES_MOTIVO = {
+    "muela", "muelas", "cordal", "cordales", "diente", "dientes", "pieza", "piezas",
+}
+
+
 def _tipo_para_motivo(db: Session, reason: str):
-    """El tipo de consulta que corresponde a lo que dijo el paciente."""
+    """El tipo de consulta que corresponde a lo que dijo el paciente.
+
+    Si varios tipos matchean (ej. Conducto por "conducto" y Extracción por
+    "muela"), gana el de mayor puntaje: una palabra de tratamiento pesa más
+    que un sinónimo anatómico débil.
+    """
     palabras = _palabras(reason or "")
     if not palabras:
         return None
 
+    mejores: list[tuple[int, object]] = []
     for tipo in tipos_consulta_activos(db):
         candidatos = [tipo.nombre] + list(tipo.sinonimos or [])
+        score = 0
+        matcheo = False
         for c in candidatos:
-            if any(_misma_palabra(_sin_acentos(c), p) for p in palabras):
-                return tipo
-    return None
+            c_norm = _sin_acentos(c)
+            for p in palabras:
+                if not _misma_palabra(c_norm, p):
+                    continue
+                matcheo = True
+                if p in _SINONIMOS_DEBILES_MOTIVO or c_norm in _SINONIMOS_DEBILES_MOTIVO:
+                    score += 1
+                else:
+                    score += 10
+        if not matcheo:
+            continue
+        nombre_norm = _sin_acentos(tipo.nombre or "")
+        if any(_misma_palabra(nombre_norm, p) for p in palabras):
+            score += 5
+        mejores.append((score, tipo))
+
+    if not mejores:
+        return None
+    mejores.sort(key=lambda x: (-x[0], x[1].nombre or ""))
+    return mejores[0][1]
 
 
 def duracion_para_motivo(reason: str, db: Session | None = None) -> int:

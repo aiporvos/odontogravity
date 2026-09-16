@@ -175,10 +175,11 @@ def ficha_para_el_bot(db: Session, paciente) -> dict:
     proximo = db.query(Appointment).filter(
         Appointment.patient_id == paciente.id,
         Appointment.is_deleted == False,  # noqa: E712
-        # get_clinic_now y no utcnow: start_time se guarda en hora local de
-        # Argentina, asi que comparar contra UTC corria el corte 3 horas y los
-        # turnos de las proximas 3 horas no figuraban como "proximo turno".
-        Appointment.start_time >= get_clinic_now(),
+        # Ventana de gracia: un turno que empezó hace menos de 90 minutos
+        # sigue contando como "el de hoy". Sin esto, a las 11:31 un turno de
+        # las 11:30 ya no figuraba y el bot trataba el aviso de demora como
+        # pedido de turno nuevo (caso Kiara 16/09).
+        Appointment.start_time >= get_clinic_now() - timedelta(minutes=90),
         Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]),
     ).order_by(Appointment.start_time).first()
 

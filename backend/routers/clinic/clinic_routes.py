@@ -596,7 +596,13 @@ def list_professionals_clinic(db: Session = Depends(get_db)):
 # BOT SETTINGS (subconjunto de configs editable por el personal de clínica)
 # Solo estas claves NO sensibles. Las API keys y demás quedan en /admin.
 # ═══════════════════════════════════════════════════════
-CLINIC_EDITABLE_CONFIGS = ["BOT_IS_ACTIVE", "ADMIN_NOTIFY_NUMBERS", "REMINDER_HOURS_BEFORE"]
+CLINIC_EDITABLE_CONFIGS = [
+    "BOT_IS_ACTIVE",
+    "ADMIN_NOTIFY_NUMBERS",
+    "REMINDER_HOURS_BEFORE",
+    "TELEFONO_CONSULTORIO",
+    "MINUTOS_PAUSA_HUMANA",
+]
 
 
 @router.get("/bot-settings")
