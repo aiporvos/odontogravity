@@ -1299,14 +1299,14 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # llama se entera por el mensaje, no ofreciendole un dia que no queria.
     excluidos = dias_excluidos(preferencia_horaria)
     if weekday in excluidos:
-        if recursive_depth < 14:
+        if recursive_depth < MAX_DIAS_BUSQUEDA:
             nombre = DIAS_SEMANA[weekday] if weekday < len(DIAS_SEMANA) else ""
             return siguiente(f"pediste que no fuera {nombre}")
         return respuesta([], "No hay turnos en los días que pediste.")
 
     # Regla PAMI: solo viernes
     if obra_social and obra_social.upper() == "PAMI" and weekday != 4:
-        if recursive_depth < 14:
+        if recursive_depth < MAX_DIAS_BUSQUEDA:
             return siguiente(_MOTIVO_INTERNO)
         return respuesta([], "No hay turnos disponibles para PAMI en las próximas semanas.")
 
@@ -1314,9 +1314,9 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # arriba (antes solo se restringia PAMI a viernes; no se restringia viernes
     # a PAMI, asi que un particular podia sacar turno un viernes igual).
     if weekday == 4 and (not obra_social or obra_social.upper() != "PAMI"):
-        if recursive_depth < 14:
+        if recursive_depth < MAX_DIAS_BUSQUEDA:
             return siguiente(_MOTIVO_INTERNO)
-        return respuesta([], "Sin disponibilidad en las próximas dos semanas.")
+        return respuesta([], "Sin disponibilidad en las próximas semanas.")
 
     # Profesionales que pueden atender este motivo. Puede ser mas de uno (ej.
     # "Limpieza" la hacen los dos): el dia esta disponible si CUALQUIERA de
@@ -1359,7 +1359,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     is_holiday = db.query(ClinicHoliday).filter(ClinicHoliday.date == day).first()
     if is_holiday:
         detalle = f" ({is_holiday.description})" if is_holiday.description else ""
-        if recursive_depth < 14:
+        if recursive_depth < MAX_DIAS_BUSQUEDA:
             return siguiente(f"el {fecha_en_palabras(day)} es feriado{detalle} y la clínica está cerrada")
         return respuesta([], "No hay turnos disponibles (feriados).")
 
@@ -1370,14 +1370,14 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
 
     if not shifts:
         # Día cerrado, o ningún candidato trabaja/está disponible ese día.
-        if profesional_pedido and recursive_depth < 14:
+        if profesional_pedido and recursive_depth < MAX_DIAS_BUSQUEDA:
             dias = dias_que_atiende(db, candidatos[0])
             atiende = (" Atiende " + ", ".join(dias) + ".") if dias else ""
             return siguiente(f"{candidatos[0].full_name} no atiende el "
                              f"{fecha_en_palabras(day)}.{atiende}")
-        if recursive_depth < 14:
+        if recursive_depth < MAX_DIAS_BUSQUEDA:
             return siguiente(f"el {fecha_en_palabras(day)} no hay nadie disponible para {reason}")
-        return respuesta([], "Sin disponibilidad en las próximas dos semanas.")
+        return respuesta([], "Sin disponibilidad en las próximas semanas.")
 
     # Turnos del dia en esa sede. Antes esta consulta filtraba tambien por
     # profesional, asi que un horario ocupado por el otro profesional se ofrecia
@@ -1410,7 +1410,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         desde, hasta = rango
         available_slots = [h for h in available_slots if desde <= _a_minutos(h) < hasta]
 
-    if not available_slots and recursive_depth < 14:
+    if not available_slots and recursive_depth < MAX_DIAS_BUSQUEDA:
         if habia_sin_filtrar and rango:
             motivo = (f"el {fecha_en_palabras(day)} no quedaban horarios en la franja "
                      f"que pediste ({preferencia_horaria})")
