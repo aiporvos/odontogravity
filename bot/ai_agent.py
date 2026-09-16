@@ -1513,6 +1513,23 @@ def chat(user_message: str, history: list[dict] | None = None,
         return (f"{aclaracion}Tengo turno{con_quien} el {ultimo.get('fecha_texto')} "
                 f"a las {horarios}. ¿Cuál te sirve?")
 
+    # Caso real 16/09 (…0140): el backend devolvió lunes 5/10 10:00 y 11:00, y
+    # el modelo contestó "no tengo disponibilidad". Si hay slots reales, eso
+    # no puede salir.
+    _NIEGA_DISPONIBILIDAD = re.compile(
+        r"(no\s+(tengo|hay)\s+(disponibilidad|turnos?)|"
+        r"sin\s+disponibilidad|"
+        r"no\s+encuentro\s+(turnos?|disponibilidad)|"
+        r"no\s+quedan?\s+turnos?|"
+        r"no\s+hay\s+turnos?\s+disponibles)",
+        re.IGNORECASE,
+    )
+
+    def _niega_habiendo_horarios(texto: str, consultado: list) -> str | None:
+        if not texto or not _NIEGA_DISPONIBILIDAD.search(texto):
+            return None
+        return _mensaje_con_los_horarios_reales(consultado)
+
     def _consultar_yo_mismo() -> str | None:
         """Si el modelo no consulto, consulta el codigo y arma la respuesta.
 
@@ -1639,6 +1656,15 @@ def chat(user_message: str, history: list[dict] | None = None,
                                     or _consultar_yo_mismo())
                         return (rearmado or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
 
+                    rearmado_negacion = _niega_habiendo_horarios(result, consultado)
+                    if rearmado_negacion:
+                        logger.error(
+                            "AI_AGENT -> El modelo negó disponibilidad con horarios "
+                            "reales en mano. Consultado: %s. Mensaje: %s",
+                            consultado, result[:200],
+                        )
+                        return rearmado_negacion, tomar_opciones_ofrecidas(), get_estado_conversacion()
+
                     atribuido = _atribucion_falsa(result, consultado)
                     if atribuido:
                         logger.error(
@@ -1723,6 +1749,15 @@ def chat(user_message: str, history: list[dict] | None = None,
                 rearmado = (_mensaje_con_los_horarios_reales(consultado)
                             or _consultar_yo_mismo())
                 return (rearmado or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
+
+            rearmado_negacion = _niega_habiendo_horarios(final, consultado)
+            if rearmado_negacion:
+                logger.error(
+                    "AI_AGENT -> Negó disponibilidad con horarios reales "
+                    "(tras agotar rondas). Consultado: %s. Mensaje: %s",
+                    consultado, final[:200],
+                )
+                return rearmado_negacion, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
             atribuido = _atribucion_falsa(final, consultado)
             if atribuido:

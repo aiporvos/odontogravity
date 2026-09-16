@@ -219,3 +219,23 @@ def test_sin_motivo_no_puede_consultar_y_lo_dice_sin_prometer(monkeypatch):
     salida = _correr(monkeypatch, "Tengo turnos a las 10:00.", [])
     assert "no pude confirmar" in salida.lower()
     assert "qué día te viene bien" in salida
+
+
+def test_no_deja_negar_disponibilidad_si_hay_horarios_reales(monkeypatch):
+    """Caso …0140 del 16/09: había 10:00 y 11:00 el 5/10 y dijo que no había."""
+    slots = [{
+        "profesional": "Dra. Elena Murad",
+        "fecha": "2026-10-05",
+        "fecha_texto": "lunes 5 de octubre de 2026",
+        "slots": ["10:00", "11:00"],
+        "motivo": "el jueves 24 de septiembre no hay nadie disponible para conducto",
+    }]
+    salida = _correr(
+        monkeypatch,
+        "No tengo disponibilidad para el tratamiento de conducto el jueves 24. "
+        "¿Te gustaría que busque otra fecha?",
+        slots,
+    )
+    assert "10:00" in salida and "11:00" in salida
+    assert "lunes 5 de octubre" in salida
+    assert "no tengo disponibilidad" not in salida.lower()

@@ -558,7 +558,7 @@ def consultar_disponibilidad(
             if data.get("message"):
                 return data["message"]
             return (
-                f"No hay turnos disponibles en {location} en las próximas dos semanas. "
+                f"No hay turnos disponibles en {location} en las próximas semanas. "
                 f"Decíselo al paciente con claridad. "
                 f"🚫 NO ofrezcas dejar datos, que lo contacten ni que lo anotes en "
                 f"ninguna bandeja. Sin turnos NO es motivo para indicar_llamar_consultorio: "

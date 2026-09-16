@@ -1233,6 +1233,12 @@ def repartir_slots(slots, maximo=6):
 # con naturalidad, sin explicarle la regla.
 _MOTIVO_INTERNO = "__interno__"
 
+# Cuántos días puede saltar la búsqueda hacia adelante buscando un hueco.
+# 14 (≈2 semanas) no alcanza cuando el profesional atiende pocos días y el
+# turno dura 60' (caso real 16/09: conducto OSPELSYM con Murad; el primer
+# hueco era el 5/10, día 19, y el bot decía "sin disponibilidad").
+MAX_DIAS_BUSQUEDA = 28
+
 
 def get_available_slots(db: Session, target_date: str, location: str, reason: str,
                         obra_social: str = "Particular", recursive_depth=0,
