@@ -589,10 +589,17 @@ def _duracion_hardcodeada(reason: str) -> int:
 MOTIVO_CONSULTA_CONDUCTO = "Consulta por conducto"
 MOTIVO_TRATAMIENTO_CONDUCTO = "Conducto"
 
+# Lo que ve el paciente. Si el modelo la parafrasea y pierde los tiempos, el
+# codigo la repone textual (arnes 21/09: "¿Vení derivado o es para realizar el
+# tratamiento directamente?", sin 30' ni 1 hora).
+PREGUNTA_CONDUCTO_PACIENTE = (
+    "¿Venís derivado? ¿Es para una consulta de evaluación (30 minutos) "
+    "o ya para realizar el tratamiento de conducto (1 hora)?"
+)
+
 PREGUNTA_CONDUCTO = (
     "Antes de ofrecer horarios, preguntale exactamente esto: "
-    "«¿Vení derivado? ¿Es para una consulta de evaluación (30 minutos) "
-    "o ya para realizar el tratamiento de conducto (1 hora)?» "
+    f"«{PREGUNTA_CONDUCTO_PACIENTE}» "
     "Según la respuesta registrá motivo='Consulta por conducto' (30') "
     "o motivo='Conducto' (60'). "
     "🚫 PROHIBIDO asumir ni registrar 'Conducto' / 'tratamiento de conducto' a secas."
@@ -742,6 +749,34 @@ def buscar_profesional(db: Session, texto: str):
         if any(_cerca(pedida, suya) for pedida in pedidas for suya in suyas):
             return p
     return None
+
+
+def nombres_profesionales_activos(db: Session) -> str:
+    """"Dr. X y Dra. Y": para decirle al paciente quienes atienden de verdad.
+
+    Charla 21/09: pidio "el doctor Sosa", que no existe, y el bot le dijo que
+    "no estaba disponible". El paciente se fue creyendo que Sosa atiende aca.
+    """
+    activos = db.query(Professional).filter(
+        Professional.is_deleted == False,  # noqa: E712
+        Professional.is_active == True,    # noqa: E712
+    ).order_by(Professional.full_name).all()
+    nombres = [p.full_name for p in activos]
+    if not nombres:
+        return ""
+    if len(nombres) == 1:
+        return nombres[0]
+    return ", ".join(nombres[:-1]) + f" y {nombres[-1]}"
+
+
+def mensaje_profesional_inexistente(db: Session, pedido: str) -> str:
+    quienes = nombres_profesionales_activos(db)
+    return (
+        f"No hay ningún profesional llamado '{pedido}' en la clínica. "
+        f"Atienden: {quienes}. Decíselo al paciente con esas palabras "
+        f"(🚫 NO digas que 'no está disponible': no existe) y preguntale con "
+        f"quién quiere."
+    )
 
 
 def dias_que_atiende(db: Session, profesional) -> list[str]:
@@ -982,8 +1017,7 @@ def create_appointment_logic(
     if profesional_pedido:
         pedido = buscar_profesional(db, profesional_pedido)
         if not pedido:
-            return {"error": f"No encuentro a ningún profesional llamado "
-                             f"'{profesional_pedido}'."}
+            return {"error": mensaje_profesional_inexistente(db, profesional_pedido)}
         if pedido.id not in [c.id for c in candidatos]:
             return {"error": f"{pedido.full_name} no atiende {reason}."}
         if not _atiende_en(db, pedido, start, duration_minutes):
@@ -1454,8 +1488,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     if profesional_pedido:
         pedido = buscar_profesional(db, profesional_pedido)
         if not pedido:
-            return respuesta([], f"No encuentro a ningún profesional con ese nombre "
-                                 f"({profesional_pedido}).")
+            return respuesta([], mensaje_profesional_inexistente(db, profesional_pedido))
         if pedido.id not in [c.id for c in candidatos]:
             # Decir quien SI lo hace: "Murad no atiende Extraccion" a secas deja
             # al paciente sin saber que hacer, y el modelo terminaba inventando

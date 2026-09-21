@@ -70,6 +70,35 @@ def test_la_fecha_del_paciente_le_gana_a_la_del_modelo(monkeypatch):
     )
 
 
+def test_un_si_toma_al_profesional_que_ofrecio_el_bot(monkeypatch):
+    """Pidió Silvestro, el bot ofreció Murad, dijo 'sí': es Murad (arnés 21/09)."""
+    enviados = _capturar(monkeypatch)
+    monkeypatch.setattr(tools, "_fecha_en", lambda t: "")
+    # El caso real: ambas fichas aparecen en el mensaje del bot. El mock de
+    # _profesional_en devolvería la primera; acá se prueba el helper que elige
+    # a la ofrecida (la última).
+    monkeypatch.setattr(tools, "_profesional_ofrecido_en",
+                        lambda t: "Dra. Elena Murad" if "murad" in (t or "").lower() else "")
+    monkeypatch.setattr(tools, "_profesional_en", lambda t: (
+        "Dr. Sergio Silvestro" if "silvest" in (t or "").lower()
+        else "Dra. Elena Murad" if "murad" in (t or "").lower() else ""))
+    tools.set_dichos_por_el_paciente(["un conducto con Silvestre", "sí"])
+    tools.set_ultima_respuesta_bot(
+        "El Dr. Sergio Silvestro no hace conductos. ¿Querés con la Dra. Murad?")
+    tools.set_ultimo_mensaje("sí")
+
+    tools.consultar_disponibilidad("Conducto")
+
+    assert enviados[0]["profesional_pedido"] == "Dra. Elena Murad", enviados[0]
+
+
+def test_profesional_ofrecido_elige_al_ultimo(db, silvestro, murad):
+    """'Silvestro no… ¿con Murad?' → Murad, no Silvestro."""
+    assert tools._profesional_ofrecido_en(
+        "El Dr. Sergio Silvestro no hace conductos. ¿Querés con la Dra. Lucía Murad?"
+    ) == murad.full_name
+
+
 def test_el_profesional_del_paciente_viaja_aunque_el_modelo_lo_omita(monkeypatch):
     enviados = _capturar(monkeypatch)
     monkeypatch.setattr(tools, "_fecha_en", lambda t: "")

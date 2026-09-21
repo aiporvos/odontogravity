@@ -108,6 +108,7 @@ def _contexto_de_conversacion_limpio():
     _t._estado_conversacion.set({})
     _t._dichos_por_el_paciente.set(None)
     _t._ultimo_mensaje.set("")
+    _t._ultima_respuesta_bot.set("")
     _t._opciones_ofrecidas.set(None)
     _t._disponibilidad_del_turno.set(None)
     _t._requester_phone.set(None)

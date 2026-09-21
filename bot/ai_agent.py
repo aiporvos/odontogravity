@@ -15,7 +15,8 @@ from bot.tools.appointment_tools import (
     set_estado_conversacion, get_estado_conversacion, resumen_estado,
     set_ultimo_mensaje, set_dichos_por_el_paciente,
     reiniciar_disponibilidad, disponibilidad_consultada,
-    telefono_consultorio,
+    telefono_consultorio, set_opciones_ofrecidas,
+    es_afirmacion, set_ultima_respuesta_bot,
 )
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
@@ -1276,6 +1277,194 @@ def _get_providers() -> list[str]:
     return providers or ["openai"]
 
 
+# ── Nombres reales de los profesionales ─────────────────────────────────────
+# Charla 21/09: el paciente escribio "Silvestre" y el bot repitio "el Dr.
+# Silvestre" tres veces. La busqueda tolera el typo (fuzzy), el texto que sale
+# no puede repetirlo. Y "el doctor Sosa" no existe: eso se dice, no se suaviza
+# a "no esta disponible".
+
+def _apellidos_reales() -> dict[str, str]:
+    """{apellido normalizado: Apellido como esta en la ficha} de los activos."""
+    import unicodedata
+    tratamientos = {"dr", "dra", "doctor", "doctora", "de", "la", "el", "del"}
+
+    def _norm(t):
+        return "".join(c for c in unicodedata.normalize("NFD", t)
+                       if unicodedata.category(c) != "Mn").lower()
+
+    db = SessionLocal()
+    try:
+        from backend.models.professional import Professional
+        activos = db.query(Professional).filter(
+            Professional.is_deleted == False,  # noqa: E712
+            Professional.is_active == True,    # noqa: E712
+        ).all()
+        # El apellido es la ultima palabra del nombre completo.
+        return {
+            _norm(p.full_name.split()[-1]): p.full_name.split()[-1]
+            for p in activos
+            if p.full_name and _norm(p.full_name.split()[-1]) not in tratamientos
+        }
+    except Exception:
+        return {}
+    finally:
+        db.close()
+
+
+_TRATAMIENTO_Y_APELLIDO = re.compile(
+    r"\b(dr\.?|dra\.?|doctor|doctora|drama)\s+([A-Za-zÁÉÍÓÚáéíóúñÑ]{4,})",
+    re.IGNORECASE,
+)
+
+
+def corregir_apellidos(texto: str) -> str:
+    """Reemplaza 'Dr. Silvestre' por 'Dr. Silvestro' si es un typo de un activo.
+
+    Solo detras de un tratamiento (Dr./Dra./doctor/doctora): asi 'silvestre'
+    como palabra comun no se toca.
+    """
+    if not texto:
+        return texto
+    reales = _apellidos_reales()
+    if not reales:
+        return texto
+    from difflib import SequenceMatcher
+    import unicodedata
+
+    def _norm(t):
+        return "".join(c for c in unicodedata.normalize("NFD", t)
+                       if unicodedata.category(c) != "Mn").lower()
+
+    def _fix(m):
+        trat, apellido = m.group(1), m.group(2)
+        n = _norm(apellido)
+        if n in reales:
+            return f"{trat} {reales[n]}"
+        for real_n, real in reales.items():
+            if len(n) >= 5 and SequenceMatcher(None, n, real_n).ratio() >= 0.8:
+                return f"{trat} {real}"
+        return m.group(0)
+
+    return _TRATAMIENTO_Y_APELLIDO.sub(_fix, texto)
+
+
+def profesional_inexistente_en(texto: str) -> str | None:
+    """El apellido que el paciente pide con tratamiento y que no es de nadie.
+
+    "Un turno con el doctor Sosa" → "Sosa". "Con el drama Silvestre" → None
+    (typo de Silvestro). Se detecta ANTES de llamar al modelo: en la charla del
+    21/09 el modelo no llamó a ninguna tool y siguió como si Sosa existiera.
+    """
+    if not texto:
+        return None
+    reales = _apellidos_reales()
+    if not reales:
+        return None
+    from difflib import SequenceMatcher
+    import unicodedata
+
+    def _norm(t):
+        return "".join(c for c in unicodedata.normalize("NFD", t)
+                       if unicodedata.category(c) != "Mn").lower()
+
+    for m in _TRATAMIENTO_Y_APELLIDO.finditer(texto):
+        apellido = m.group(2)
+        n = _norm(apellido)
+        if n in reales:
+            continue
+        if any(len(n) >= 5 and SequenceMatcher(None, n, r).ratio() >= 0.8 for r in reales):
+            continue
+        if n in {"para", "pero", "como", "cuando", "donde", "quien", "algo", "alguno", "alguna"}:
+            continue
+        return apellido
+    return None
+
+
+def mensaje_profesional_inexistente(pedido: str) -> str:
+    reales = list(_apellidos_reales().values())
+    db = SessionLocal()
+    try:
+        from backend.services.appointment_service import nombres_profesionales_activos
+        quienes = nombres_profesionales_activos(db)
+    except Exception:
+        quienes = " y ".join(reales)
+    finally:
+        db.close()
+    return (
+        f"No tenemos ningún profesional llamado {pedido}. "
+        + (f"Atienden {quienes}. " if quienes else "")
+        + "¿Con quién querés el turno?"
+    )
+
+
+_NO_HAY_PROFESIONAL = re.compile(r"no hay ning[uú]n profesional llamado '([^']+)'", re.IGNORECASE)
+_SUAVIZA = re.compile(r"no\s+(est[aá]|se\s+encuentra)\s+disponible", re.IGNORECASE)
+
+
+def suaviza_inexistente(texto: str, resultados_tools: list[str]) -> bool:
+    """True si una tool dijo que el profesional no existe y el modelo lo suavizo."""
+    if not texto:
+        return False
+    if not any(_NO_HAY_PROFESIONAL.search(r or "") for r in resultados_tools):
+        return False
+    return bool(_SUAVIZA.search(texto))
+
+
+def mensaje_inexistente_desde_tool(resultados_tools: list[str]) -> str | None:
+    """Arma la respuesta al paciente a partir de lo que dijo la tool."""
+    for r in resultados_tools:
+        m = _NO_HAY_PROFESIONAL.search(r or "")
+        if not m:
+            continue
+        quienes = re.search(r"Atienden:\s*([^.]+)\.", r)
+        pedido = m.group(1)
+        lista = quienes.group(1).strip() if quienes else ""
+        return (
+            f"No tenemos ningún profesional llamado {pedido}. "
+            + (f"Atienden {lista}. " if lista else "")
+            + "¿Con quién querés el turno?"
+        )
+    return None
+
+
+# ── Un "sí" a una oferta del bot se ejecuta ─────────────────────────────────
+# Charla 21/09: "¿Te gustaría que busque disponibilidad?" → "Sí" → la misma
+# pregunta, tres veces. Y "¿Te gustaría que lo agende?" sin ningún horario
+# ofrecido. El modelo redacta; ejecutar es del código.
+
+_OFERTA_DEL_BOT = re.compile(
+    r"(busque|buscar|buscamos|busco)\s+(la\s+)?(disponibilidad|horarios?|turnos?)|"
+    r"que\s+lo\s+agende|agendarlo|agendamos|lo\s+agendo|reservarlo|que\s+lo\s+reserve|"
+    r"(te\s+gustar[ií]a|quer[eé]s|quiere[sn]?)\s+(agendar|que\s+(lo\s+)?agende)|"
+    r"agendar\s+con",
+    re.IGNORECASE,
+)
+
+
+def ultima_oferta(history: list[dict] | None) -> bool:
+    """True si lo último que dijo el bot fue ofrecer buscar horarios o agendar."""
+    ultimos = [m for m in (history or []) if m.get("role") == "assistant"]
+    if not ultimos:
+        return False
+    return bool(_OFERTA_DEL_BOT.search(ultimos[-1].get("content") or ""))
+
+
+# El modelo ofrece "¿querés que lo agende?" sin haber mostrado ni un horario.
+_OFRECE_AGENDAR = re.compile(
+    r"(que\s+(te\s+)?lo\s+agende|agendarlo|lo\s+agendo|agendamos|que\s+lo\s+reserve|"
+    r"reservarlo|te\s+lo\s+reservo|"
+    r"(te\s+gustar[ií]a|quer[eé]s)\s+agendar|"
+    r"agendar\s+con)\??",
+    re.IGNORECASE,
+)
+
+
+def ofrece_agendar_sin_horario(texto: str, consultado: list) -> bool:
+    if not texto or consultado:
+        return False
+    return bool(_OFRECE_AGENDAR.search(texto))
+
+
 # ── Main chat function ───────────────────────────────────────────────────────
 
 def chat(user_message: str, history: list[dict] | None = None,
@@ -1298,6 +1487,10 @@ def chat(user_message: str, history: list[dict] | None = None,
     set_dichos_por_el_paciente(
         [m["content"] for m in (history or []) if m.get("role") == "user"] + [user_message]
     )
+    # Y lo ultimo que dijo el bot: si ofrecio UN horario y el paciente dice
+    # "dale", agendar_turno sabe cual es.
+    respuestas_bot = [m["content"] for m in (history or []) if m.get("role") == "assistant"]
+    set_ultima_respuesta_bot(respuestas_bot[-1] if respuestas_bot else "")
     # Datos que el paciente ya dio en esta conversacion. Viajan por parametro y
     # no por contextvar: chat() corre en un executor (otro hilo) y el webhook
     # no veria lo que se setea adentro.
@@ -1416,6 +1609,34 @@ def chat(user_message: str, history: list[dict] | None = None,
                 f"OBLIGATORIO AHORA: el paciente escribió '{busq}' buscando su "
                 f"obra social. Llamá a `listar_obras_sociales(busqueda='{busq}')`. "
                 f"🚫 PROHIBIDO asumir Particular ni seguir sin registrar la cobertura."
+            )
+    # Pidió a alguien que no existe ("doctor Sosa"). Se le dice, con los que sí
+    # atienden. Si el modelo igual sigue como si existiera, lo corrige _pulir.
+    inexistente = profesional_inexistente_en(user_message)
+    if inexistente:
+        forzadas.append(
+            f"OBLIGATORIO AHORA: NO existe ningún profesional llamado "
+            f"'{inexistente}' en la clínica. Decíselo con esas palabras y "
+            f"nombrá a los que sí atienden (los del listado de PROFESIONALES). "
+            f"🚫 PROHIBIDO decir que '{inexistente}' 'no está disponible' o "
+            f"seguir la charla como si existiera. Preguntale con quién quiere."
+        )
+    # "Sí" a "¿querés que busque disponibilidad?": se busca. Si el modelo igual
+    # no lo hace, más abajo lo hace el código (_rescatar_afirmacion).
+    acepto_oferta = es_afirmacion(user_message) and ultima_oferta(history)
+    if acepto_oferta:
+        if estado_ahora.get("motivo") and estado_ahora.get("obra_social"):
+            forzadas.append(
+                "OBLIGATORIO AHORA: el paciente ACEPTÓ tu oferta. Llamá a "
+                "`consultar_disponibilidad` en esta misma respuesta y ofrecé los "
+                "horarios que devuelva. 🚫 PROHIBIDO volver a preguntar si quiere "
+                "que busques. 🚫 PROHIBIDO ofrecer agendar sin mostrar horarios."
+            )
+        else:
+            forzadas.append(
+                "El paciente ACEPTÓ tu oferta pero falta un dato para buscar "
+                f"({resumen_estado(estado_ahora)}). Preguntá SOLO lo que falta, "
+                "una vez. 🚫 PROHIBIDO volver a ofrecer buscar o agendar."
             )
     bloque_forzadas = (("\n" + "\n".join(forzadas) + "\n") if forzadas else "")
 
@@ -1639,6 +1860,46 @@ def chat(user_message: str, history: list[dict] | None = None,
         "¿Me repetís qué día te viene bien y con qué profesional?"
     )
 
+    def _rescatar_afirmacion(texto: str, consultado: list, agendo: bool) -> str | None:
+        """Si dijo "sí" a buscar/agendar y el modelo no ejecutó, ejecuta el código.
+
+        Con el estado completo, consulta disponibilidad y arma la respuesta.
+        Si falta un dato, hace la pregunta determinística de ese dato (con
+        botones). Devuelve None si no hay nada que rescatar.
+        """
+        ofrece_vacio = ofrece_agendar_sin_horario(texto, consultado)
+        if not (acepto_oferta or ofrece_vacio):
+            return None
+        if agendo:
+            return None
+        # Si el modelo sigue ofreciendo ("¿querés con Murad?") en vez de
+        # mostrar horarios, no alcanzó: aunque haya slots viejos de un turno
+        # anterior en el buffer, hay que consultar de nuevo (arnés 21/09).
+        sigue_ofreciendo = bool(_OFERTA_DEL_BOT.search(texto or ""))
+        if consultado and not sigue_ofreciendo and not ofrece_vacio:
+            return None
+        estado_hoy = get_estado_conversacion() or {}
+        if estado_hoy.get("motivo") and estado_hoy.get("obra_social"):
+            logger.error(
+                "AI_AGENT -> El paciente aceptó buscar/agendar y el modelo no "
+                "ofreció horarios. Consulta el código. Mensaje: %s", texto[:200],
+            )
+            reiniciar_disponibilidad()
+            return _consultar_yo_mismo() or _SIN_HORARIOS
+        from bot.tools.appointment_tools import pregunta_por_lo_que_falta
+        dichos = [m["content"] for m in (history or []) if m.get("role") == "user"] + [user_message]
+        pregunta = pregunta_por_lo_que_falta(estado_hoy, dichos)
+        if not pregunta:
+            return None
+        logger.error(
+            "AI_AGENT -> El paciente aceptó pero falta un dato y el modelo no lo "
+            "pidió. Pregunta el código. Mensaje: %s", texto[:200],
+        )
+        texto_p, botones = pregunta
+        if botones:
+            set_opciones_ofrecidas(botones["opciones"], siempre=True, tipo=botones.get("tipo", "lista"))
+        return texto_p
+
     _SIN_RESPALDO = (
         "Perdón, no llegué a confirmar ese turno: todavía no quedó agendado. "
         "¿Me repetís el día y la hora que querés y con qué profesional, así lo "
@@ -1692,6 +1953,41 @@ def chat(user_message: str, history: list[dict] | None = None,
             # que lo hizo.
             agendo_de_verdad = False
             derivo_de_verdad = False
+            # Lo que devolvieron las tools en este intento, para contrastar
+            # la redaccion final con lo que el sistema dijo de verdad.
+            resultados_tools: list[str] = []
+
+            def _pulir(texto: str) -> str:
+                """Ultimo filtro del texto que sale: nombres reales y nada suavizado."""
+                if suaviza_inexistente(texto, resultados_tools):
+                    logger.error(
+                        "AI_AGENT -> Suavizó a 'no disponible' un profesional que NO "
+                        "existe. Mensaje: %s", texto[:200],
+                    )
+                    texto = mensaje_inexistente_desde_tool(resultados_tools) or texto
+                # La pregunta de conducto tiene que llevar los dos tiempos: el
+                # paciente elige entre 30' y 1 hora, no entre dos frases vagas.
+                if any("consulta de evaluación (30 minutos)" in (r or "") for r in resultados_tools):
+                    if "conducto" in texto.lower() and "?" in texto and "30" not in texto:
+                        from backend.services.appointment_service import PREGUNTA_CONDUCTO_PACIENTE
+                        logger.warning(
+                            "AI_AGENT -> Parafraseó la pregunta de conducto sin los "
+                            "tiempos; se repone textual. Mensaje: %s", texto[:200],
+                        )
+                        return PREGUNTA_CONDUCTO_PACIENTE
+                if inexistente:
+                    # Sigue nombrando a "Sosa" como si existiera, o no aclaró
+                    # que no existe: lo dice el código.
+                    reales = [a.lower() for a in _apellidos_reales().values()]
+                    aclaro = re.search(r"\bno\s+(tenemos|hay|existe|contamos)", texto, re.IGNORECASE)
+                    nombra_reales = any(a in texto.lower() for a in reales)
+                    if not (aclaro and nombra_reales):
+                        logger.error(
+                            "AI_AGENT -> Siguió como si '%s' existiera. Mensaje: %s",
+                            inexistente, texto[:200],
+                        )
+                        return mensaje_profesional_inexistente(inexistente)
+                return corregir_apellidos(texto)
 
             for round_num in range(MAX_TOOL_ROUNDS):
                 response = client.chat.completions.create(
@@ -1754,8 +2050,11 @@ def chat(user_message: str, history: list[dict] | None = None,
                         propio = _consultar_yo_mismo()
                         return ((propio or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
                                 get_estado_conversacion())
+                    rescatado = _rescatar_afirmacion(result, consultado, agendo_de_verdad)
+                    if rescatado:
+                        return rescatado, tomar_opciones_ofrecidas(), get_estado_conversacion()
                     logger.info(f"AI_AGENT -> Respuesta final (ronda {round_num + 1}): {result[:80]}...")
-                    return result, tomar_opciones_ofrecidas(), get_estado_conversacion()
+                    return _pulir(result), tomar_opciones_ofrecidas(), get_estado_conversacion()
 
                 # Execute each tool call
                 logger.info(f"AI_AGENT -> Ronda {round_num + 1}: {len(msg.tool_calls)} tool call(s)")
@@ -1781,6 +2080,7 @@ def chat(user_message: str, history: list[dict] | None = None,
                     except json.JSONDecodeError:
                         args = {}
                     tool_result = execute_tool(tc.function.name, args)
+                    resultados_tools.append(tool_result)
                     if tc.function.name == "agendar_turno" and tool_result.startswith("✅"):
                         agendo_de_verdad = True
                     if tc.function.name in (
@@ -1848,7 +2148,10 @@ def chat(user_message: str, history: list[dict] | None = None,
                 propio = _consultar_yo_mismo()
                 return ((propio or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
                         get_estado_conversacion())
-            return final, tomar_opciones_ofrecidas(), get_estado_conversacion()
+            rescatado = _rescatar_afirmacion(final, consultado, agendo_de_verdad)
+            if rescatado:
+                return rescatado, tomar_opciones_ofrecidas(), get_estado_conversacion()
+            return _pulir(final), tomar_opciones_ofrecidas(), get_estado_conversacion()
 
         except Exception as e:
             logger.error(f"AI_AGENT -> Error usando proveedor {provider}: {e}")

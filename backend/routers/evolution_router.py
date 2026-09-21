@@ -645,8 +645,25 @@ def quitar_presentacion(texto: str) -> str:
     return limpio if len(limpio) > 15 else texto
 
 
+
+# Muletillas con las que el modelo arranca una respuesta "distinta" que es la
+# misma: "No, el Dr. X…" vs "El Dr. X…". Charla 21/09.
+_MULETILLAS = re.compile(
+    r"^(no|s[ií]|bueno|dale|perfecto|claro|ok|entiendo|entendido|lamentablemente|"
+    r"perd[oó]n|disculp[aá])[,.!:]?\s+",
+    re.IGNORECASE,
+)
+
+# Cuantas respuestas hacia atras se mira. Con 2, "A, B, A" se escapaba.
+RESPUESTAS_A_MIRAR = 4
+
+
 def _normalizar(texto: str) -> str:
-    return " ".join((texto or "").lower().split())
+    t = " ".join((texto or "").lower().split())
+    # Dos pasadas: "no, bueno, el dr…"
+    for _ in range(2):
+        t = _MULETILLAS.sub("", t)
+    return t
 
 
 def es_repeticion(nueva: str, anteriores: list[str]) -> bool:
@@ -656,10 +673,12 @@ def es_repeticion(nueva: str, anteriores: list[str]) -> bool:
     algo que el modelo no logra interpretar, se queda haciendo la misma
     pregunta indefinidamente.
     """
+    from difflib import SequenceMatcher
+
     n = _normalizar(nueva)
     if len(n) < 20:
         return False
-    for previa in anteriores:
+    for previa in anteriores[-RESPUESTAS_A_MIRAR:]:
         pv = _normalizar(previa)
         if not pv:
             continue
@@ -668,6 +687,9 @@ def es_repeticion(nueva: str, anteriores: list[str]) -> bool:
         # Casi iguales: mismo arranque largo (reformulaciones mínimas).
         corto = min(len(n), len(pv))
         if corto > 60 and n[:60] == pv[:60]:
+            return True
+        # O casi todo el texto igual con alguna palabra cambiada.
+        if corto > 40 and SequenceMatcher(None, n, pv).ratio() >= 0.9:
             return True
     return False
 
@@ -700,6 +722,42 @@ def debe_derivar_por_loop(respuesta: str, anteriores: list[str],
     if firma and firma != (estado_previo or {}).get(CLAVE_ULTIMAS_OPCIONES):
         return False
     return True
+
+
+# Ya se intento un rescate por codigo en esta conversacion. La segunda vez
+# que se traba, se deriva.
+CLAVE_RESCATE_HECHO = "loop_rescatado"
+
+
+def _mensaje_de_rescate(estado: dict, dichos: list[str]) -> tuple[str, dict] | None:
+    """La pregunta determinística de lo que falta, con botones.
+
+    Antes de derivar al telefono, un intento por codigo: si al estado le falta
+    la cobertura o el motivo, se pregunta eso directamente. El modelo se trabo
+    redactando; el codigo sabe exactamente que falta.
+    """
+    from bot.tools.appointment_tools import pregunta_por_lo_que_falta
+    return pregunta_por_lo_que_falta(estado, dichos)
+
+
+def resolver_loop(respuesta: str, anteriores: list[str], opciones: dict | None,
+                  estado_previo: dict | None, dichos: list[str] | None = None,
+                  ) -> tuple[str | None, str | None, dict | None]:
+    """Que hacer si el bot esta repitiendose.
+
+    Devuelve (accion, texto, opciones):
+      (None, None, None)          no es loop
+      ("rescate", texto, botones) primera vez y falta un dato: preguntarlo por codigo
+      ("derivar", None, None)     segunda vez o estado completo: al telefono
+    """
+    if not debe_derivar_por_loop(respuesta, anteriores, opciones, estado_previo):
+        return None, None, None
+    estado = estado_previo or {}
+    if not estado.get(CLAVE_RESCATE_HECHO):
+        rescate = _mensaje_de_rescate(estado, dichos or [])
+        if rescate:
+            return "rescate", rescate[0], rescate[1]
+    return "derivar", None, None
 
 
 SALIDA_DE_LOOP = None  # se arma al enviar, con el teléfono actual
@@ -959,14 +1017,26 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # casi iguales con listas diferentes. Sin esta excepción, escribir
             # "sw" para buscar Swiss Medical hacía que el bot se disculpara y
             # se derivara solo a una persona.
-            ultimas = [m["content"] for m in history if m["role"] == "assistant"][-2:]
-            if debe_derivar_por_loop(response, ultimas, opciones, estado_previo):
+            #
+            # Y antes de derivar, un rescate por código: si al estado le falta
+            # la cobertura o el motivo, se pregunta eso con botones. Recién si
+            # se vuelve a trabar, teléfono.
+            ultimas = [m["content"] for m in history if m["role"] == "assistant"][-RESPUESTAS_A_MIRAR:]
+            dichos = [m["content"] for m in history if m["role"] == "user"] + [text]
+            estado_nuevo = dict(estado_nuevo or {})
+            accion, rescate, botones = resolver_loop(
+                response, ultimas, opciones, estado_previo, dichos,
+            )
+            if accion == "rescate":
+                logger.warning(f"🔁 Respuesta repetida para {remote_jid}: rescate por código.")
+                response, opciones = rescate, botones
+                estado_nuevo[CLAVE_RESCATE_HECHO] = True
+            elif accion == "derivar":
                 logger.warning(f"🔁 Respuesta repetida para {remote_jid}: se indica llamar.")
                 session.paused_until = datetime.utcnow() + timedelta(minutes=_minutos_de_pausa())
                 db.commit()
                 response, opciones = _mensaje_llamar("loop"), None
 
-            estado_nuevo = dict(estado_nuevo or {})
             estado_nuevo[CLAVE_ULTIMAS_OPCIONES] = _firma_opciones(opciones)
             _guardar_estado(db, session, estado_nuevo)
 

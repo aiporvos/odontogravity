@@ -131,7 +131,7 @@ async def send_whatsapp_message(number: str, text: str) -> bool:
         }
     }
     
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_YCLOUD) as client:
         try:
             logger.info(f"📤 Sending WhatsApp message via YCloud to {to_phone} from {from_phone_norm}")
             r = await client.post(url, json=payload, headers=headers)
@@ -223,6 +223,10 @@ async def send_whatsapp_template(number: str, nombre: str, idioma: str,
 # botones, y 20 caracteres por titulo de fila o boton. Si se pasa, la API
 # rechaza el mensaje entero, asi que se recorta y se avisa en el log.
 
+# El default de httpx son 5 s. YCloud a veces tarda mas que eso en aceptar un
+# mensaje, y un timeout con el mensaje ya salido es como se duplican.
+TIMEOUT_YCLOUD = 20.0
+
 MAX_FILAS_LISTA = 10
 MAX_BOTONES = 3
 MAX_TITULO = 20
@@ -240,6 +244,12 @@ async def _enviar_interactivo(number: str, payload_interactivo: dict, texto_fall
     YCloud le llegaba al paciente como dos mensajes identicos.
 
     El fallback lo decide un solo lugar, y es este.
+
+    Y solo se cae a texto cuando YCloud dice que NO lo acepto (4xx). Con un
+    timeout o un 5xx el interactivo puede haber salido igual: mandar el
+    respaldo "por si acaso" es lo que en la charla del 21/09 duplico dos
+    mensajes con botones. En ese caso se loguea POSIBLE_NO_ENTREGADO y se
+    devuelve False.
     """
     api_key = get_config("YCLOUD_API_KEY", "")
     from_phone = get_config("YCLOUD_FROM_PHONE", "")
@@ -255,21 +265,30 @@ async def _enviar_interactivo(number: str, payload_interactivo: dict, texto_fall
         "type": "interactive",
         "interactive": payload_interactivo,
     }
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=TIMEOUT_YCLOUD) as client:
         try:
             r = await client.post(
                 "https://api.ycloud.com/v2/whatsapp/messages",
                 json=payload,
                 headers={"X-API-Key": api_key, "Content-Type": "application/json"},
             )
-            if r.status_code >= 400:
-                logger.error(f"❌ YCloud rechazó el interactivo ({r.status_code}): {r.text[:300]}")
-                return await send_whatsapp_message(number, texto_fallback)
-            logger.info(f"📤 Interactivo enviado a {to_phone}")
-            return True
         except Exception as e:
-            logger.error(f"❌ Error enviando interactivo: {e}")
+            logger.error(
+                f"❌ POSIBLE_NO_ENTREGADO interactivo a {to_phone}: {type(e).__name__}: {e}. "
+                f"No se manda respaldo para no duplicar."
+            )
+            return False
+        if 400 <= r.status_code < 500:
+            logger.error(f"❌ YCloud rechazó el interactivo ({r.status_code}): {r.text[:300]}")
             return await send_whatsapp_message(number, texto_fallback)
+        if r.status_code >= 500:
+            logger.error(
+                f"❌ POSIBLE_NO_ENTREGADO interactivo a {to_phone}: YCloud {r.status_code} "
+                f"{r.text[:200]}. No se manda respaldo para no duplicar."
+            )
+            return False
+        logger.info(f"📤 Interactivo enviado a {to_phone}")
+        return True
 
 
 async def send_whatsapp_list(number: str, cuerpo: str, opciones: list[str],

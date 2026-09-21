@@ -298,8 +298,10 @@ def test_lo_que_no_puede_resolver_lo_deriva(db, clinica, silvestro, paciente):
         "necesito que me digan cuánto sale un implante con hueso y si lo cubre "
         "mi obra social de Buenos Aires")
 
+    # Hoy la salida válida es indicar llamar al consultorio (no hay bandeja).
     assert re.search(
-        r"(recepci[oó]n|una persona|la cl[ií]nica|te (van a |)contactar|consulta)",
+        r"(recepci[oó]n|una persona|la cl[ií]nica|te (van a |)contactar|consulta|"
+        r"llam[aá]|consultorio|tel[eé]fono)",
         respuesta, re.IGNORECASE), (
         "No derivó ni ofreció que lo vea una persona ante algo que no puede "
         f"resolver. Respuesta: {respuesta}"
@@ -324,3 +326,95 @@ def test_turno_para_un_familiar(db, clinica, silvestro, paciente):
         assert "estela" in nombre, (
             f"El turno quedó a nombre de '{nombre}' y era para Estela Pardo."
         )
+
+
+# ── Guión 6: la charla de Claudio del 21/09, la que nunca llegó a un horario ─
+#
+#   Quiero turno → Un turno con el doctor Sosa → Tengo obra social → Avalian →
+#   Tratamiento de conducto → Tratamiento (1 hora) → El jueves con Silvestre →
+#   Sí → (horario)
+#
+# Lo que falló, en orden: preguntó tres veces obra/particular, tomó "Tratamiento
+# de conducto" como obra social, nunca registró Avalian, dijo que Sosa "no está
+# disponible" (no existe), repitió el typo "Silvestre", y ante cuatro "sí" no
+# consultó disponibilidad ni una vez. Plan: docs/PLAN-cobertura-conducto-loops.md
+
+@pytest.fixture
+def clinica_del_21(db, clinica, silvestro, murad):
+    """Murad hace conductos y Avalian es una obra social atendida."""
+    from backend.models.insurance import Insurance
+    from backend.models.schedule import ProfessionalSchedule
+    from datetime import time as py_time
+
+    murad.specialties = list(murad.specialties or []) + ["Endodoncia", "Conducto"]
+    db.add(Insurance(name="Avalian", is_active=True))
+    # Murad lunes/martes/jueves/viernes; Silvestro miércoles a viernes.
+    for prof, dias in ((murad, [0, 1, 3, 4]), (silvestro, [2, 3, 4])):
+        for d in dias:
+            db.add(ProfessionalSchedule(id=uuid.uuid4(), professional_id=prof.id,
+                                        weekday=d, start_time=py_time(9, 0),
+                                        end_time=py_time(12, 30), is_active=True))
+    db.commit()
+
+
+_NO_DISPONIBLE = re.compile(r"no\s+(est[aá]|se\s+encuentra)\s+disponible", re.IGNORECASE)
+_PREGUNTA_COBERTURA = re.compile(r"(obra\s+social|particular)", re.IGNORECASE)
+_HORA = re.compile(r"\b([01]?\d|2[0-3]):[0-5]\d\b")
+
+
+@requiere_modelo
+@requiere_backend
+def test_charla_6_claudio_21_09(db, clinica_del_21, paciente):
+    charla = Charla(db)
+
+    r = charla.decir("Quiero turno")
+    assert "sosa" not in r.lower()
+
+    r = charla.decir("Un turno con el doctor Sosa")
+    assert not _NO_DISPONIBLE.search(r), f"Sosa no existe; no 'no está disponible': {r}"
+    assert "silvestro" in r.lower() and "murad" in r.lower(), (
+        f"Tiene que decir quiénes atienden de verdad: {r}"
+    )
+
+    r = charla.decir("Tengo obra social")
+    veces_pregunto_cobertura = sum(
+        1 for _, b in charla.turnos if "¿" in b and _PREGUNTA_COBERTURA.search(b)
+        and "obra social" in b.lower() and "particular" in b.lower()
+    )
+    assert veces_pregunto_cobertura <= 1, (
+        f"Preguntó obra/particular {veces_pregunto_cobertura} veces"
+    )
+
+    r = charla.decir("Avalian")
+    assert (charla.estado.get("obra_social") or "").lower() == "avalian", (
+        f"Escribió Avalian y no quedó registrada: estado={charla.estado}"
+    )
+    assert "no trabajamos" not in r.lower()
+
+    r = charla.decir("Tratamiento de conducto")
+    assert "30" in r and ("1 hora" in r or "una hora" in r or "60" in r), (
+        f"Conducto tiene que preguntar consulta 30' / tratamiento 1 h: {r}"
+    )
+    assert (charla.estado.get("obra_social") or "").lower() == "avalian", (
+        "'Tratamiento de conducto' pisó la obra social"
+    )
+
+    r = charla.decir("Tratamiento (1 hora)")
+    assert charla.estado.get("motivo") == "Conducto", f"estado={charla.estado}"
+
+    r = charla.decir("El jueves con Silvestre")
+    assert "silvestre" not in r.lower(), f"Repitió el typo: {r}"
+    assert "murad" in r.lower(), f"Tiene que ofrecer a quien sí hace conductos: {r}"
+
+    r = charla.decir("Sí")
+    assert _HORA.search(r), f"Dijo 'sí' y no recibió horarios reales: {r}"
+    assert not re.search(r"que\s+lo\s+agende", r, re.IGNORECASE)
+
+    hora = _HORA.search(r).group(0)
+    charla.decir(hora)
+
+    turno = charla.turno_creado()
+    assert turno is not None, "La charla terminó sin turno"
+    assert turno.duration_minutes == 60, f"Conducto son 60', quedó {turno.duration_minutes}"
+    assert "murad" in turno.professional.full_name.lower()
+    assert (turno.insurance_name or "").lower() == "avalian", turno.insurance_name

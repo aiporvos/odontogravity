@@ -42,6 +42,8 @@ def test_reconoce_un_fragmento_de_obra_social(texto):
     "si", "no", "hola", "dale", "gracias", "particular", "",
     "quiero sacar un turno para una limpieza la semana que viene",
     "123",
+    # El botón, no el nombre de una obra social (arnés 21/09).
+    "Tengo obra social", "obra social", "tengo",
 ])
 def test_no_confunde_una_respuesta_normal_con_una_busqueda(texto):
     assert _texto_parece_busqueda(texto) == ""

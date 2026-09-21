@@ -158,3 +158,27 @@ def test_pedir_a_alguien_que_no_existe_no_agenda_con_otro(db, clinica, grillas, 
     r = _agendar(db, paciente, _proximo(3), quien="Dr. Gonzalez")
     assert "error" in r
     assert db.query(Appointment).count() == 0
+
+
+# ── Alguien que no existe: decirlo, y decir quiénes sí (plan E3) ────────────
+# Charla 21/09: "un turno con el doctor Sosa" → el backend dijo "no encuentro
+# a ningún profesional" y el modelo lo suavizó a "el Dr. Sosa no está
+# disponible". El paciente se fue creyendo que Sosa existe.
+
+def test_disponibilidad_con_alguien_que_no_existe_nombra_a_los_reales(db, clinica, grillas, silvestro, murad):
+    r = get_available_slots(db, _proximo(3).date().isoformat(), "San Rafael",
+                            "Extracción", profesional_pedido="doctor Sosa")
+    assert r["available_slots"] == []
+    msg = r["message"]
+    assert "Sosa" in msg and "no hay" in msg.lower()
+    assert "Silvestro" in msg and "Murad" in msg, "Tiene que decir quiénes atienden"
+
+
+def test_alta_con_alguien_que_no_existe_nombra_a_los_reales(db, clinica, grillas, silvestro, murad, paciente):
+    r = _agendar(db, paciente, _proximo(3), quien="Dr. Sosa")
+    assert "Silvestro" in r["error"] and "Murad" in r["error"]
+
+
+def test_los_nombres_reales_en_una_frase(db, silvestro, murad):
+    from backend.services.appointment_service import nombres_profesionales_activos
+    assert nombres_profesionales_activos(db) == "Dr. Sergio Silvestro y Dra. Lucía Murad"

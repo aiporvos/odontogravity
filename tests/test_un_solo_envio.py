@@ -86,3 +86,62 @@ async def test_sin_opciones_va_directo_el_texto(envios, ycloud_rechaza):
     ok = await whatsapp.send_whatsapp_list("+5492604590071", "Sin horarios", [])
     assert envios == ["Sin horarios"]
     assert ok is True
+
+
+# ── Charla 21/09: dos mensajes con botones llegaron duplicados (plan E6) ────
+# Si YCloud tarda o corta, el interactivo puede haber salido igual. Mandar el
+# texto de respaldo "por si acaso" es lo que duplica. Solo se cae a texto
+# cuando YCloud dice que NO lo aceptó (4xx).
+
+def _cliente_que(monkeypatch, comportamiento):
+    capturado = {}
+
+    class _Cliente:
+        def __init__(self, *a, **k):
+            capturado["kwargs"] = k
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **k): return comportamiento()
+
+    monkeypatch.setattr(whatsapp.httpx, "AsyncClient", _Cliente)
+    monkeypatch.setattr(whatsapp, "get_config",
+                        lambda k, d="": "x" if "KEY" in k else "+5492604590071")
+    return capturado
+
+
+@pytest.mark.asyncio
+async def test_timeout_no_manda_texto_de_respaldo(envios, monkeypatch):
+    def _timeout():
+        raise whatsapp.httpx.ReadTimeout("lento")
+    _cliente_que(monkeypatch, _timeout)
+
+    ok = await whatsapp.send_whatsapp_buttons("+5492604590071", "¿Obra social?", ["Sí", "No"])
+
+    assert envios == [], f"Mandó respaldo tras un timeout: puede llegar duplicado. {envios}"
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_un_5xx_tampoco_manda_respaldo(envios, monkeypatch):
+    class _R:
+        status_code = 502
+        text = "bad gateway"
+    _cliente_que(monkeypatch, lambda: _R())
+
+    ok = await whatsapp.send_whatsapp_buttons("+5492604590071", "¿Obra social?", ["Sí", "No"])
+
+    assert envios == []
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_el_post_espera_hasta_20_segundos(envios, monkeypatch):
+    class _R:
+        status_code = 200
+        text = "ok"
+    capturado = _cliente_que(monkeypatch, lambda: _R())
+
+    await whatsapp.send_whatsapp_buttons("+5492604590071", "¿Obra social?", ["Sí", "No"])
+
+    timeout = capturado["kwargs"].get("timeout")
+    assert timeout is not None and float(timeout) >= 20, f"timeout={timeout}"

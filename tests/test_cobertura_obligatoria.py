@@ -52,6 +52,29 @@ def test_si_dijo_tengo_obra_social_manda_a_listar():
     assert "provisoria" not in r.lower()
 
 
+def test_verificar_con_tengo_obra_social_muestra_la_lista(monkeypatch):
+    """Arnés 21/09: verificar_obra_social('Tengo obra social') → 'no trabajamos con esa'."""
+    from bot.tools import appointment_tools as tools
+
+    class _R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {"activas": ["OSDE", "PAMI"], "total": 2, "hay_mas": False,
+                    "modo": "frecuentes", "exacta": None}
+    monkeypatch.setattr(tools.httpx, "get", lambda *a, **k: _R())
+    monkeypatch.setattr(tools.httpx, "post",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no verifica")))
+    tools.set_estado_conversacion({})
+    tools.set_ultimo_mensaje("Tengo obra social")
+
+    r = tools.verificar_obra_social("Tengo obra social")
+
+    assert "no trabajamos" not in r.lower()
+    pub = tools.tomar_opciones_ofrecidas()
+    assert pub and "OSDE" in pub["opciones"], "Tiene que mostrar la lista"
+
+
 def test_tengo_obra_social_pisa_particular_de_la_ficha():
     """Si la ficha decía Particular y ahora pide OS, hay que listar."""
     set_estado_conversacion({"obra_social": "Particular"})

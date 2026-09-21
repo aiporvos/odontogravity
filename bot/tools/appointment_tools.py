@@ -1,5 +1,6 @@
 """DentiBot tools - communicate with the backend API (OpenAI function calling)."""
 import os
+import re
 import json
 import contextvars
 import httpx
@@ -86,7 +87,7 @@ def _motivo_dicho_por_el_paciente(valor: str):
 _NO_ES_BUSQUEDA = {
     "si", "no", "ok", "dale", "hola", "gracias", "bueno", "listo", "particular",
     "obra", "social", "obrasocial", "dime", "cual", "cuales", "otra", "otro",
-    "dale si", "no la veo", "no esta", "dale gracias",
+    "dale si", "no la veo", "no esta", "dale gracias", "tengo", "tengo obra",
 }
 
 # Palabras con las que el paciente dice QUE QUIERE HACER, no como se llama su
@@ -204,6 +205,11 @@ def _texto_parece_busqueda(texto: str) -> str:
         return ""
     if not _parece_nombre_de_obra_social(limpio):
         return ""   # "agendar", "quiero un turno", "tratamiento de conducto"
+    # "Tengo obra social" / "obra social" es el boton, no el nombre de una.
+    # Arnes 21/09: listar_obras_sociales busco 'tengo obra social' y contesto
+    # "no trabajamos con esa obra social".
+    if _paciente_eligio_tiene_obra_social(limpio) or _paciente_eligio_particular(limpio):
+        return ""
     # "Silvestre" / "Murad" / "Sosa": es pedir profesional, no cobertura.
     if _profesional_en(limpio):
         return ""
@@ -283,6 +289,121 @@ def tomar_opciones_ofrecidas():
 
 # ── Tool implementations ─────────────────────────────────────────────────────
 
+# Lo ultimo que dijo el BOT. Sirve para saber que horarios le ofrecio: si le
+# ofrecio uno solo y el paciente dice "dale", ese es el elegido.
+_ultima_respuesta_bot: contextvars.ContextVar = contextvars.ContextVar(
+    "ultima_respuesta_bot", default="")
+
+
+def set_ultima_respuesta_bot(texto: str | None):
+    _ultima_respuesta_bot.set(texto or "")
+
+
+_AFIRMACIONES = {
+    "si", "sí", "dale", "ok", "okey", "bueno", "claro", "obvio", "perfecto",
+    "genial", "joya", "listo", "va", "sip", "por favor", "porfa", "busca",
+    "buscá", "buscalo", "hacelo", "de acuerdo", "esta bien", "está bien",
+    "ese", "esa", "ese mismo", "esa misma", "me sirve", "sirve",
+}
+_RELLENO_AFIRMATIVO = {"por", "favor", "gracias", "que", "muy", "bien", "me"}
+
+
+def es_afirmacion(texto: str) -> bool:
+    """True si el mensaje es un sí corto y nada más ("sí", "dale", "sí, por favor")."""
+    t = (texto or "").lower()
+    for signo in "!¡.,;:":
+        t = t.replace(signo, " ")
+    partes = t.split()
+    if not partes or len(partes) > 3:
+        return False
+    if " ".join(partes) in _AFIRMACIONES:
+        return True
+    return partes[0] in _AFIRMACIONES and all(
+        p in _AFIRMACIONES or p in _RELLENO_AFIRMATIVO for p in partes
+    )
+
+
+_HHMM = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
+_LAS_H = re.compile(r"\b(?:a\s+las?|las?|el\s+de\s+las?)\s+([01]?\d|2[0-3])(?::([0-5]\d))?\b")
+_H_HS = re.compile(r"\b([01]?\d|2[0-3])\s*(?:hs|h|horas?)\b")
+
+
+def _hora_elegida(texto: str) -> str | None:
+    """La hora que nombra el paciente, en HH:MM. "10:00", "a las 10", "10hs", "10"."""
+    t = (texto or "").strip().lower()
+    if not t:
+        return None
+    if m := _HHMM.search(t):
+        return f"{int(m.group(1)):02d}:{m.group(2)}"
+    if m := _LAS_H.search(t):
+        return f"{int(m.group(1)):02d}:{m.group(2) or '00'}"
+    if m := _H_HS.search(t):
+        return f"{int(m.group(1)):02d}:00"
+    if t.isdigit() and 0 <= int(t) <= 23:
+        return f"{int(t):02d}:00"
+    return None
+
+
+def _quiere_el_primero(texto: str) -> bool:
+    from backend.services.appointment_service import _sin_acentos
+    return bool(re.search(
+        r"\b(el\s+)?primer[oa]?(\s+que\s+(tengas|haya|salga))?\b"
+        r"|cualquier(a|\s+horario)|el\s+que\s+sea|lo\s+antes\s+posible",
+        _sin_acentos(texto or "").lower(),
+    ))
+
+
+def _horarios_ofrecidos() -> set[str]:
+    """Los horarios que el bot puso sobre la mesa: los consultados en este turno
+    y los que nombro en su ultima respuesta."""
+    ofrecidos = {s for d in disponibilidad_consultada() for s in (d.get("slots") or [])}
+    ofrecidos |= {f"{int(h):02d}:{m}" for h, m in _HHMM.findall(_ultima_respuesta_bot.get() or "")}
+    return ofrecidos
+
+
+def _paciente_eligio_horario(preferred_date: str) -> str | None:
+    """Bloquea el alta si el horario no lo eligio el paciente.
+
+    Arnes 21/09: ofrecio lunes 10:00/11:00, el paciente dijo "El jueves con
+    Silvestre" y el modelo agendo "2026-09-22 10:00". El horario del turno lo
+    dice el paciente; si no lo dijo, no hay turno.
+    """
+    ultimo = _ultimo_mensaje.get() or ""
+    pedida = (preferred_date or "")[11:16]
+    dia_pedido = (preferred_date or "")[:10]
+
+    if hora := _hora_elegida(ultimo):
+        if pedida and hora != pedida:
+            return (
+                f"❌ El paciente eligió las {hora} y vos mandás las {pedida}. "
+                f"Agendá a las {hora} (mismo día que se le ofreció)."
+            )
+        fecha_dicha = _fecha_en(ultimo)
+        if fecha_dicha and dia_pedido and fecha_dicha != dia_pedido:
+            return (
+                f"❌ El paciente pidió el {fecha_dicha} y vos mandás {dia_pedido}. "
+                f"Consultá disponibilidad para el {fecha_dicha} y ofrecele esos horarios."
+            )
+        return None
+
+    if _quiere_el_primero(ultimo):
+        return None
+
+    ofrecidos = _horarios_ofrecidos()
+    if es_afirmacion(ultimo) and len(ofrecidos) == 1:
+        (unico,) = ofrecidos
+        if pedida and unico != pedida:
+            return f"❌ Le ofreciste las {unico} y aceptó eso; vos mandás las {pedida}."
+        return None
+
+    return (
+        f"❌ El paciente todavía NO eligió un horario: su último mensaje fue "
+        f"'{ultimo.strip()[:80]}'. 🚫 PROHIBIDO agendar por él. "
+        f"Si nombró un día o un profesional, llamá a `consultar_disponibilidad` "
+        f"con eso y ofrecele los horarios; si le ofreciste varios, preguntale cuál."
+    )
+
+
 def _lo_que_pidio() -> str:
     """Lo ultimo que el paciente dijo sobre dia u horario, tal como lo dijo.
 
@@ -320,6 +441,12 @@ def agendar_turno(
     insurance_name = _cobertura_registrada() or insurance_name
     # Idem el motivo: es el que define la duracion del turno.
     reason = _motivo_registrado() or reason
+    # Y el horario: lo elige el paciente, no el modelo.
+    if bloqueo := _paciente_eligio_horario(preferred_date):
+        return bloqueo
+    # Si nombro a un profesional y el modelo no lo reenvio, viaja igual: el
+    # backend es quien sabe si esa persona hace ese tratamiento.
+    profesional = profesional or _profesional_en(_ultimo_mensaje.get() or "")
 
     payload = {
         "profesional_pedido": profesional or None,
@@ -481,6 +608,55 @@ def _profesional_en(texto: str) -> str:
         db.close()
 
 
+def _profesional_ofrecido_en(texto: str) -> str:
+    """El profesional que el bot ESTÁ ofreciendo, no el que acaba de descartar.
+
+    "Silvestro no hace conductos. ¿Querés con la Dra. Murad?" menciona a los
+    dos. `buscar_profesional` devuelve el primero que encuentra en la base;
+    el paciente aceptó al que el bot ofreció al final (Murad).
+    """
+    from backend.database import SessionLocal
+    from backend.models.professional import Professional
+    from difflib import SequenceMatcher
+    from backend.services.appointment_service import _palabras
+
+    if not (texto or "").strip():
+        return ""
+    tratamientos = {"dr", "dra", "doctor", "doctora", "el", "la", "con", "drama",
+                    "del", "de", "los", "las"}
+    db = SessionLocal()
+    try:
+        activos = db.query(Professional).filter(
+            Professional.is_deleted == False,  # noqa: E712
+            Professional.is_active == True,    # noqa: E712
+        ).all()
+        apariciones: list[tuple[int, str]] = []
+        texto_n = " ".join(_palabras(texto))
+        for p in activos:
+            for apellido in set(_palabras(p.full_name)) - tratamientos:
+                if len(apellido) < 4:
+                    continue
+                pos = texto_n.find(apellido)
+                if pos < 0:
+                    # Typo leve ("Silvestre").
+                    for palabra in texto_n.split():
+                        if (len(palabra) >= 5
+                                and SequenceMatcher(None, palabra, apellido).ratio() >= 0.85):
+                            pos = texto_n.find(palabra)
+                            break
+                if pos >= 0:
+                    apariciones.append((pos, p.full_name))
+                    break
+        if not apariciones:
+            return ""
+        apariciones.sort(key=lambda x: x[0])
+        return apariciones[-1][1]
+    except Exception:
+        return ""
+    finally:
+        db.close()
+
+
 def _fecha_en(texto: str) -> str:
     """El dia que nombra ese texto, en YYYY-MM-DD, o vacio."""
     from backend.services.appointment_service import fecha_dicha_por_el_paciente
@@ -551,6 +727,14 @@ def consultar_disponibilidad(
 
     if prof_ahora := _profesional_en(ahora):
         profesional = prof_ahora
+    elif es_afirmacion(ahora):
+        # "¿Querés con la Dra. Murad?" → "Sí". El que aceptó es el que el bot
+        # ofreció (el último nombrado), no el que había pedido antes ni el que
+        # el bot acaba de descartar (arnés 21/09: "Silvestre" volvía a pisar).
+        profesional = (
+            _profesional_ofrecido_en(_ultima_respuesta_bot.get() or "")
+            or (profesional or "").strip()
+        )
     elif not (profesional or "").strip():
         profesional = _buscando_en_todo(_profesional_en)
 
@@ -678,6 +862,15 @@ def consultar_disponibilidad(
 
 def verificar_obra_social(obra_social: str) -> str:
     """Verifica si la clínica atiende una obra social."""
+    # "Tengo obra social" no es una obra social: es la respuesta al boton. El
+    # modelo la manda aca igual (arnes 21/09: "No trabajamos con esa obra
+    # social, tu atencion seria PARTICULAR"). Se hace lo que corresponde:
+    # mostrar la lista.
+    ultimo = _ultimo_mensaje.get() or ""
+    if _paciente_eligio_tiene_obra_social(obra_social) or (
+        _paciente_eligio_tiene_obra_social(ultimo) and not _texto_parece_busqueda(ultimo)
+    ):
+        return listar_obras_sociales()
     # Antes de nada: ¿eso puede ser el nombre de una obra social? El paciente
     # escribe "agendar" y el bot le contestaba "no trabajamos con 'agendar'
     # como obra social", una y otra vez. Es lo primero que escribe cualquiera.
@@ -1230,6 +1423,40 @@ def set_estado_conversacion(estado: dict | None):
 
 def get_estado_conversacion() -> dict:
     return dict(_estado_conversacion.get() or {})
+
+
+def pregunta_por_lo_que_falta(estado: dict | None, dichos: list[str] | None = None,
+                              ) -> tuple[str, dict | None] | None:
+    """La pregunta determinística del primer dato que falta, con botones.
+
+    La usan el rescate de loops (webhook) y el "sí" sin ejecutar (agente):
+    cuando el modelo se traba redactando, el código sabe exactamente qué falta.
+    Devuelve (texto, opciones) o None si no falta nada que se pueda preguntar así.
+    """
+    estado = estado or {}
+    if not (estado.get("obra_social") or "").strip():
+        return (
+            "Para seguir necesito un dato: ¿tenés obra social o la atención sería particular?",
+            {"opciones": ["Tengo obra social", "Particular"], "siempre": True, "tipo": "botones"},
+        )
+    if not (estado.get("motivo") or "").strip():
+        junto = _sin_acentos_txt(" ".join(dichos or []))
+        if any(p in junto for p in ("conducto", "endodoncia", "nervio")):
+            from backend.services.appointment_service import (
+                BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO,
+            )
+            return (
+                "Para el conducto: ¿es una consulta (30 min, por ejemplo si venís "
+                "derivado) o ya el tratamiento (1 hora)?",
+                {"opciones": [BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO],
+                 "siempre": True, "tipo": "botones"},
+            )
+        return (
+            "¿Para qué sería la consulta? Por ejemplo: limpieza, control, "
+            "extracción, conducto, ortodoncia.",
+            None,
+        )
+    return None
 
 
 def resumen_estado(estado: dict) -> str:
