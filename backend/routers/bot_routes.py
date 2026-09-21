@@ -689,7 +689,9 @@ def bot_resolver_motivo(data: dict = Body(...), db: Session = Depends(get_db)):
     sinonimos, que la clinica edita desde el panel: los dos textos tienen que
     caer en el mismo tipo.
     """
-    from backend.services.appointment_service import _tipo_para_motivo
+    from backend.services.appointment_service import (
+        _tipo_para_motivo, buscar_profesional, resolver_ambiguiedad_conducto,
+    )
 
     propuesto = (data.get("motivo") or "").strip()
     dichos = [d for d in (data.get("dichos") or []) if d]
@@ -700,8 +702,6 @@ def bot_resolver_motivo(data: dict = Body(...), db: Session = Depends(get_db)):
     # paciente escribio "para silverte" —queria turno con el Dr. Silvestro— y
     # el bot contesto "Perfecto, ya tengo el motivo". Nunca supo para que era
     # la consulta, y de eso depende cuanto dura el turno.
-    from backend.services.appointment_service import buscar_profesional
-
     if buscar_profesional(db, propuesto) is not None:
         return {
             "ok": False,
@@ -711,6 +711,23 @@ def bot_resolver_motivo(data: dict = Body(...), db: Session = Depends(get_db)):
                 f"la consulta. Pasalo como `profesional` cuando consultes "
                 f"disponibilidad, y preguntale aparte PARA QUÉ es el turno "
                 f"(limpieza, control, extracción, conducto...)."
+            ),
+        }
+
+    # Conducto: siempre aclarar consulta 30' vs tratamiento 60' (y si viene
+    # derivado). "tratamiento de conducto" a secas no alcanza.
+    aclaracion = resolver_ambiguiedad_conducto(propuesto, dichos)
+    if aclaracion is not None:
+        if not aclaracion.get("ok"):
+            return aclaracion
+        # Preferir el nombre canónico de la tabla si ya está sembrado.
+        tipo_aclarado = _tipo_para_motivo(db, aclaracion["motivo"])
+        return {
+            "ok": True,
+            "motivo": tipo_aclarado.nombre if tipo_aclarado else aclaracion["motivo"],
+            "duracion": (
+                tipo_aclarado.duracion_minutos if tipo_aclarado
+                else aclaracion.get("duracion")
             ),
         }
 

@@ -61,6 +61,8 @@ def _proximo(weekday: int, hora=10) -> datetime:
 @pytest.mark.parametrize("como_lo_dijo", [
     "Silvestro", "silvestro", "el doctor silvestro", "Dr. Silvestro",
     "dr silvestro", "SILVESTRO",
+    # Typo frecuente (caso real 21/09): "Silvestre" / "el drama Silvestre".
+    "Silvestre", "silvestre", "el drama Silvestre",
 ])
 def test_lo_reconoce_como_sea_que_lo_escriban(db, silvestro, murad, como_lo_dijo):
     assert buscar_profesional(db, como_lo_dijo).id == silvestro.id

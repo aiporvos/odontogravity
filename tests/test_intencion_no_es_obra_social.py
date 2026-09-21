@@ -13,6 +13,9 @@ Conversación real del 25/08/2026, tres mensajes seguidos:
 Es lo primero que escribe cualquiera, y el sistema le contestaba un absurdo tres
 veces. Lo introduje al hacer que las herramientas tomaran el último mensaje del
 paciente como búsqueda de obra social: no filtré las palabras de intención.
+
+Caso real 21/09/2026: "Tratamiento de conducto" → "No trabajamos con esa obra
+social". Mismo bug, con un motivo odontológico.
 """
 import pytest
 
@@ -28,6 +31,8 @@ from bot.tools.appointment_tools import (
     "necesito un turno", "sacar turno", "cancelar", "cancelar turno",
     "consultar mis turnos", "hola", "buenas tardes", "gracias",
     "¿donde quedan?", "cuanto sale?", "necesito informacion",
+    "Tratamiento de conducto", "tratamiento de conducto", "conducto",
+    "limpieza", "extraccion", "sacar una muela", "el jueves",
 ])
 def test_no_confunde_una_intencion_con_una_cobertura(texto):
     assert not _parece_nombre_de_obra_social(texto), f"Tomó '{texto}' como obra social"
@@ -37,13 +42,22 @@ def test_el_caso_exacto_no_declara_no_cubierta():
     """Lo que el bot NO puede volver a contestar."""
     r = verificar_obra_social("agendar")
     assert "NO CUBIERTA" not in r
-    assert "PROHIBIDO" in r and "no tiene ningún sentido" in r
+    assert "PROHIBIDO" in r
+
+
+def test_conducto_no_es_obra_social():
+    """Caso real 21/09: el bot dijo 'no trabajamos con esa obra social'."""
+    r = verificar_obra_social("Tratamiento de conducto")
+    assert "NO CUBIERTA" not in r
+    assert "PROHIBIDO" in r
+    assert _texto_parece_busqueda("Tratamiento de conducto") == ""
 
 
 def test_tampoco_se_usa_como_busqueda():
     """El fallback al último mensaje era el otro camino al mismo error."""
     assert _texto_parece_busqueda("agendar") == ""
     assert _texto_parece_busqueda("quiero un turno") == ""
+    assert _texto_parece_busqueda("tratamiento de conducto") == ""
 
 
 # ── Lo que SÍ es una obra social ────────────────────────────────────────────
@@ -51,6 +65,7 @@ def test_tampoco_se_usa_como_busqueda():
 @pytest.mark.parametrize("texto", [
     "OSDE", "OSEP", "OSPELSYM", "Swiss Medical", "PAMI", "Medifé",
     "sw", "ospe", "osde 210", "Jerárquicos Salud", "Unión Personal",
+    "Avalian", "ava",
 ])
 def test_reconoce_las_obras_sociales_de_verdad(texto):
     assert _parece_nombre_de_obra_social(texto), f"Rechazó '{texto}', que sí lo es"

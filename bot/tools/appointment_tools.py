@@ -52,7 +52,7 @@ def set_dichos_por_el_paciente(textos):
 
 
 def _motivo_dicho_por_el_paciente(valor: str):
-    """(salio del paciente, nombre normalizado) para el motivo propuesto.
+    """(salio_del_paciente, nombre_normalizado, razon_si_rechaza).
 
     El modelo puede llamar a recordar_dato con un valor que nunca le dijeron
     —dedujo "control" porque le parecio razonable— y eso alcanzaba para
@@ -64,6 +64,9 @@ def _motivo_dicho_por_el_paciente(valor: str):
     el modelo lo registra como "Extraccion", que es exactamente lo que
     corresponde. De paso vuelve el nombre canonico, asi el turno queda guardado
     con el mismo texto siempre.
+
+    Si el rechazo trae `razon` (ej. conducto ambiguo), se la devolvemos al
+    modelo para que pregunte lo correcto en vez de un mensaje generico.
     """
     try:
         r = httpx.post(
@@ -75,8 +78,8 @@ def _motivo_dicho_por_el_paciente(valor: str):
         d = r.json()
     except Exception:
         # Si el backend no responde, no se bloquea al paciente por esto.
-        return True, valor
-    return bool(d.get("ok")), (d.get("motivo") or valor)
+        return True, valor, None
+    return bool(d.get("ok")), (d.get("motivo") or valor), d.get("razon")
 
 
 # Palabras que son respuestas de conversacion, no el nombre de una obra social.
@@ -99,14 +102,32 @@ _PALABRAS_DE_INTENCION = {
     "donde", "direccion", "ubicacion", "telefono",
 }
 
+# Motivo odontológico / pedidos de día / profesional. Caso real 21/09: el
+# paciente dijo "Tratamiento de conducto" y el bot contestó "No trabajamos con
+# esa obra social" porque `verificar_obra_social` lo tomó como cobertura.
+_PALABRAS_DE_MOTIVO_O_AGENDA = {
+    "tratamiento", "tratamientos", "conducto", "endodoncia", "nervio",
+    "limpieza", "limpiar", "sarro", "profilaxis", "control", "revision",
+    "chequeo", "extraccion", "extraer", "muela", "muelas", "cordal",
+    "ortodoncia", "brackets", "implante", "implantes", "protesis", "caries",
+    "arreglo", "arreglos", "dolor", "duele", "urgente", "urgencia",
+    "evaluacion", "evaluar", "derivado", "derivada", "odontopediatria",
+    "blanqueamiento", "radiografia", "placa",
+    "doctor", "doctora", "dr", "dra", "profesional",
+    "lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo",
+    "manana", "tarde", "noche", "hoy", "pasado", "semana", "proximo",
+    "proxima", "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+}
+
 
 def _parece_nombre_de_obra_social(texto: str) -> bool:
     """Si eso puede ser el nombre de una obra social, y no otra cosa.
 
     Se descarta lo que es claramente una intencion ("agendar un turno"), un
-    saludo o una pregunta. Ante la duda se acepta: hay obras sociales con
-    nombres rarisimos y es peor rechazar la verdadera que dejar pasar una
-    consulta que despues no matchea con ninguna.
+    saludo, un motivo odontológico ("tratamiento de conducto") o una pregunta.
+    Ante la duda se acepta: hay obras sociales con nombres rarisimos y es peor
+    rechazar la verdadera que dejar pasar una consulta que despues no matchea.
     """
     limpio = _sin_tildes_simple(texto).strip()
     if not limpio:
@@ -116,12 +137,14 @@ def _parece_nombre_de_obra_social(texto: str) -> bool:
     palabras = [p for p in limpio.replace("/", " ").split() if p.isalnum() or p.isalpha()]
     if not palabras:
         return False
-    # Si TODAS son palabras de intencion o de relleno, no es una obra social.
-    relleno = _PALABRAS_DE_INTENCION | _NO_ES_BUSQUEDA | {
-        "un", "una", "unos", "unas", "el", "la", "los", "las", "de", "del",
-        "para", "por", "me", "mi", "mis", "tu", "tus", "su", "sus", "con",
-        "que", "y", "o", "en", "al", "lo", "es", "ser", "hay",
-    }
+    # Si TODAS son palabras de intencion, motivo o relleno, no es una obra social.
+    relleno = (
+        _PALABRAS_DE_INTENCION | _NO_ES_BUSQUEDA | _PALABRAS_DE_MOTIVO_O_AGENDA | {
+            "un", "una", "unos", "unas", "el", "la", "los", "las", "de", "del",
+            "para", "por", "me", "mi", "mis", "tu", "tus", "su", "sus", "con",
+            "que", "y", "o", "en", "al", "lo", "es", "ser", "hay",
+        }
+    )
     return any(p not in relleno for p in palabras)
 
 
@@ -170,7 +193,7 @@ def _texto_parece_busqueda(texto: str) -> str:
     """El fragmento que el paciente escribio buscando su obra social, o "".
 
     "sw", "swi", "ospe", "swiss medical" son busquedas. "si", "hola" o una frase
-    larga, no.
+    larga, no. Tampoco un apellido de profesional ("Silvestre", "Murad").
     """
     limpio = " ".join((texto or "").strip().lower().split())
     if not limpio or limpio in _NO_ES_BUSQUEDA:
@@ -180,7 +203,10 @@ def _texto_parece_busqueda(texto: str) -> str:
     if not any(c.isalpha() for c in limpio):
         return ""
     if not _parece_nombre_de_obra_social(limpio):
-        return ""   # "agendar", "quiero un turno": es la intencion, no la cobertura
+        return ""   # "agendar", "quiero un turno", "tratamiento de conducto"
+    # "Silvestre" / "Murad" / "Sosa": es pedir profesional, no cobertura.
+    if _profesional_en(limpio):
+        return ""
     return limpio
 
 
@@ -287,6 +313,12 @@ def agendar_turno(
     preferencia_horaria: str = "",
 ) -> str:
     """Agenda un nuevo turno en el sistema."""
+    if bloqueo := _exigir_cobertura("agendar"):
+        return bloqueo
+    # La cobertura manda desde el estado: el default Particular del parametro
+    # ya no puede pisar lo que el paciente eligio (ni inventar Particular).
+    insurance_name = _cobertura_registrada() or insurance_name
+
     payload = {
         "profesional_pedido": profesional or None,
         # Si el modelo no la reenvia, se busca en lo que dijo el paciente: la
@@ -534,6 +566,10 @@ def consultar_disponibilidad(
             "🚫 PROHIBIDO deducirlo o darlo por supuesto."
         )
 
+    if bloqueo := _exigir_cobertura("consultar disponibilidad"):
+        return bloqueo
+    obra_social = _cobertura_registrada() or obra_social
+
     try:
         payload = {
             "location": location,
@@ -638,14 +674,23 @@ def verificar_obra_social(obra_social: str) -> str:
     # Antes de nada: ¿eso puede ser el nombre de una obra social? El paciente
     # escribe "agendar" y el bot le contestaba "no trabajamos con 'agendar'
     # como obra social", una y otra vez. Es lo primero que escribe cualquiera.
+    # Caso 21/09: "Tratamiento de conducto" → "No trabajamos con esa obra social".
     if not _parece_nombre_de_obra_social(obra_social):
         return (
-            f"⚠️ '{obra_social}' NO es el nombre de una obra social: es lo que el "
-            f"paciente quiere hacer, o un saludo. 🚫 PROHIBIDO contestarle que no "
-            f"trabajamos con esa cobertura, no tiene ningún sentido y queda pésimo. "
-            f"Seguí la conversación normalmente: si pidió un turno, avanzá con el "
-            f"flujo y recién cuando corresponda preguntale la obra social con "
-            f"`listar_obras_sociales`."
+            f"⚠️ '{obra_social}' NO es el nombre de una obra social: es un motivo "
+            f"de consulta, una intención o un saludo. 🚫 PROHIBIDO contestarle que "
+            f"no trabajamos con esa cobertura, no tiene ningún sentido y queda "
+            f"pésimo. Seguí la conversación: si pidió un turno, avanzá con el "
+            f"flujo (motivo → cobertura → horarios). Si todavía falta la obra "
+            f"social, usá `listar_obras_sociales`."
+        )
+    # Tampoco un apellido de profesional ("Sosa", "Silvestro").
+    if _profesional_en(obra_social):
+        return (
+            f"⚠️ '{obra_social}' es un profesional, no una obra social. "
+            f"🚫 PROHIBIDO tratarlo como cobertura. Si el paciente pidió turno "
+            f"con esa persona, seguí con motivo/cobertura y después "
+            f"`consultar_disponibilidad` pasando ese profesional."
         )
 
     try:
@@ -707,6 +752,87 @@ _NO_LA_VEO = (
     "ninguna", "no figura", "no sale", "no es ninguna", "no estan",
 )
 
+# Elegir el escalon "tengo obra social" (boton o texto libre).
+_ELIGIO_TIENE_OBRA = (
+    "tengo obra social", "tenogo obra social", "si obra social", "sí obra social",
+    "con obra social", "por obra social", "obra social si", "obra social sí",
+    "si, obra social", "sí, obra social", "si tengo obra", "sí tengo obra",
+)
+
+_ELIGIO_PARTICULAR = (
+    "particular", "sin obra social", "no tengo obra", "pago yo",
+    "voy particular", "como particular", "atencion particular",
+)
+
+
+def _sin_acentos_txt(texto: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto or "")
+        if unicodedata.category(c) != "Mn"
+    ).lower()
+
+
+def _paciente_eligio_tiene_obra_social(texto: str = "") -> bool:
+    """True si eligio el camino 'tengo obra social' (boton o frase)."""
+    t = _sin_acentos_txt(texto or _ultimo_mensaje.get() or "")
+    if not t.strip():
+        return False
+    # "no tengo obra social" es particular, no este camino.
+    if "no tengo obra" in t or "sin obra" in t:
+        return False
+    if any(f in t for f in _ELIGIO_TIENE_OBRA):
+        return True
+    limpio = " ".join(t.split())
+    return limpio in {"obra social", "obrasocial"}
+
+
+def _paciente_eligio_particular(texto: str = "") -> bool:
+    t = _sin_acentos_txt(texto or _ultimo_mensaje.get() or "")
+    if not t.strip():
+        return False
+    # El boton se llama exactamente "Particular".
+    if t.strip() == "particular":
+        return True
+    return any(f in t for f in _ELIGIO_PARTICULAR)
+
+
+def _cobertura_registrada() -> str:
+    return ((_estado_conversacion.get() or {}).get("obra_social") or "").strip()
+
+
+def _exigir_cobertura(para: str) -> str | None:
+    """Bloquea disponibilidad/agenda si todavia no hay cobertura en el estado.
+
+    Caso real 21/09: pregunto dos veces la obra social y agendo igual como
+    Particular por el default del parametro, sin que el paciente la eligiera.
+    """
+    if _cobertura_registrada():
+        return None
+    ultimo = _ultimo_mensaje.get() or ""
+    if _paciente_eligio_particular(ultimo):
+        return (
+            f"❌ El paciente eligió Particular pero todavía no lo registraste. "
+            f"Llamá `recordar_dato('obra_social', 'Particular')` y recién después "
+            f"volvé a {para}."
+        )
+    if _paciente_eligio_tiene_obra_social(ultimo):
+        return (
+            f"❌ El paciente DIJO que tiene obra social, pero todavía no eligió "
+            f"CUÁL. Llamá a `listar_obras_sociales()` ahora, esperá que elija, "
+            f"registrala con `recordar_dato` y recién después {para}. "
+            f"🚫 PROHIBIDO asumir Particular ni inventar un nombre."
+        )
+    return (
+        f"❌ Todavía no sabés la cobertura del paciente y de eso puede depender "
+        f"el día (PAMI) y cómo queda el turno. "
+        f"Si no preguntaste, llamá a `preguntar_cobertura()`. "
+        f"Si ya dijo que tiene obra social, llamá a `listar_obras_sociales()`. "
+        f"Si eligió Particular, `recordar_dato('obra_social', 'Particular')`. "
+        f"🚫 PROHIBIDO {para} sin cobertura registrada. "
+        f"🚫 PROHIBIDO asumir Particular."
+    )
+
 
 def preguntar_cobertura() -> str:
     """Le pregunta al paciente si tiene obra social o es particular.
@@ -727,19 +853,51 @@ def preguntar_cobertura() -> str:
     al modelo como seguir.
     """
     estado = _estado_conversacion.get() or {}
+    ultimo = _ultimo_mensaje.get() or ""
+
+    # Quiere cambiar a obra social aunque la ficha diga Particular: limpiar y listar.
+    if _paciente_eligio_tiene_obra_social(ultimo):
+        if (estado.get("obra_social") or "").strip():
+            estado = dict(estado)
+            estado.pop("obra_social", None)
+            _estado_conversacion.set(estado)
+        return (
+            "El paciente DIJO que tiene obra social. "
+            "Llamá a `listar_obras_sociales()` YA para que elija cuál. "
+            "🚫 PROHIBIDO volver a preguntar si tiene o no. "
+            "🚫 PROHIBIDO asumir Particular ni consultar horarios sin la obra elegida."
+        )
+
     if estado.get("obra_social"):
         return (
             f"✋ La cobertura ya se conoce: {estado['obra_social']}. "
             "NO se la preguntes de nuevo: seguí con el turno usando esa cobertura."
         )
-    if estado.get("cobertura_preguntada"):
+
+    # Aunque todavia no haya marcado cobertura_preguntada, si el paciente ya
+    # eligio Particular, no repreguntar: avanzar.
+    if _paciente_eligio_particular(ultimo):
         return (
-            "✋ Ya le preguntaste la cobertura y el paciente contestó otra cosa. "
-            "🚫 PROHIBIDO repetir la misma pregunta. Registrá con `recordar_dato` "
-            "lo que sí dijo (fecha, horario, motivo) y llamá a "
-            "`consultar_disponibilidad` usando obra_social='Particular' de forma "
-            "provisoria. Si hace falta confirmar la cobertura, hacelo con otras "
-            "palabras en la misma respuesta donde muestres los horarios."
+            "El paciente eligió Particular. Registrá obra_social='Particular' "
+            "con `recordar_dato` y seguí con el turno. "
+            "🚫 NO vuelvas a preguntar la cobertura."
+        )
+
+    if estado.get("cobertura_preguntada"):
+        # Caso real 21/09: la barrera vieja mandaba a usar Particular
+        # "provisorio" y el bot agendo sin obra social. Ya no.
+        return (
+            "✋ Ya le preguntaste si tiene obra social o es particular. "
+            "🚫 PROHIBIDO repetir esa pregunta. "
+            "Según lo que contestó: "
+            "• tiene obra social / 'Tengo obra social' → `listar_obras_sociales()`; "
+            "• Particular → `recordar_dato('obra_social', 'Particular')`; "
+            "• otra cosa (fecha, horario, motivo) → anotala con `recordar_dato` "
+            "y pedile de nuevo que elija cobertura (lista o Particular), sin "
+            "repetir la misma frase. "
+            "🚫 PROHIBIDO inventar Particular. "
+            "🚫 PROHIBIDO `consultar_disponibilidad` / `agendar_turno` sin "
+            "cobertura registrada con `recordar_dato`."
         )
     estado = dict(estado)
     estado["cobertura_preguntada"] = True
@@ -770,6 +928,14 @@ def listar_obras_sociales(busqueda: str = "") -> str:
     if not (busqueda or "").strip():
         # El modelo suele no reenviar lo que escribio el paciente.
         busqueda = _texto_parece_busqueda(_ultimo_mensaje.get())
+
+    # Si está eligiendo obra social, Particular de la ficha no puede quedar
+    # pegado: si no, `_exigir_cobertura` deja pasar y agenda sin la OS nueva.
+    estado = dict(_estado_conversacion.get() or {})
+    if (estado.get("obra_social") or "").strip().lower() == "particular":
+        estado.pop("obra_social", None)
+    estado["cobertura_preguntada"] = True
+    _estado_conversacion.set(estado)
 
     try:
         r = httpx.get(f"{API_BASE}/api/bot/obras-sociales",
@@ -858,6 +1024,16 @@ def quien_me_escribe() -> str:
         return ("PACIENTE NUEVO: este número no está registrado. Pedile nombre, "
                 "apellido y DNI recién cuando vayas a agendar, no antes.")
 
+    # Sembrar la cobertura de la ficha en el estado: si no, el modelo saluda
+    # "registrado como particular" y dos mensajes después vuelve a preguntar
+    # obra social / particular (caso real 21/09).
+    estado = dict(_estado_conversacion.get() or {})
+    if not (estado.get("obra_social") or "").strip():
+        os_ficha = (d["pacientes"][0].get("obra_social") or "").strip()
+        if os_ficha:
+            estado["obra_social"] = os_ficha
+            _estado_conversacion.set(estado)
+
     partes = []
     for p_ in d["pacientes"]:
         linea = [f"{p_['nombre_completo']} (obra social: {p_['obra_social']})"]
@@ -925,8 +1101,10 @@ def recordar_dato(campo: str, valor: str) -> str:
     # El motivo define la duracion del turno y a que profesional va, asi que no
     # puede salir de una deduccion: tiene que haberlo dicho el paciente.
     if campo == "motivo":
-        lo_dijo, normalizado = _motivo_dicho_por_el_paciente(valor)
+        lo_dijo, normalizado, razon = _motivo_dicho_por_el_paciente(valor)
         if not lo_dijo:
+            if razon:
+                return f"❌ {razon}"
             return (
                 f"❌ El paciente nunca dijo '{valor}'. No lo deduzcas: preguntale "
                 f"explícitamente para qué sería la consulta y esperá su respuesta. "
@@ -1094,7 +1272,7 @@ TOOL_DEFINITIONS = [
                     },
                     "duration_minutes": {
                         "type": "integer",
-                        "description": "Duración: Consulta/Limpieza=15, Extracción/Ortodoncia=30, Endodoncia=60",
+                        "description": "Duración: Consulta/Limpieza=15, Extracción/Ortodoncia/Consulta por conducto=30, Conducto (realizar)=60",
                         "default": 30,
                     },
                     "profesional": {

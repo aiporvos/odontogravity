@@ -32,12 +32,21 @@ def test_no_alcanza_con_que_el_modelo_lo_invente():
 
 
 def test_con_el_motivo_registrado_sigue_de_largo():
-    set_estado_conversacion({})
+    set_estado_conversacion({"obra_social": "OSDE"})
     recordar_dato("motivo", "limpieza")
     r = consultar_disponibilidad("limpieza")
     # Sin backend levantado falla la llamada HTTP, pero lo importante es que ya
-    # no corta por falta de motivo: llegó a intentar la consulta.
+    # no corta por falta de motivo ni de cobertura.
     assert not r.startswith("❌ Todavía no sabés para qué es")
+    assert not r.startswith("❌ Todavía no sabés la cobertura")
+
+def test_sin_cobertura_tampoco_devuelve_horarios():
+    """Caso real 21/09: preguntó la obra social y agendó igual sin ella."""
+    set_estado_conversacion({"motivo": "Conducto"})
+    r = consultar_disponibilidad("Conducto")
+    assert r.startswith("❌")
+    assert "cobertura" in r.lower() or "obra social" in r.lower()
+    assert "Particular" in r  # le dice que NO asuma Particular
 
 
 def test_el_mensaje_le_dice_al_modelo_como_seguir():
@@ -49,6 +58,6 @@ def test_el_mensaje_le_dice_al_modelo_como_seguir():
 
 def test_recordar_dato_guarda_el_motivo():
     set_estado_conversacion({})
-    recordar_dato("motivo", "conducto")
+    recordar_dato("motivo", "limpieza")
     from bot.tools.appointment_tools import get_estado_conversacion
-    assert get_estado_conversacion()["motivo"] == "conducto"
+    assert get_estado_conversacion()["motivo"] == "limpieza"

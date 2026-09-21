@@ -77,11 +77,22 @@ def test_entiende_que_sacarse_una_muela_es_una_extraccion(cliente):
 
 
 def test_devuelve_el_nombre_canonico(cliente):
-    """Así el turno queda guardado siempre con el mismo texto."""
+    """Así el turno queda guardado siempre con el mismo texto.
+
+    'matar el nervio' ya implica realizar el tratamiento (60'), no una
+    consulta de evaluación: no hace falta la pregunta de aclaración.
+    """
     d = _resolver(cliente, "me tienen que matar el nervio", ["me tienen que matar el nervio"])
     assert d["ok"] is True
     assert d["motivo"] == "Conducto"
     assert d["duracion"] == 60
+
+
+def test_conducto_a_secas_exige_aclaracion(cliente):
+    """Pedido del consultorio 21/09: no asumir 60' porque dijo conducto."""
+    d = _resolver(cliente, "Conducto", ["quiero un tratamiento de conducto"])
+    assert d["ok"] is False
+    assert "30" in d["razon"]
 
 
 def test_no_confunde_dos_tipos_distintos(cliente):

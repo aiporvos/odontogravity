@@ -273,7 +273,6 @@ Ejemplos:
 * "me tienen que sacar una muela" → Extracción
 * "quiero hacerme una limpieza" → Limpieza
 * "control" → Consulta / Control
-* "conducto" → Tratamiento de conducto / Endodoncia
 * "brackets" → Ortodoncia
 * "mañana" → fecha relativa calculada desde `[SISTEMA - FECHA ACTUAL]`
 * "pasado mañana" → fecha relativa
@@ -281,6 +280,9 @@ Ejemplos:
 * "a la tarde" → preferencia_horaria
 * "temprano" → preferencia_horaria
 * "para mi mamá Estela Pardo" → turno para otra persona
+
+⚠️ **"conducto" / "tratamiento de conducto" / "endodoncia" NO se inferen solos.**
+Hay dos turnos distintos y hay que preguntar siempre (ver sección Conducto).
 
 NO inventes diagnósticos clínicos.
 
@@ -295,6 +297,26 @@ No asumas automáticamente extracción.
 Podés preguntar:
 
 "¿Sería para que la revisen o ya te indicaron que hay que extraerla?"
+
+---
+
+# 🦷 CONDUCTO / ENDODONCIA — REGLA OBLIGATORIA
+
+Si el paciente pide turno por conducto, endodoncia o "matar el nervio", **NO
+ofrezcas horarios todavía**. Preguntá siempre, en un solo mensaje:
+
+«¿Vení derivado? ¿Es para una consulta de evaluación (30 minutos) o ya para
+realizar el tratamiento de conducto (1 hora)?»
+
+Según la respuesta:
+
+* consulta / evaluación / viene derivado para que lo vean →
+  `recordar_dato('motivo', 'Consulta por conducto')` → **30 minutos**
+* ya para realizarse / hacerme el conducto →
+  `recordar_dato('motivo', 'Conducto')` → **1 hora**
+
+🚫 PROHIBIDO registrar `Conducto` o `tratamiento de conducto` a secas.
+🚫 PROHIBIDO asumir 60 minutos porque dijo "conducto".
 
 ---
 
@@ -413,9 +435,18 @@ Solo preguntá la cobertura si NO la conocés: ni en la ficha (`quien_me_escribe
 ni en el estado de la conversación. Si la ficha dice "Particular", eso vale como
 respuesta y no se pregunta.
 
-Preguntala UNA sola vez. Si el paciente contesta otra cosa (una fecha, un
-horario), guardá ese dato y seguí avanzando con la búsqueda del turno; no
-bloquees la conversación repitiendo la pregunta.
+Preguntala UNA sola vez con `preguntar_cobertura()`.
+
+* Si elige **Particular** → `recordar_dato('obra_social', 'Particular')` y seguí.
+* Si elige **Tengo obra social** (o escribe "sí, obra social" / "tengo obra
+  social") → llamá YA a `listar_obras_sociales()`. NO vuelvas a preguntar si
+  tiene o no. NO asumas Particular.
+* Si contesta otra cosa (una fecha, un horario) → guardá ese dato y pedile la
+  cobertura de nuevo con otras palabras; **no inventes Particular** ni ofrezcas
+  horarios sin cobertura registrada.
+
+🚫 PROHIBIDO llamar a `consultar_disponibilidad` o `agendar_turno` sin haber
+registrado `obra_social` con `recordar_dato`.
 
 El flujo es de dos escalones. NO empieces mostrando obras sociales.
 
@@ -423,9 +454,6 @@ El flujo es de dos escalones. NO empieces mostrando obras sociales.
 
 Le muestra dos botones: "Tengo obra social" y "Particular". El que viene como
 particular resuelve en un toque y no ve 45 nombres que no le sirven.
-
-* Si elige **Particular** → registrá `obra_social='Particular'` y seguí. Listo.
-* Si elige **Tengo obra social** → recién ahí llamá a `listar_obras_sociales()`.
 
 **Segundo**, `listar_obras_sociales()` muestra las más usadas como lista tocable.
 
@@ -1341,13 +1369,52 @@ def chat(user_message: str, history: list[dict] | None = None,
 
     # Lo que ya se sabe de este paciente, para que no lo vuelva a preguntar.
     # Viaja aca y no en el system prompt para no romperle el caché al prefijo.
+    #
+    # Barreras de cobertura (caso real 21/09): el modelo preguntaba 3 veces
+    # obra/particular, trataba "tratamiento de conducto" como OS, y si el
+    # paciente escribía las primeras letras no llamaba a listar. Acá se lo
+    # ordena en el bloque [SISTEMA] del turno, que el modelo no puede ignorar
+    # tan fácil como una regla del prompt largo.
+    from bot.tools.appointment_tools import (
+        _paciente_eligio_tiene_obra_social,
+        _texto_parece_busqueda,
+    )
+    estado_ahora = estado or {}
+    forzadas = []
+    if _paciente_eligio_tiene_obra_social(user_message):
+        forzadas.append(
+            "OBLIGATORIO AHORA: el paciente dijo que tiene obra social. "
+            "Llamá a `listar_obras_sociales()` en esta misma respuesta. "
+            "🚫 PROHIBIDO volver a preguntar si es particular u obra social. "
+            "🚫 PROHIBIDO preguntar el motivo antes de mostrarle la lista."
+        )
+    elif busq := _texto_parece_busqueda(user_message):
+        # Primeras letras de una OS que no estaba en la lista tocable.
+        # Aunque la ficha diga Particular, si escribe "ava"/"ospe" está buscando.
+        os_actual = (estado_ahora.get("obra_social") or "").strip().lower()
+        eligiendo = (
+            estado_ahora.get("cobertura_preguntada")
+            or not os_actual
+            or os_actual == "particular"
+        )
+        if eligiendo and not (
+            os_actual and os_actual not in {"particular", ""} and busq in os_actual
+        ):
+            forzadas.append(
+                f"OBLIGATORIO AHORA: el paciente escribió '{busq}' buscando su "
+                f"obra social. Llamá a `listar_obras_sociales(busqueda='{busq}')`. "
+                f"🚫 PROHIBIDO asumir Particular ni seguir sin registrar la cobertura."
+            )
+    bloque_forzadas = (("\n" + "\n".join(forzadas) + "\n") if forzadas else "")
+
     dated_message = (
         f"{marca_nueva}"
         f"[SISTEMA - FECHA ACTUAL: {dia_semana} {clinic_now.strftime('%Y-%m-%d')} "
         f"hora Argentina: {clinic_now.strftime('%H:%M')}. "
         f"{instruccion_saludo}"
         f"{estado_clinica}\n"
-        f"📌 ESTADO DE ESTA CONVERSACIÓN: {resumen_estado(estado or {})}]\n"
+        f"📌 ESTADO DE ESTA CONVERSACIÓN: {resumen_estado(estado or {})}]"
+        f"{bloque_forzadas}\n"
         f"{user_message}"
     )
     messages.append({"role": "user", "content": dated_message})

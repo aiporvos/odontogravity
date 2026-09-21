@@ -583,9 +583,89 @@ def _duracion_hardcodeada(reason: str) -> int:
     reason_lower = (reason or "").lower()
     if any(x in reason_lower for x in ["extracc", "ortodoncia", "implante", "prótesis", "protesis"]):
         return 30
+    # Consulta de evaluación por conducto (derivado) ≠ realizar el tratamiento.
+    if "consulta" in reason_lower and any(
+        x in reason_lower for x in ["conducto", "endodoncia"]
+    ):
+        return 30
     if any(x in reason_lower for x in ["conducto", "endodoncia"]):
         return 60
     return 15
+
+
+# Pedido del consultorio: si piden conducto, SIEMPRE aclarar si viene derivado
+# y si es consulta de evaluación (30') o ya realizar el tratamiento (60').
+# "tratamiento de conducto" a secas es ambiguo: casi todos lo dicen así.
+MOTIVO_CONSULTA_CONDUCTO = "Consulta por conducto"
+MOTIVO_TRATAMIENTO_CONDUCTO = "Conducto"
+
+PREGUNTA_CONDUCTO = (
+    "Antes de ofrecer horarios, preguntale exactamente esto: "
+    "«¿Vení derivado? ¿Es para una consulta de evaluación (30 minutos) "
+    "o ya para realizar el tratamiento de conducto (1 hora)?» "
+    "Según la respuesta registrá motivo='Consulta por conducto' (30') "
+    "o motivo='Conducto' (60'). "
+    "🚫 PROHIBIDO asumir ni registrar 'Conducto' / 'tratamiento de conducto' a secas."
+)
+
+_MARCAS_CONSULTA_CONDUCTO = (
+    "consulta", "evaluacion", "evaluar", "evaluarlo", "derivado", "derivada",
+    "derivaron", "derivacion", "me deriv", "me mando", "me mandaron",
+    "que me vean", "para verlo", "para evaluarlo",
+)
+
+# Ojo: NO incluir "tratamiento" solo — "tratamiento de conducto" es la frase
+# ambigua que usa casi todo el mundo y no alcanza para decidir 30 vs 60.
+_MARCAS_TRATAMIENTO_CONDUCTO = (
+    "realizar", "realizarmelo", "realizarse", "hacerme", "hacermelo",
+    "hacerlo", "ya me dijeron", "ya me indicaron", "ya me confirmaron",
+    "ya para el", "para hacerme", "para realizar", "completar el conducto",
+    "matar el nervio", "matarme el nervio", "matarle el nervio",
+)
+
+
+def _menciona_conducto(texto: str) -> bool:
+    t = _sin_acentos(texto or "")
+    return any(p in t for p in ("conducto", "endodoncia", "nervio"))
+
+
+def _tiene_marca(texto: str, marcas: tuple[str, ...]) -> bool:
+    t = _sin_acentos(texto or "")
+    return any(m in t for m in marcas)
+
+
+def resolver_ambiguiedad_conducto(propuesto: str, dichos: list[str] | None = None):
+    """Si el motivo propuesto es de conducto, exige consulta (30') vs tratamiento (60').
+
+    Devuelve None si el pedido no es de conducto (sigue el flujo normal).
+    Si es conducto y ya aclaró, {"ok": True, "motivo", "duracion"}.
+    Si es conducto y sigue ambiguo, {"ok": False, "razon": PREGUNTA_CONDUCTO}.
+    """
+    dichos = [d for d in (dichos or []) if d]
+    # Solo cuando el modelo intenta registrar un motivo de conducto. Si el
+    # paciente lo mencionó antes pero ahora agenda otra cosa, no interferimos.
+    if not _menciona_conducto(propuesto or ""):
+        return None
+
+    junto = " ".join([propuesto or ""] + dichos)
+    es_consulta = _tiene_marca(junto, _MARCAS_CONSULTA_CONDUCTO)
+    es_tratamiento = _tiene_marca(junto, _MARCAS_TRATAMIENTO_CONDUCTO)
+
+    # Si aparecen las dos, gana realizar el tratamiento: "me derivaron para
+    # hacerme el conducto" es turno de 60', no de evaluación.
+    if es_tratamiento:
+        return {
+            "ok": True,
+            "motivo": MOTIVO_TRATAMIENTO_CONDUCTO,
+            "duracion": 60,
+        }
+    if es_consulta:
+        return {
+            "ok": True,
+            "motivo": MOTIVO_CONSULTA_CONDUCTO,
+            "duracion": 30,
+        }
+    return {"ok": False, "motivo": None, "razon": PREGUNTA_CONDUCTO}
 
 
 DIAS_DE_LA_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes",
@@ -598,11 +678,16 @@ def buscar_profesional(db: Session, texto: str):
     El paciente escribe "el doctor Silvestro", "la Dra. Murad" o "silvestro" a
     secas. Se compara contra las palabras del nombre completo ignorando
     mayusculas, acentos y los tratamientos.
+
+    También tolera un typo leve del apellido (caso real: "Silvestre" por
+    "Silvestro"). Sin eso el bot decía que no existía o improvisaba.
     """
     if not (texto or "").strip():
         return None
 
-    tratamientos = {"dr", "dra", "doctor", "doctora", "el", "la", "con"}
+    from difflib import SequenceMatcher
+
+    tratamientos = {"dr", "dra", "doctor", "doctora", "el", "la", "con", "drama"}
     pedidas = [p for p in _palabras(texto) if p not in tratamientos]
     if not pedidas:
         return None
@@ -612,10 +697,17 @@ def buscar_profesional(db: Session, texto: str):
         Professional.is_active == True,    # noqa: E712
     ).all()
 
+    def _cerca(pedida: str, suya: str) -> bool:
+        if pedida == suya or pedida in suya or suya in pedida:
+            return True
+        if len(pedida) < 5 or len(suya) < 5:
+            return False
+        return SequenceMatcher(None, pedida, suya).ratio() >= 0.85
+
     for p in activos:
         suyas = set(_palabras(p.full_name)) - tratamientos
         # Alcanza con que coincida el apellido: nadie escribe el nombre completo.
-        if any(pedida in suyas for pedida in pedidas):
+        if any(_cerca(pedida, suya) for pedida in pedidas for suya in suyas):
             return p
     return None
 
