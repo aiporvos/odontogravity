@@ -46,7 +46,8 @@ def _capturar(monkeypatch):
 
     monkeypatch.setattr(tools.httpx, "post", _post)
     monkeypatch.setattr(tools, "_estado_conversacion",
-                        type("C", (), {"get": staticmethod(lambda: {"motivo": "Limpieza"})})())
+                        type("C", (), {"get": staticmethod(
+                            lambda: {"motivo": "Limpieza", "obra_social": "Particular"})})())
     monkeypatch.setattr(tools, "set_opciones_ofrecidas", lambda *a, **k: None)
     monkeypatch.setattr(tools, "_profesional_en",
                         lambda t: "Dra. Elena Murad" if "murad" in (t or "").lower() else "")

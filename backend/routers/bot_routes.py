@@ -794,12 +794,17 @@ def bot_listar_obras_sociales(q: str = "", db: Session = Depends(get_db)):
         # el caso "hay mas" es el mas frecuente, no un borde.
         encontradas = buscar_obras_sociales(db, q, limite=11)
         hay_mas = len(encontradas) > 10
+        # Si escribio el nombre completo (o toco una fila de la lista), la
+        # cobertura esta decidida: el bot la registra sin pasar por el modelo.
+        from backend.services.appointment_service import match_insurance
+        exacta = match_insurance(q, db)
         return {
             "activas": encontradas[:10],
             "total": total,
             "hay_mas": hay_mas,
             "busqueda": q,
             "modo": "busqueda",
+            "exacta": exacta.name if exacta and exacta.name.lower() != "particular" else None,
         }
 
     # 6 y no 8: deja lugar visual y empuja al buscador, que con ~45 cargadas es
@@ -810,6 +815,7 @@ def bot_listar_obras_sociales(q: str = "", db: Session = Depends(get_db)):
         "total": total,
         "hay_mas": total > 6,
         "modo": "frecuentes",
+        "exacta": None,
     }
 
 

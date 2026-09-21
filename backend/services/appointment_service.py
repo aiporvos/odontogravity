@@ -307,31 +307,21 @@ def route_professional(reason: str, db: Session) -> Professional | None:
 
 
 import httpx
+from zoneinfo import ZoneInfo
 
-CLINIC_TZ_OFFSET = -3 # UTC-3 for Argentina
-_time_cache = {"time": None, "fetched_at": None}
+CLINIC_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
-def get_clinic_now():
-    """Returns the current time in the clinic's timezone, guaranteed by external API."""
-    global _time_cache
-    now_sys = datetime.utcnow()
-    
-    if _time_cache["time"] and _time_cache["fetched_at"] and (now_sys - _time_cache["fetched_at"]).total_seconds() < 600:
-        return _time_cache["time"] + (now_sys - _time_cache["fetched_at"])
-        
-    try:
-        r = httpx.get("http://worldtimeapi.org/api/timezone/America/Argentina/Buenos_Aires", timeout=3.0)
-        if r.status_code == 200:
-            dt_str = r.json()["datetime"]
-            real_time = datetime.fromisoformat(dt_str).replace(tzinfo=None)
-            _time_cache["time"] = real_time
-            _time_cache["fetched_at"] = now_sys
-            return real_time
-    except Exception:
-        pass
-        
-    # Fallback
-    return datetime.utcnow() + timedelta(hours=CLINIC_TZ_OFFSET)
+
+def get_clinic_now() -> datetime:
+    """Hora actual de la clinica (Argentina), naive, desde el reloj del sistema.
+
+    Antes se consultaba worldtimeapi.org con timeout de 3s y cache de 10'. Un
+    HTTP en el camino de cada mensaje solo para saber la hora: si el servicio
+    tardaba, el paciente esperaba; si fallaba, caia a un offset fijo. El reloj
+    del contenedor (UTC, sincronizado) mas la zona horaria es determinista y
+    no depende de nadie.
+    """
+    return datetime.now(CLINIC_TZ).replace(tzinfo=None)
 
 def get_chairs_per_location(db: Session) -> int:
     """Cuantos turnos pueden solaparse en una misma sede (sillones disponibles).
@@ -624,6 +614,25 @@ _MARCAS_TRATAMIENTO_CONDUCTO = (
 )
 
 
+# Los botones que el bot muestra con la pregunta. El texto que vuelve al tocar
+# uno es exactamente este, y se resuelve sin pasar por el modelo.
+BOTON_CONSULTA_CONDUCTO = "Consulta (30 min)"
+BOTON_TRATAMIENTO_CONDUCTO = "Tratamiento (1 hora)"
+
+# Respuestas CORTAS a la pregunta ("¿consulta o tratamiento?"). Solo valen
+# cuando el ultimo dicho es breve: "tratamiento" a secas contesta la pregunta,
+# pero "quiero un tratamiento de conducto" es la frase ambigua inicial.
+_RESPUESTA_CORTA_TRATAMIENTO = (
+    "tratamiento", "1 hora", "una hora", "1 hs", "1hs", "60", "hacerme",
+    "hacermelo", "realizar", "realizarlo", "el conducto", "ya",
+)
+_RESPUESTA_CORTA_CONSULTA = (
+    "consulta", "evaluacion", "derivad", "30", "media hora", "revision",
+    "que me vean", "control",
+)
+_MAX_PALABRAS_RESPUESTA_CORTA = 4
+
+
 def _menciona_conducto(texto: str) -> bool:
     t = _sin_acentos(texto or "")
     return any(p in t for p in ("conducto", "endodoncia", "nervio"))
@@ -632,6 +641,22 @@ def _menciona_conducto(texto: str) -> bool:
 def _tiene_marca(texto: str, marcas: tuple[str, ...]) -> bool:
     t = _sin_acentos(texto or "")
     return any(m in t for m in marcas)
+
+
+def _respuesta_corta_a_la_pregunta(ultimo: str):
+    """60 / 30 / None segun una respuesta breve a la pregunta de conducto."""
+    t = " ".join(_sin_acentos(ultimo or "").split())
+    if not t or len(t.split()) > _MAX_PALABRAS_RESPUESTA_CORTA:
+        return None
+    if t == _sin_acentos(BOTON_TRATAMIENTO_CONDUCTO):
+        return 60
+    if t == _sin_acentos(BOTON_CONSULTA_CONDUCTO):
+        return 30
+    if _tiene_marca(t, _RESPUESTA_CORTA_TRATAMIENTO):
+        return 60
+    if _tiene_marca(t, _RESPUESTA_CORTA_CONSULTA):
+        return 30
+    return None
 
 
 def resolver_ambiguiedad_conducto(propuesto: str, dichos: list[str] | None = None):
@@ -646,6 +671,13 @@ def resolver_ambiguiedad_conducto(propuesto: str, dichos: list[str] | None = Non
     # paciente lo mencionó antes pero ahora agenda otra cosa, no interferimos.
     if not _menciona_conducto(propuesto or ""):
         return None
+
+    # Lo ultimo que dijo, si es breve, contesta la pregunta y gana.
+    corta = _respuesta_corta_a_la_pregunta(dichos[-1] if dichos else "")
+    if corta == 60:
+        return {"ok": True, "motivo": MOTIVO_TRATAMIENTO_CONDUCTO, "duracion": 60}
+    if corta == 30:
+        return {"ok": True, "motivo": MOTIVO_CONSULTA_CONDUCTO, "duracion": 30}
 
     junto = " ".join([propuesto or ""] + dichos)
     es_consulta = _tiene_marca(junto, _MARCAS_CONSULTA_CONDUCTO)

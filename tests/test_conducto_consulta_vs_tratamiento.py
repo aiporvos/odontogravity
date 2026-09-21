@@ -132,3 +132,55 @@ def test_api_acepta_realizar_conducto(cliente):
 def test_pregunta_incluye_los_dos_tiempos():
     assert "30 minutos" in PREGUNTA_CONDUCTO
     assert "1 hora" in PREGUNTA_CONDUCTO
+
+
+# ── Respuestas cortas a la pregunta resuelven (plan E2) ─────────────────────
+# El bot pregunta "¿consulta (30 min) o tratamiento (1 hora)?". Una respuesta
+# de una o dos palabras tiene que alcanzar; si no, se repregunta y es un loop.
+
+@pytest.mark.parametrize("respuesta,motivo,minutos", [
+    ("Tratamiento (1 hora)", "Conducto", 60),
+    ("tratamiento", "Conducto", 60),
+    ("el tratamiento", "Conducto", 60),
+    ("una hora", "Conducto", 60),
+    ("1 hora", "Conducto", 60),
+    ("60", "Conducto", 60),
+    ("ya para hacérmelo", "Conducto", 60),
+    ("Consulta (30 min)", "Consulta por conducto", 30),
+    ("consulta", "Consulta por conducto", 30),
+    ("vengo derivado", "Consulta por conducto", 30),
+    ("30", "Consulta por conducto", 30),
+    ("media hora", "Consulta por conducto", 30),
+    ("evaluación", "Consulta por conducto", 30),
+])
+def test_respuesta_corta_resuelve(respuesta, motivo, minutos):
+    r = resolver_ambiguiedad_conducto(
+        "Conducto",
+        ["quiero un turno para tratamiento de conducto", respuesta],
+    )
+    assert r["ok"] is True, r
+    assert r["motivo"] == motivo
+    assert r["duracion"] == minutos
+
+
+def test_una_respuesta_corta_que_no_aclara_sigue_preguntando():
+    r = resolver_ambiguiedad_conducto(
+        "Conducto", ["tratamiento de conducto", "el jueves"],
+    )
+    assert r["ok"] is False
+
+
+def test_tratamiento_en_la_frase_larga_inicial_no_alcanza():
+    """'quiero un tratamiento de conducto' es la frase ambigua de siempre."""
+    r = resolver_ambiguiedad_conducto(
+        "Conducto", ["quiero un tratamiento de conducto para el jueves"],
+    )
+    assert r["ok"] is False
+
+
+def test_los_botones_se_reconocen_sin_pasar_por_el_modelo():
+    from bot.tools.appointment_tools import motivo_por_boton_conducto
+    assert motivo_por_boton_conducto("Tratamiento (1 hora)") == "Conducto"
+    assert motivo_por_boton_conducto("Consulta (30 min)") == "Consulta por conducto"
+    assert motivo_por_boton_conducto("si") is None
+    assert motivo_por_boton_conducto("consulta") is None, "Texto libre va por el modelo"

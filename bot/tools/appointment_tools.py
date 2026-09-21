@@ -318,6 +318,8 @@ def agendar_turno(
     # La cobertura manda desde el estado: el default Particular del parametro
     # ya no puede pisar lo que el paciente eligio (ni inventar Particular).
     insurance_name = _cobertura_registrada() or insurance_name
+    # Idem el motivo: es el que define la duracion del turno.
+    reason = _motivo_registrado() or reason
 
     payload = {
         "profesional_pedido": profesional or None,
@@ -569,6 +571,11 @@ def consultar_disponibilidad(
     if bloqueo := _exigir_cobertura("consultar disponibilidad"):
         return bloqueo
     obra_social = _cobertura_registrada() or obra_social
+    # La duracion sale del motivo, y el motivo es el registrado (ya verificado
+    # contra lo que dijo el paciente), no lo que el modelo escriba aca:
+    # "tratamiento de conducto" daria 60' aunque el estado diga "Consulta por
+    # conducto" (30').
+    motivo_confirmado_por_paciente = _motivo_registrado() or motivo_confirmado_por_paciente
 
     try:
         payload = {
@@ -703,9 +710,10 @@ def verificar_obra_social(obra_social: str) -> str:
         r.raise_for_status()
         d = r.json()
         if d["cubierta"]:
+            _registrar_cobertura(d["nombre"])
             return (
-                f"CUBIERTA. La clínica atiende {d['nombre']}. "
-                f"Seguí normalmente con el turno usando obra_social='{d['nombre']}'."
+                f"CUBIERTA. La clínica atiende {d['nombre']} y ya quedó registrada "
+                f"en el estado (no hace falta `recordar_dato`). Seguí con el turno."
             )
         # No cubierta. Pero antes de darla por perdida: puede ser un fragmento
         # ("swi") o estar mal escrita ("ospeysin"), asi que se buscan las que se
@@ -801,6 +809,36 @@ def _cobertura_registrada() -> str:
     return ((_estado_conversacion.get() or {}).get("obra_social") or "").strip()
 
 
+def _registrar_cobertura(nombre: str) -> None:
+    """Deja la cobertura en el estado sin pasar por el modelo.
+
+    Charla real 21/09: el paciente escribio "Avalian", el bot dijo "ya tengo que
+    tenes Avalian" y nunca la registro. Cuando la coincidencia es exacta no hay
+    decision que tomar, asi que la toma el codigo.
+    """
+    estado = dict(_estado_conversacion.get() or {})
+    estado["obra_social"] = (nombre or "").strip()
+    estado.pop("cobertura_preguntada", None)
+    _estado_conversacion.set(estado)
+
+
+def _resolver_cobertura_dicha(texto: str) -> str | None:
+    """Si `texto` es exactamente una obra social atendida, la registra y la devuelve."""
+    busqueda = _texto_parece_busqueda(texto)
+    if not busqueda:
+        return None
+    try:
+        r = httpx.get(f"{API_BASE}/api/bot/obras-sociales",
+                      params={"q": busqueda}, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        exacta = r.json().get("exacta")
+    except Exception:
+        return None
+    if exacta:
+        _registrar_cobertura(exacta)
+    return exacta
+
+
 def _exigir_cobertura(para: str) -> str | None:
     """Bloquea disponibilidad/agenda si todavia no hay cobertura en el estado.
 
@@ -822,6 +860,19 @@ def _exigir_cobertura(para: str) -> str | None:
             f"CUÁL. Llamá a `listar_obras_sociales()` ahora, esperá que elija, "
             f"registrala con `recordar_dato` y recién después {para}. "
             f"🚫 PROHIBIDO asumir Particular ni inventar un nombre."
+        )
+    # El paciente acaba de nombrar su obra social ("Avalian", "ospe"). Si es
+    # exacta, se registra aca y se sigue; si es un fragmento, se lista. Lo que
+    # NO se hace es volver a preguntarle si tiene obra social.
+    if busqueda := _texto_parece_busqueda(ultimo):
+        if _resolver_cobertura_dicha(ultimo):
+            return None
+        return (
+            f"❌ El paciente escribió '{busqueda}' buscando su obra social. "
+            f"Llamá a `listar_obras_sociales(busqueda='{busqueda}')` para que "
+            f"elija cuál, y recién después {para}. "
+            f"🚫 PROHIBIDO volver a preguntar si tiene obra social o es particular. "
+            f"🚫 PROHIBIDO asumir Particular."
         )
     return (
         f"❌ Todavía no sabés la cobertura del paciente y de eso puede depender "
@@ -953,6 +1004,17 @@ def listar_obras_sociales(busqueda: str = "") -> str:
     if not total:
         return ("La clínica no tiene obras sociales cargadas: la atención es PARTICULAR. "
                 "Decíselo y seguí con el turno usando obra_social='Particular'.")
+
+    # ── Coincidencia exacta: escribio el nombre o toco la lista ─────────────
+    # No hay nada que confirmar ni que el modelo tenga que registrar.
+    if busqueda and d.get("exacta"):
+        _registrar_cobertura(d["exacta"])
+        return (
+            f"✅ Cobertura registrada: {d['exacta']}. Ya quedó guardada en el "
+            f"estado (no llames a `recordar_dato` ni a `verificar_obra_social`). "
+            f"Confirmásela en media frase y seguí con el turno: motivo si falta, "
+            f"si no, horarios."
+        )
 
     # ── Con búsqueda ────────────────────────────────────────────────────────
     if busqueda:
@@ -1104,6 +1166,21 @@ def recordar_dato(campo: str, valor: str) -> str:
         lo_dijo, normalizado, razon = _motivo_dicho_por_el_paciente(valor)
         if not lo_dijo:
             if razon:
+                # La pregunta de conducto va con dos botones: una respuesta
+                # de un toque en vez de texto libre que despues hay que
+                # interpretar. El texto del boton se resuelve por codigo.
+                if "conducto" in razon.lower() and "30" in razon:
+                    from backend.services.appointment_service import (
+                        BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO,
+                    )
+                    set_opciones_ofrecidas(
+                        [BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO],
+                        siempre=True, tipo="botones",
+                    )
+                    razon += (
+                        " Le estás mostrando dos botones (Consulta 30 min / "
+                        "Tratamiento 1 hora): hacé la pregunta en UNA frase corta."
+                    )
                 return f"❌ {razon}"
             return (
                 f"❌ El paciente nunca dijo '{valor}'. No lo deduzcas: preguntale "
@@ -1123,6 +1200,28 @@ def recordar_dato(campo: str, valor: str) -> str:
 
 
 _estado_conversacion: contextvars.ContextVar = contextvars.ContextVar("estado_conv", default=None)
+
+
+def motivo_por_boton_conducto(texto: str) -> str | None:
+    """El motivo que corresponde si el paciente toco un boton de conducto.
+
+    Solo el texto exacto del boton: el texto libre ("consulta", "una hora")
+    lo interpreta el backend en resolver-motivo, con el contexto de la charla.
+    """
+    from backend.services.appointment_service import (
+        BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO,
+        MOTIVO_CONSULTA_CONDUCTO, MOTIVO_TRATAMIENTO_CONDUCTO,
+    )
+    t = " ".join((texto or "").strip().lower().split())
+    if t == BOTON_TRATAMIENTO_CONDUCTO.lower():
+        return MOTIVO_TRATAMIENTO_CONDUCTO
+    if t == BOTON_CONSULTA_CONDUCTO.lower():
+        return MOTIVO_CONSULTA_CONDUCTO
+    return None
+
+
+def _motivo_registrado() -> str:
+    return ((_estado_conversacion.get() or {}).get("motivo") or "").strip()
 
 
 def set_estado_conversacion(estado: dict | None):

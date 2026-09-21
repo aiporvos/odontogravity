@@ -1378,9 +1378,21 @@ def chat(user_message: str, history: list[dict] | None = None,
     from bot.tools.appointment_tools import (
         _paciente_eligio_tiene_obra_social,
         _texto_parece_busqueda,
+        motivo_por_boton_conducto,
     )
     estado_ahora = estado or {}
     forzadas = []
+    # Toco un boton de la pregunta de conducto: el motivo queda decidido por
+    # codigo. El modelo solo tiene que seguir (horarios), no interpretarlo.
+    if motivo_boton := motivo_por_boton_conducto(user_message):
+        estado_ahora = {**estado_ahora, "motivo": motivo_boton}
+        estado = estado_ahora
+        set_estado_conversacion(estado)
+        forzadas.append(
+            f"El paciente eligió con un botón: motivo = '{motivo_boton}', ya "
+            f"registrado en el estado (no llames a `recordar_dato`). Seguí con "
+            f"lo que falte: cobertura si no está, si no, `consultar_disponibilidad`."
+        )
     if _paciente_eligio_tiene_obra_social(user_message):
         forzadas.append(
             "OBLIGATORIO AHORA: el paciente dijo que tiene obra social. "
