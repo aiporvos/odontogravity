@@ -17,6 +17,7 @@ from bot.tools.appointment_tools import (
     reiniciar_disponibilidad, disponibilidad_consultada,
     telefono_consultorio, set_opciones_ofrecidas,
     es_afirmacion, set_ultima_respuesta_bot,
+    confirmacion_turno_agendada, reiniciar_confirmacion_turno,
 )
 from backend.database import SessionLocal
 from backend.models.config import AppConfig
@@ -110,6 +111,67 @@ def get_sedes_texto() -> str:
         db.close()
 
 
+def get_horarios_texto() -> str:
+    """Horario de la clínica desde clinic_schedule (editable en el panel)."""
+    from backend.models.schedule import ClinicSchedule
+    DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    db = SessionLocal()
+    try:
+        filas = (
+            db.query(ClinicSchedule)
+            .filter(ClinicSchedule.is_active == True)  # noqa: E712
+            .order_by(ClinicSchedule.weekday, ClinicSchedule.start_time)
+            .all()
+        )
+        if not filas:
+            return "Consultá disponibilidad con la herramienta (horario no cargado)."
+        por_dia: dict[int, list[str]] = {}
+        for f in filas:
+            por_dia.setdefault(f.weekday, []).append(
+                f"{f.start_time.strftime('%H:%M')}-{f.end_time.strftime('%H:%M')}"
+            )
+        lineas = []
+        for wd in sorted(por_dia):
+            if 0 <= wd < len(DIAS):
+                lineas.append(f"{DIAS[wd]}: {', '.join(por_dia[wd])}")
+        # Días hábiles sin tarde: lo más claro es listar lo que hay.
+        return " · ".join(lineas)
+    except Exception:
+        return "Lunes a Viernes · mañana y tarde (salvo miércoles tarde)"
+    finally:
+        db.close()
+
+
+def get_duraciones_texto() -> str:
+    """Duraciones de cada tipo de consulta desde la base (editable en el panel)."""
+    from backend.models.tipo_consulta import TipoConsulta
+    db = SessionLocal()
+    try:
+        tipos = (
+            db.query(TipoConsulta)
+            .filter(
+                TipoConsulta.is_active == True,  # noqa: E712
+                TipoConsulta.is_deleted == False,  # noqa: E712
+            )
+            .order_by(TipoConsulta.duracion_minutos, TipoConsulta.nombre)
+            .all()
+        )
+        if not tipos:
+            return "La duración sale del motivo registrado (no inventes minutos)."
+        # Agrupar por duración para no listar 20 líneas.
+        por_min: dict[int, list[str]] = {}
+        for t in tipos:
+            por_min.setdefault(t.duracion_minutos, []).append(t.nombre)
+        return " · ".join(
+            f"{', '.join(nombres)}: {mins} min"
+            for mins, nombres in sorted(por_min.items())
+        )
+    except Exception:
+        return "La duración sale del motivo registrado (no inventes minutos)."
+    finally:
+        db.close()
+
+
 def get_active_insurances() -> list[str]:
     db = SessionLocal()
     try:
@@ -137,11 +199,7 @@ Tu prioridad es **resolver la intención del paciente con la menor cantidad posi
 
 # 🕒 DATOS DEL CONSULTORIO
 
-* **Horarios:** Lunes a Viernes.
-
-  * Mañana: 09:00-12:30
-  * Tarde: 17:00-20:30
-  * Miércoles por la tarde: CERRADO.
+* **Horarios:** {horarios}
 
 * **Sedes, dirección y teléfono:** {sedes}
 
@@ -151,9 +209,9 @@ Tu prioridad es **resolver la intención del paciente con la menor cantidad posi
 
 ## Duraciones
 
-* Limpieza / Consulta / Control: 15 minutos
-* Extracción / Ortodoncia: 30 minutos
-* Endodoncia: 60 minutos
+{duraciones}
+
+(La duración real del turno la define el motivo registrado; no inventes minutos.)
 
 ---
 
@@ -759,20 +817,16 @@ No vuelvas a preguntar para quién es.
 
 # 🪪 DNI
 
-Si necesitás pedir DNI:
+🚫 PROHIBIDO pedirle el DNI (ni al reservar ni al cancelar). El sistema
+identifica por WhatsApp. Si no encuentra el turno, llamá a
+`indicar_llamar_consultorio` — no sigas pidiendo DNI, nombre ni más datos.
 
-* normalmente tiene 7 u 8 dígitos.
-
-Si el paciente da 10 dígitos y parece un teléfono, decile:
-
-"Ese parece un teléfono 😊 ¿Me pasás tu DNI?"
-
-Si el paciente proporciona voluntariamente un DNI en cualquier momento:
+Si el paciente ofrece un DNI por su cuenta:
 
 * guardalo;
 * usalo en la siguiente llamada relevante.
 
-No lo ignores.
+No lo ignores. No lo pidas.
 
 ---
 
@@ -899,129 +953,6 @@ Dar vueltas en círculo es peor que derivar.
 
 ---
 
-# 🛠️ HERRAMIENTAS DISPONIBLES
-
-## `quien_me_escribe()`
-
-Devuelve la ficha del paciente que escribe:
-
-* nombre;
-* obra social;
-* turno próximo;
-* último profesional;
-* tratamientos en curso.
-
-LLAMALA SIEMPRE al principio de una conversación nueva antes de pedir información.
-
----
-
-## `recordar_dato(campo, valor)`
-
-Campos obligatorios:
-
-* `campo`
-* `valor`
-
-Guarda datos ya mencionados por el paciente para no volver a preguntarlos.
-
-Llamala apenas aparezca información útil, aunque venga fuera de orden.
-
----
-
-## `agendar_turno(patient_name, patient_last_name, dni, phone, reason, preferred_date, location, insurance_name, duration_minutes)`
-
-Agenda un nuevo turno.
-
-Campos obligatorios:
-
-* `reason`
-* `preferred_date`
-
-No pidas datos personales adicionales salvo que la herramienta indique que hacen falta.
-
----
-
-## `cancelar_turno(dni, appointment_id)`
-
-Cancela un turno existente.
-
-Usá inicialmente la identificación por WhatsApp.
-
----
-
-## `reprogramar_turno(dni, appointment_id, new_datetime)`
-
-Reprograma un turno existente.
-
-Campos obligatorios:
-
-* `appointment_id`
-* `new_datetime`
-
----
-
-## `consultar_mis_turnos(dni)`
-
-Consulta los turnos pendientes del paciente.
-
-Usá inicialmente la identificación por número de WhatsApp.
-
----
-
-## `consultar_disponibilidad(motivo_confirmado_por_paciente, location, date, obra_social, preferencia_horaria, profesional)`
-
-Consulta disponibilidad para un nuevo turno.
-
-Campo obligatorio:
-
-* `motivo_confirmado_por_paciente`
-
-Si el paciente pidió a un profesional por nombre, pasalo en `profesional`.
-
-Si el paciente ya dijo el motivo con sus palabras, eso cuenta como confirmado:
-no le pidas que lo confirme de nuevo.
-
-No vuelvas a llamarla cuando el paciente simplemente esté seleccionando una opción que ya fue ofrecida.
-
----
-
-## `preguntar_cobertura()`
-
-Muestra dos botones: "Tengo obra social" y "Particular".
-
-Llamala ANTES de mostrar ninguna lista, apenas haya que hablar de cobertura.
-
----
-
-## `listar_obras_sociales(busqueda)`
-
-Muestra una lista seleccionable de obras sociales.
-
-Sin `busqueda` muestra las más frecuentes.
-
-Si no aparece la obra social:
-
-* pedí las primeras letras;
-* llamá nuevamente pasando `busqueda`.
-
-No enumeres las obras sociales manualmente.
-
----
-
-## `verificar_obra_social(obra_social)`
-
-Campo obligatorio:
-
-* `obra_social`
-
-Verifica si la clínica trabaja con una obra social.
-
-Usala siempre cuando el paciente escriba manualmente el nombre de su obra social.
-
-Nunca asumas cobertura.
-
----
-
 # 📍 DIRECCIÓN
 
 Si preguntan dónde queda, informá la dirección COMPLETA con calle y número, y pasá el link del mapa que figura arriba en DATOS DEL CONSULTORIO.
@@ -1121,7 +1052,8 @@ Si después de intentar resolver una situación no podés avanzar de manera segu
 * 🚫 nunca repitas una pregunta idéntica: si el paciente contestó otra cosa,
   guardá ese dato con `recordar_dato` y reformulá o avanzá por otro lado.
 
-En ese caso **llamá a `indicar_llamar_consultorio(motivo, resumen)`**. Eso te
+En ese caso **llamá a `indicar_llamar_consultorio(motivo, resumen)`** (es la
+herramienta de salida; sin llamarla no hay teléfono ni registro). Eso te
 devuelve el teléfono del consultorio. Decile que llame. 🚫 NO digas que dejaste
 la consulta anotada ni que alguien lo va a contactar: no hay bandeja.
 
@@ -1134,7 +1066,7 @@ Casos típicos para indicar llamar:
 * precios, presupuestos y costos de tratamientos;
 * coberturas que no podés verificar con las herramientas;
 * urgencias o situaciones clínicas que exceden un turno;
-* un turno que dice tener y no aparece en esta agenda.
+* un turno que dice tener y no aparece en esta agenda (🚫 no pidas DNI).
 
 Después de llamarla, podés decir algo como:
 
@@ -1238,7 +1170,7 @@ def _build_client(provider: str):
         base_url = "https://openrouter.ai/api/v1"
     elif provider == "groq":
         api_key = get_config("GROQ_API_KEY")
-        model = get_config("GROQ_MODEL", "llama-3.1-70b-versatile")
+        model = get_config("GROQ_MODEL", "openai/gpt-oss-20b")
         base_url = "https://api.groq.com/openai/v1"
     else:  # openai
         api_key = get_config("OPENAI_API_KEY")
@@ -1516,6 +1448,8 @@ def chat(user_message: str, history: list[dict] | None = None,
     system_content = SYSTEM_PROMPT.format(
         especialistas=get_especialistas_texto(),
         sedes=get_sedes_texto(),
+        horarios=get_horarios_texto(),
+        duraciones=get_duraciones_texto(),
     )
 
     # Build messages array (OpenAI format)
@@ -1948,6 +1882,7 @@ def chat(user_message: str, history: list[dict] | None = None,
             # reinicia por proveedor: si se cae y reintenta, lo del intento
             # anterior no vale.
             reiniciar_disponibilidad()
+            reiniciar_confirmacion_turno()
             # Si en este turno se creo un turno de verdad. Lo unico que cuenta
             # es que agendar_turno haya devuelto exito, no que el modelo diga
             # que lo hizo.
@@ -1956,6 +1891,26 @@ def chat(user_message: str, history: list[dict] | None = None,
             # Lo que devolvieron las tools en este intento, para contrastar
             # la redaccion final con lo que el sistema dijo de verdad.
             resultados_tools: list[str] = []
+
+            def _respuesta_con_plantillas(texto: str, consultado: list, agendo: bool) -> str:
+                """Datos duros por plantilla: horarios y confirmación.
+
+                El modelo decide qué hacer; el código arma el texto con números.
+                Así no se inventa un horario ni se confirma un turno inventado.
+                """
+                if agendo:
+                    conf = confirmacion_turno_agendada()
+                    if conf:
+                        logger.info("AI_AGENT -> Confirmación de turno por plantilla")
+                        return conf
+                plantilla = _mensaje_con_los_horarios_reales(consultado)
+                if plantilla and (
+                    _OFRECE_HORARIOS.search(texto or "")
+                    or _HORA.search(texto or "")
+                ):
+                    logger.info("AI_AGENT -> Horarios por plantilla (camino normal)")
+                    return plantilla
+                return texto
 
             def _pulir(texto: str) -> str:
                 """Ultimo filtro del texto que sale: nombres reales y nada suavizado."""
@@ -2050,6 +2005,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                         propio = _consultar_yo_mismo()
                         return ((propio or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
                                 get_estado_conversacion())
+                    # Camino normal: horarios y confirmación los arma el código.
+                    result = _respuesta_con_plantillas(result, consultado, agendo_de_verdad)
                     rescatado = _rescatar_afirmacion(result, consultado, agendo_de_verdad)
                     if rescatado:
                         return rescatado, tomar_opciones_ofrecidas(), get_estado_conversacion()
@@ -2148,6 +2105,7 @@ def chat(user_message: str, history: list[dict] | None = None,
                 propio = _consultar_yo_mismo()
                 return ((propio or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
                         get_estado_conversacion())
+            final = _respuesta_con_plantillas(final, consultado, agendo_de_verdad)
             rescatado = _rescatar_afirmacion(final, consultado, agendo_de_verdad)
             if rescatado:
                 return rescatado, tomar_opciones_ofrecidas(), get_estado_conversacion()

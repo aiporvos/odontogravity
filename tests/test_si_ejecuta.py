@@ -159,4 +159,6 @@ def test_una_respuesta_con_horarios_reales_pasa_intacta(monkeypatch):
     monkeypatch.setattr(ai_agent, "reiniciar_disponibilidad", lambda: None)
     history = [{"role": "assistant", "content": OFERTA}]
     texto, _, _ = ai_agent.chat("sí", history, "5492604046245", COMPLETO)
-    assert texto.startswith("Tengo turno con la Dra. Murad")
+    assert "10:00" in texto and "11:00" in texto
+    assert "Murad" in texto
+    assert "¿Cuál te sirve?" in texto

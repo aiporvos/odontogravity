@@ -104,13 +104,31 @@ def test_reconoce_las_formas_de_prometer_un_turno(monkeypatch, promesa):
 
 # ── Pero no molesta cuando el turno SÍ se creó ──────────────────────────────
 
-def test_si_agendo_de_verdad_el_mensaje_sale_tal_cual(monkeypatch):
+def test_si_agendo_de_verdad_usa_plantilla_de_confirmacion(monkeypatch):
+    """Si agendó de verdad, sale la plantilla — no la redacción libre del modelo."""
+    from bot.tools import appointment_tools as tools
+    tools.reiniciar_confirmacion_turno()
+    tools.registrar_confirmacion_turno(
+        "Listo 😊 Turno agendado con el Dr. Martin Silvestro. Fecha: 2026-09-14 11:00. "
+        "Si necesitás cancelar, escribime 'quiero cancelar mi turno'."
+    )
     guion = [
         _Mensaje("", tool_calls=[_LlamadaAHerramienta("agendar_turno")]),
         _Mensaje(PROMESA),
     ]
-    texto, _, _ = _correr(monkeypatch, guion)
-    assert texto == PROMESA
+    monkeypatch.setattr(ai_agent, "reiniciar_disponibilidad", lambda: None)
+    monkeypatch.setattr(ai_agent, "reiniciar_confirmacion_turno", lambda: None)
+    monkeypatch.setattr(ai_agent, "_build_client",
+                        lambda p: (_Cliente(guion), "modelo-de-prueba"))
+    monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "✅ Turno agendado")
+    monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
+    monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
+    monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: {})
+    texto, _, _ = ai_agent.chat("hola", [], "5492604046245")
+    assert "Listo" in texto and "Silvestro" in texto
+    assert "11:00" in texto
+    # No la redacción inventable del modelo si difiere de la plantilla.
+    assert texto.startswith("Listo")
 
 
 def test_si_la_herramienta_fallo_no_se_confirma(monkeypatch):
@@ -137,7 +155,6 @@ def test_otra_herramienta_no_habilita_la_confirmacion(monkeypatch):
 # ── Y no se mete con los mensajes normales ──────────────────────────────────
 
 @pytest.mark.parametrize("normal", [
-    "Tengo disponibilidad el jueves a las 09:00, 10:00 o 11:00. ¿Cuál te sirve?",
     "¿Para qué es la consulta?",
     "El Dr. Silvestro atiende miércoles, jueves y viernes.",
     "Tu turno del jueves quedó cancelado.",
@@ -146,3 +163,13 @@ def test_otra_herramienta_no_habilita_la_confirmacion(monkeypatch):
 def test_los_mensajes_que_no_prometen_turno_pasan_intactos(monkeypatch, normal):
     texto, _, _ = _correr(monkeypatch, [_Mensaje(normal)])
     assert texto == normal
+
+
+def test_ofrecer_horarios_usa_plantilla_con_slots_reales(monkeypatch):
+    """Aunque el modelo redacte distinto, salen los horarios consultados."""
+    texto, _, _ = _correr(monkeypatch, [
+        _Mensaje("Tengo disponibilidad el jueves a las 09:00, 10:00 o 11:00. ¿Cuál te sirve?")
+    ])
+    assert "09:00" in texto and "11:00" in texto
+    assert "jueves 17 de septiembre de 2026" in texto
+    assert "¿Cuál te sirve?" in texto

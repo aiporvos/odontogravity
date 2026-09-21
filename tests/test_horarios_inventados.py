@@ -83,18 +83,32 @@ def test_sin_ninguna_consulta_no_ofrece_nada(monkeypatch):
     assert "qué día te viene bien" in salida
 
 
-# ── Lo que tiene que pasar intacto ─────────────────────────────────────────
+# ── Lo que tiene que salir (ahora por plantilla) ────────────────────────────
 
-def test_los_horarios_reales_salen_tal_cual(monkeypatch):
+def _es_plantilla(salida: str, consultado: list) -> bool:
+    """La plantilla del código: fecha_texto + slots + ¿Cuál te sirve?"""
+    ultimo = consultado[-1]
+    return (
+        ultimo["fecha_texto"] in salida
+        and all(s in salida for s in ultimo["slots"])
+        and "¿Cuál te sirve?" in salida
+    )
+
+
+def test_los_horarios_reales_salen_por_plantilla(monkeypatch):
     texto = ("Tengo turnos para el miércoles 16 de septiembre a las 10:30, "
              "11:30 o 12:00. ¿Cuál te sirve?")
-    assert _correr(monkeypatch, texto, REAL) == texto
+    salida = _correr(monkeypatch, texto, REAL)
+    assert _es_plantilla(salida, REAL)
+    assert "Silvestro" in salida
 
 
-def test_un_subconjunto_tambien_es_valido(monkeypatch):
-    """Ofrecer dos de los tres horarios reales no es inventar."""
+def test_un_subconjunto_tambien_sale_por_plantilla(monkeypatch):
+    """Aunque el modelo ofrezca menos, el paciente ve todos los slots reales."""
     texto = "Te puedo dar el miércoles 16 a las 10:30 o 12:00."
-    assert _correr(monkeypatch, texto, REAL) == texto
+    salida = _correr(monkeypatch, texto, REAL)
+    assert _es_plantilla(salida, REAL)
+    assert "11:30" in salida  # el que el modelo omitió también sale
 
 
 @pytest.mark.parametrize("normal", [
@@ -142,7 +156,7 @@ def test_no_le_atribuye_a_murad_los_horarios_de_silvestro(
     assert "no pude confirmar" in salida.lower()
 
 
-def test_si_se_consulto_por_ese_profesional_pasa(monkeypatch, db, clinica, silvestro, murad):
+def test_si_se_consulto_por_ese_profesional_sale_plantilla(monkeypatch, db, clinica, silvestro, murad):
     consultado = [{
         "profesional": "Dra. Lucía Murad",
         "fecha": "2026-09-14",
@@ -150,18 +164,23 @@ def test_si_se_consulto_por_ese_profesional_pasa(monkeypatch, db, clinica, silve
         "slots": ["09:00", "10:00"],
     }]
     texto = "Para la Dra. Murad tengo el lunes 14 a las 09:00 o 10:00."
-    assert _correr(monkeypatch, texto, consultado) == texto
+    salida = _correr(monkeypatch, texto, consultado)
+    assert _es_plantilla(salida, consultado)
+    assert "Murad" in salida
 
 
-def test_sin_nombrar_a_nadie_no_molesta(monkeypatch, db, clinica, silvestro, murad):
+def test_sin_nombrar_a_nadie_sale_plantilla(monkeypatch, db, clinica, silvestro, murad):
     texto = "Tengo turnos el miércoles 16 a las 10:30 o 12:00. ¿Cuál te sirve?"
-    assert _correr(monkeypatch, texto, REAL) == texto
+    salida = _correr(monkeypatch, texto, REAL)
+    assert _es_plantilla(salida, REAL)
 
 
-def test_nombrar_al_profesional_correcto_pasa(monkeypatch, db, clinica, silvestro, murad):
+def test_nombrar_al_profesional_correcto_sale_plantilla(monkeypatch, db, clinica, silvestro, murad):
     texto = ("Con el Dr. Silvestro tengo el miércoles 16 de septiembre a las "
              "10:30, 11:30 o 12:00.")
-    assert _correr(monkeypatch, texto, REAL) == texto
+    salida = _correr(monkeypatch, texto, REAL)
+    assert _es_plantilla(salida, REAL)
+    assert "Silvestro" in salida
 
 
 def test_hablar_de_los_dias_de_un_profesional_no_es_ofrecer_horarios(

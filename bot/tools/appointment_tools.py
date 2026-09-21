@@ -256,6 +256,22 @@ def disponibilidad_consultada():
     return list(_disponibilidad_del_turno.get() or [])
 
 
+_confirmacion_turno: contextvars.ContextVar = contextvars.ContextVar(
+    "confirmacion_turno", default=None)
+
+
+def reiniciar_confirmacion_turno():
+    _confirmacion_turno.set(None)
+
+
+def registrar_confirmacion_turno(texto: str):
+    _confirmacion_turno.set(texto)
+
+
+def confirmacion_turno_agendada() -> str | None:
+    return _confirmacion_turno.get()
+
+
 def set_opciones_ofrecidas(opciones, siempre: bool = False,
                            titulo: str | None = None, boton: str | None = None,
                            tipo: str = "lista"):
@@ -471,6 +487,15 @@ def agendar_turno(
         # Lo arma el backend: es el unico que conoce el dominio publico, y
         # tenerlo escrito aca lo dejaba desincronizado del resto del sistema.
         cancel_url = data.get("cancel_url", "")
+        # Texto listo para el paciente: el modelo no inventa fecha ni profesional.
+        cuando = data.get("datetime") or preferred_date
+        mensaje_base = (data.get("message") or "Turno agendado").rstrip(".")
+        confirmacion = (
+            f"Listo 😊 {mensaje_base}. Fecha: {cuando}. "
+            f"Si necesitás cancelar, escribime 'quiero cancelar mi turno'"
+            + (f" o usá este link: {cancel_url}" if cancel_url else ".")
+        )
+        registrar_confirmacion_turno(confirmacion)
         return (
             f"✅ {data['message']}. Fecha: {data['datetime']}. ID: {data['appointment_id']}. "
             f"Aclarale al paciente que si desea cancelar el turno, puede escribir "
@@ -1785,12 +1810,12 @@ TOOL_DEFINITIONS = [
         "function": {
             "name": "listar_obras_sociales",
             "description": (
-                "Le muestra al paciente obras sociales como lista tocable. USALA EN "
-                "CUANTO haya que hablar de cobertura, en lugar de pedirle que la "
-                "escriba: los nombres se escriben mal y el paciente termina sin "
-                "cobertura por un error de tipeo. Sin `busqueda` muestra las más "
-                "frecuentes; si el paciente dice que la suya no está, pedile las "
-                "primeras letras y volvé a llamarla pasándolas en `busqueda`. "
+                "Segundo escalón de cobertura: lista tocable de obras sociales. "
+                "USALA DESPUÉS de `preguntar_cobertura`, cuando el paciente eligió "
+                "'Tengo obra social' (o escribió las primeras letras). NO la uses "
+                "como primer paso ni para pedirle que escriba el nombre completo. "
+                "Sin `busqueda` muestra las más frecuentes; si dice que la suya no "
+                "está, pedile las primeras letras y volvé a llamarla con `busqueda`. "
                 "Lo que elija de la lista ya está verificado."
             ),
             "parameters": {
