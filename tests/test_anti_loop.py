@@ -137,9 +137,45 @@ def test_segunda_vez_deriva():
     assert accion == "derivar"
 
 
-def test_con_el_estado_completo_deriva_directo():
-    """No hay nada que preguntar por código: es un problema de otro tipo."""
-    completo = {"obra_social": "OSDE", "motivo": "Limpieza", "fecha_hora": "x", "paciente": "y"}
+def test_con_estado_completo_consulta_horarios_antes_de_llamar(monkeypatch):
+    """Motivo + cobertura: no mandar a teléfono, ofrecer el próximo hueco.
+
+    Caso 23/09: «qué días / un lunes» con Extracción ya registrada. El lunes
+    no atiende → decirlo y ofrecer el día que sí.
+    """
+    completo = {
+        "obra_social": "Swiss Medical",
+        "motivo": "Extracción",
+        "paciente": "para mí",
+    }
+
+    def _falso_rescate(estado, dichos):
+        assert estado["motivo"] == "Extracción"
+        return (
+            "El Dr. Martin Silvestro no atiende el lunes. "
+            "Tengo turno con él el miércoles 24 a las 10:00 o 11:00. ¿Cuál te sirve?",
+            {"opciones": ["10:00", "11:00"], "siempre": True, "tipo": "lista"},
+        )
+
+    monkeypatch.setattr(
+        "backend.routers.evolution_router._rescate_por_horarios", _falso_rescate,
+    )
+    accion, texto, opciones = resolver_loop(
+        A, [A], None, completo, dichos=["que dias tenes?", "puede ser un lunes"],
+    )
+    assert accion == "rescate"
+    assert "miércoles" in texto.lower() or "miercoles" in texto.lower()
+    assert "llamar" not in texto.lower()
+    assert opciones and "10:00" in opciones["opciones"]
+
+
+def test_segunda_vez_con_estado_completo_si_deriva():
+    """Si ya se rescató una vez y se vuelve a trabar, ahí sí teléfono."""
+    completo = {
+        "obra_social": "OSDE",
+        "motivo": "Limpieza",
+        CLAVE_RESCATE_HECHO: True,
+    }
     accion, _, _ = resolver_loop(A, [A], None, completo)
     assert accion == "derivar"
 

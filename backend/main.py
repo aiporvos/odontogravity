@@ -18,7 +18,10 @@ from backend.routers.bot_routes import router as bot_router
 from backend.routers.evolution_router import router as whatsapp_router
 from backend.routers.public_routes import router as public_router
 from backend.seed import run_seed
-from backend.services.reminders_loop import start_reminders_loop
+# Recordatorios apagados desde 05/10/2026: desde el 01/10 Meta cobra las
+# plantillas Utility siempre y la cuenta de YCloud se quedo sin saldo. Se
+# reactivan cuando haya plantilla aprobada y costo acordado con la clinica.
+# from backend.services.reminders_loop import start_reminders_loop
 
 # ── Logging Configuration ────────────────────────────────
 logging.basicConfig(
@@ -57,7 +60,7 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
         
-    start_reminders_loop()
+    # start_reminders_loop()  # apagado, ver el import de arriba
     
     yield
 

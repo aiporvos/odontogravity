@@ -278,9 +278,18 @@ async def _enviar_interactivo(number: str, payload_interactivo: dict, texto_fall
                 f"No se manda respaldo para no duplicar."
             )
             return False
-        if 400 <= r.status_code < 500:
+        # Solo un 400 (formato del interactivo) se arregla mandando texto. Sin
+        # saldo (403), sin auth (401) o con limite (429) el texto falla igual:
+        # reintentar es un segundo pedido a YCloud que no le llega a nadie.
+        if r.status_code == 400:
             logger.error(f"❌ YCloud rechazó el interactivo ({r.status_code}): {r.text[:300]}")
             return await send_whatsapp_message(number, texto_fallback)
+        if 400 < r.status_code < 500:
+            logger.error(
+                f"❌ YCloud no aceptó el envío ({r.status_code}): {r.text[:300]}. "
+                f"No se reintenta como texto: fallaría igual."
+            )
+            return False
         if r.status_code >= 500:
             logger.error(
                 f"❌ POSIBLE_NO_ENTREGADO interactivo a {to_phone}: YCloud {r.status_code} "

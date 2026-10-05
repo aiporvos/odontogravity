@@ -435,7 +435,7 @@ Feature: La hora del consultorio es determinística
 - Correr las 5 charlas existentes + la 6 dos veces seguidas (estabilidad).
 
 ### Post-deploy (checklist)
-1. `curl https://odobot.aiporvos.com/api/health` → `codigo` del día.
+1. `curl https://odobot.cluna.ar/api/health` → `codigo` del día.
 2. Panel → Tipos de consulta: «Consulta por conducto» 30' Endodoncia activo.
 3. WhatsApp real al 2604590071, guion de la charla 6. Capturar.
 4. Panel → Agenda: el turno de prueba dura lo que dice el motivo. Borrarlo.

@@ -223,6 +223,24 @@ def _autenticar_webhook(raw: bytes, header: str | None):
         raise HTTPException(401, "Invalid signature")
 
 
+# YCloud reintenta el webhook si no recibe 2xx a tiempo. Sin esto, cada
+# reintento generaba otra respuesta completa: un mensaje cobrado de mas.
+VENTANA_DUPLICADOS = 600.0   # segundos
+_mensajes_vistos: dict[str, float] = {}
+
+
+def ya_procesado(id_mensaje: str | None) -> bool:
+    if not id_mensaje:
+        return False
+    ahora = time.monotonic()
+    for viejo in [k for k, t in _mensajes_vistos.items() if ahora - t > VENTANA_DUPLICADOS]:
+        del _mensajes_vistos[viejo]
+    if id_mensaje in _mensajes_vistos:
+        return True
+    _mensajes_vistos[id_mensaje] = ahora
+    return False
+
+
 @router.post("/webhook")
 async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
     """YCloud WhatsApp Webhook handler."""
@@ -270,6 +288,10 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
     if not msg_data:
         logger.warning("⚠️ No se encontró whatsappInboundMessage en el payload")
         return {"status": "ignored_no_message_data"}
+
+    if ya_procesado(msg_data.get("wamid") or msg_data.get("id")):
+        logger.info("⏭️ Webhook repetido para el mismo mensaje: ignorado")
+        return {"status": "ignored_duplicate"}
 
     from_number = msg_data.get("from")
     to_number = msg_data.get("to")
@@ -740,6 +762,67 @@ def _mensaje_de_rescate(estado: dict, dichos: list[str]) -> tuple[str, dict] | N
     return pregunta_por_lo_que_falta(estado, dichos)
 
 
+def _rescate_por_horarios(estado: dict, dichos: list[str]) -> tuple[str, dict | None] | None:
+    """Con motivo y cobertura, consulta la agenda y arma la oferta.
+
+    Caso real 23/09: el paciente dijo «qué días tenés / puede ser un lunes» con
+    Extracción + Swiss Medical ya registrados. El modelo se repitió y el
+    anti-loop mandó a llamar. Eso no: hay que mirar la agenda y decir «el lunes
+    no atiende, tengo el miércoles a las…».
+    """
+    motivo = (estado.get("motivo") or "").strip()
+    if not motivo or not (estado.get("obra_social") or "").strip():
+        return None
+
+    from bot.tools.appointment_tools import (
+        set_estado_conversacion, set_dichos_por_el_paciente, set_ultimo_mensaje,
+        consultar_disponibilidad, reiniciar_disponibilidad,
+        disponibilidad_consultada, tomar_opciones_ofrecidas,
+    )
+
+    set_estado_conversacion(dict(estado))
+    set_dichos_por_el_paciente(list(dichos or []))
+    set_ultimo_mensaje((dichos or [""])[-1] if dichos else "")
+    reiniciar_disponibilidad()
+
+    try:
+        bruto = consultar_disponibilidad(motivo_confirmado_por_paciente=motivo)
+    except Exception as e:
+        logger.error("🔁 No se pudo rescatar con disponibilidad: %s", e, exc_info=True)
+        return None
+
+    consultado = disponibilidad_consultada()
+    if consultado:
+        ultimo = consultado[-1]
+        slots = ultimo.get("slots") or []
+        if slots:
+            quien = ultimo.get("profesional") or ""
+            con_quien = (
+                f" con {quien}"
+                if quien and "cualquier" not in quien.lower()
+                else ""
+            )
+            horarios = (
+                slots[0] if len(slots) == 1
+                else ", ".join(slots[:-1]) + f" o {slots[-1]}"
+            )
+            aclaracion = ""
+            motivo_salto = (ultimo.get("motivo") or "").strip()
+            if motivo_salto:
+                aclaracion = motivo_salto.rstrip(".") + ". "
+            texto = (
+                f"{aclaracion}Tengo turno{con_quien} el {ultimo.get('fecha_texto')} "
+                f"a las {horarios}. ¿Cuál te sirve?"
+            )
+            return texto, tomar_opciones_ofrecidas()
+
+    # Sin slots: el backend a veces deja un mensaje usable para el paciente.
+    # Las instrucciones al modelo (🚫 / PROHIBIDO / ❌) no se mandan tal cual.
+    if bruto and not any(m in bruto for m in ("🚫", "PROHIBIDO", "❌", "`")):
+        return bruto.strip(), None
+    return None
+
+
 def resolver_loop(respuesta: str, anteriores: list[str], opciones: dict | None,
                   estado_previo: dict | None, dichos: list[str] | None = None,
                   ) -> tuple[str | None, str | None, dict | None]:
@@ -747,8 +830,9 @@ def resolver_loop(respuesta: str, anteriores: list[str], opciones: dict | None,
 
     Devuelve (accion, texto, opciones):
       (None, None, None)          no es loop
-      ("rescate", texto, botones) primera vez y falta un dato: preguntarlo por codigo
-      ("derivar", None, None)     segunda vez o estado completo: al telefono
+      ("rescate", texto, botones) primera vez: pregunta lo que falta O consulta
+                                  horarios si el estado ya alcanza
+      ("derivar", None, None)     segunda vez: al telefono
     """
     if not debe_derivar_por_loop(respuesta, anteriores, opciones, estado_previo):
         return None, None, None
@@ -757,6 +841,9 @@ def resolver_loop(respuesta: str, anteriores: list[str], opciones: dict | None,
         rescate = _mensaje_de_rescate(estado, dichos or [])
         if rescate:
             return "rescate", rescate[0], rescate[1]
+        horarios = _rescate_por_horarios(estado, dichos or [])
+        if horarios:
+            return "rescate", horarios[0], horarios[1]
     return "derivar", None, None
 
 
@@ -842,7 +929,7 @@ async def _responder(remote_jid: str, texto: str, publicadas: dict | None):
 #
 # Configurables desde el panel: cuánto tarda en escribir la gente es algo que se
 # mide en uso, no se adivina desde acá.
-SILENCIO_ANTES_DE_RESPONDER = 8.0   # segundos sin escribir
+SILENCIO_ANTES_DE_RESPONDER = 3.0   # segundos sin escribir (era 8: se sentía lento)
 ESPERA_MAXIMA = 25.0                # desde la primera parte del lote
 
 _lotes: dict[str, dict] = {}
@@ -1019,23 +1106,28 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # se derivara solo a una persona.
             #
             # Y antes de derivar, un rescate por código: si al estado le falta
-            # la cobertura o el motivo, se pregunta eso con botones. Recién si
-            # se vuelve a trabar, teléfono.
+            # la cobertura o el motivo, se pregunta eso con botones. Si ya
+            # están, se consulta la agenda y se ofrecen horarios. Recién si se
+            # vuelve a trabar, teléfono.
             ultimas = [m["content"] for m in history if m["role"] == "assistant"][-RESPUESTAS_A_MIRAR:]
             dichos = [m["content"] for m in history if m["role"] == "user"] + [text]
             estado_nuevo = dict(estado_nuevo or {})
             accion, rescate, botones = resolver_loop(
                 response, ultimas, opciones, estado_previo, dichos,
             )
+            pausar_despues_de_enviar = False
             if accion == "rescate":
                 logger.warning(f"🔁 Respuesta repetida para {remote_jid}: rescate por código.")
                 response, opciones = rescate, botones
                 estado_nuevo[CLAVE_RESCATE_HECHO] = True
             elif accion == "derivar":
                 logger.warning(f"🔁 Respuesta repetida para {remote_jid}: se indica llamar.")
-                session.paused_until = datetime.utcnow() + timedelta(minutes=_minutos_de_pausa())
-                db.commit()
+                # La pausa se aplica DESPUÉS de mandar el mensaje. Si se setea
+                # acá, el chequeo de abajo (¿tomó el chat un humano?) ve la
+                # pausa propia y no envía nada: el paciente queda sin respuesta
+                # (caso 23/09, Claudio).
                 response, opciones = _mensaje_llamar("loop"), None
+                pausar_despues_de_enviar = True
 
             estado_nuevo[CLAVE_ULTIMAS_OPCIONES] = _firma_opciones(opciones)
             _guardar_estado(db, session, estado_nuevo)
@@ -1067,6 +1159,14 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
 
             save_message(db, session.id, MessageRole.assistant, response)
             await _responder(remote_jid, response, opciones)
+
+            if pausar_despues_de_enviar:
+                session.paused_until = datetime.utcnow() + timedelta(minutes=_minutos_de_pausa())
+                db.commit()
+                logger.info(
+                    "⏸️ Conversación %s pausada tras indicar llamar (anti-loop).",
+                    ofuscar_telefono(remote_jid),
+                )
         except Exception as e:
             logger.error(f"Error handling WA text: {e}", exc_info=True)
             # El aviso de error tambien es una respuesta del bot: si algo fallo

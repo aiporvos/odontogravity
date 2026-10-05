@@ -31,42 +31,42 @@ def sin_variables(monkeypatch):
 # ── La URL pública ──────────────────────────────────────────────────────────
 
 def test_usa_la_configurada_en_el_panel(db):
-    db.add(AppConfig(key="PUBLIC_APP_URL", value="https://odobot.aiporvos.com"))
+    db.add(AppConfig(key="PUBLIC_APP_URL", value="https://odobot.cluna.ar"))
     db.commit()
-    assert url_publica(db) == "https://odobot.aiporvos.com"
+    assert url_publica(db) == "https://odobot.cluna.ar"
 
 
 def test_usa_la_variable_de_entorno(db, monkeypatch):
-    monkeypatch.setenv("PUBLIC_APP_URL", "https://odobot.aiporvos.com")
-    assert url_publica(db) == "https://odobot.aiporvos.com"
+    monkeypatch.setenv("PUBLIC_APP_URL", "https://odobot.cluna.ar")
+    assert url_publica(db) == "https://odobot.cluna.ar"
 
 
 def test_el_panel_le_gana_a_la_variable(db, monkeypatch):
     monkeypatch.setenv("PUBLIC_APP_URL", "https://vieja.example.com")
-    db.add(AppConfig(key="PUBLIC_APP_URL", value="https://odobot.aiporvos.com"))
+    db.add(AppConfig(key="PUBLIC_APP_URL", value="https://odobot.cluna.ar"))
     db.commit()
-    assert url_publica(db) == "https://odobot.aiporvos.com"
+    assert url_publica(db) == "https://odobot.cluna.ar"
 
 
 def test_cae_en_allowed_origins_si_no_hay_nada_mas(db, monkeypatch):
     """En producción esa variable ya tiene el dominio bueno."""
-    monkeypatch.setenv("ALLOWED_ORIGINS", "https://odobot.aiporvos.com")
-    assert url_publica(db) == "https://odobot.aiporvos.com"
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://odobot.cluna.ar")
+    assert url_publica(db) == "https://odobot.cluna.ar"
 
 
 def test_ignora_los_origenes_locales(db, monkeypatch):
     """El .env local lista localhost primero; no puede ganarle al dominio real."""
     monkeypatch.setenv(
         "ALLOWED_ORIGINS",
-        "http://localhost:8000,http://localhost:3000,https://odobot.aiporvos.com",
+        "http://localhost:8000,http://localhost:3000,https://odobot.cluna.ar",
     )
-    assert url_publica(db) == "https://odobot.aiporvos.com"
+    assert url_publica(db) == "https://odobot.cluna.ar"
 
 
 def test_saca_la_barra_final(db):
-    db.add(AppConfig(key="PUBLIC_APP_URL", value="https://odobot.aiporvos.com/"))
+    db.add(AppConfig(key="PUBLIC_APP_URL", value="https://odobot.cluna.ar/"))
     db.commit()
-    assert url_publica(db) == "https://odobot.aiporvos.com"
+    assert url_publica(db) == "https://odobot.cluna.ar"
 
 
 def test_avisa_fuerte_si_queda_en_localhost(db, caplog):
@@ -79,11 +79,11 @@ def test_avisa_fuerte_si_queda_en_localhost(db, caplog):
 
 
 def test_el_link_de_cancelacion_se_arma_completo(db):
-    db.add(AppConfig(key="PUBLIC_APP_URL", value="https://odobot.aiporvos.com"))
+    db.add(AppConfig(key="PUBLIC_APP_URL", value="https://odobot.cluna.ar"))
     db.commit()
     link = link_de_cancelacion(db, "2c8433df-e092-4094-aba0-8a8c3a591cf4")
     assert link == (
-        "https://odobot.aiporvos.com/api/public/cancel/2c8433df-e092-4094-aba0-8a8c3a591cf4"
+        "https://odobot.cluna.ar/api/public/cancel/2c8433df-e092-4094-aba0-8a8c3a591cf4"
     )
 
 

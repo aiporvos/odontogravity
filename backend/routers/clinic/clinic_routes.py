@@ -432,6 +432,13 @@ def create_appointment(data: AppointmentCreate, db: Session = Depends(get_db),
     return _guardar_turno(db, Appointment(**campos))
 
 
+def _turno_futuro(a) -> bool:
+    """Avisar la cancelacion de un turno que ya paso es un mensaje cobrado que
+    no le sirve a nadie: pasaba al limpiar turnos viejos desde el panel."""
+    from backend.services.appointment_service import get_clinic_now
+    return bool(a.start_time) and a.start_time > get_clinic_now()
+
+
 @router.put("/appointments/{appt_id}", response_model=AppointmentRead)
 async def update_appointment(appt_id: UUID, data: AppointmentUpdate,
                              db: Session = Depends(get_db),
@@ -478,7 +485,7 @@ async def update_appointment(appt_id: UUID, data: AppointmentUpdate,
         raise
     db.refresh(a)
 
-    if was_cancelled and a.patient and a.patient.phone:
+    if was_cancelled and _turno_futuro(a) and a.patient and a.patient.phone:
         try:
             from backend.services.whatsapp import send_whatsapp_message
             msg_text = f"Hola {a.patient.first_name}, te informamos que tu turno del {a.start_time.strftime('%Y-%m-%d %H:%M')} en la sede {a.location} ha sido cancelado desde la clínica. Por favor, contactate con nosotros si deseas reprogramarlo."
@@ -494,11 +501,12 @@ async def soft_delete_appointment(appt_id: UUID, db: Session = Depends(get_db)):
     a = db.query(Appointment).filter(Appointment.id == appt_id).first()
     if not a:
         raise HTTPException(404, "Turno no encontrado")
+    avisar = a.status != "cancelled" and _turno_futuro(a)
     a.is_deleted = True
     a.status = "cancelled"
     db.commit()
 
-    if a.patient and a.patient.phone:
+    if avisar and a.patient and a.patient.phone:
         try:
             from backend.services.whatsapp import send_whatsapp_message
             msg_text = f"Hola {a.patient.first_name}, te informamos que tu turno del {a.start_time.strftime('%Y-%m-%d %H:%M')} en la sede {a.location} ha sido cancelado desde la clínica. Por favor, contactate con nosotros si deseas reprogramarlo."

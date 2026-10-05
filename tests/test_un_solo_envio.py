@@ -135,6 +135,21 @@ async def test_un_5xx_tampoco_manda_respaldo(envios, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("codigo", [401, 403, 429])
+async def test_sin_saldo_o_sin_auth_no_reintenta_como_texto(envios, monkeypatch, codigo):
+    """05/10: con la cuenta sin saldo (403) el texto de respaldo fallaba igual."""
+    class _R:
+        status_code = codigo
+        text = '{"error":{"code":"BALANCE_INSUFFICIENT"}}'
+    _cliente_que(monkeypatch, lambda: _R())
+
+    ok = await whatsapp.send_whatsapp_buttons("+5492604590071", "¿Obra social?", ["Sí", "No"])
+
+    assert envios == []
+    assert ok is False
+
+
+@pytest.mark.asyncio
 async def test_el_post_espera_hasta_20_segundos(envios, monkeypatch):
     class _R:
         status_code = 200
