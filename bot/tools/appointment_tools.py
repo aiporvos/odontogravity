@@ -61,6 +61,9 @@ def agendar_turno(
     duration_minutes: int = 30,
 ) -> str:
     """Agenda un nuevo turno en el sistema."""
+    if problema := _validar_contra_oferta(preferred_date):
+        return problema
+
     payload = {
         "patient_name": patient_name,
         "patient_last_name": patient_last_name,
@@ -175,6 +178,9 @@ def consultar_disponibilidad(
 
         # Se publican para que el webhook pueda ofrecerlos como lista tocable.
         set_opciones_ofrecidas(slots)
+        # Y se guardan en el estado de la conversacion, para que agendar_turno
+        # no pueda aceptar un horario distinto de estos.
+        _recordar_oferta(date_iso, slots)
 
         aviso = ""
         if data.get("salto_sin_explicar"):
@@ -283,6 +289,48 @@ def quien_me_escribe() -> str:
         "ya la sabés. Si tiene un turno próximo, mencionalo antes de ofrecerle otro.\n"
     )
     return encabezado + "\n".join(f"- {x}" for x in partes)
+
+
+# ── Lo que efectivamente se le ofrecio al paciente ───────────────────────────
+# El modelo arma preferred_date combinando la fecha con el horario que eligio el
+# paciente. Cuando se equivoca —redondea una hora, mezcla la fecha de una
+# consulta anterior, o directamente inventa un horario que suena razonable— el
+# turno se agendaba igual. El paciente viaja al consultorio a una hora en la que
+# nadie lo espera, y eso es lo mas caro que puede fallar acá.
+#
+# La lista de horarios que devolvio consultar_disponibilidad queda guardada en el
+# estado de la conversacion, y agendar_turno solo acepta uno de esos. Lo verifica
+# el codigo de la tool, no el prompt: el modelo no puede saltearlo.
+
+CLAVE_OFERTA = "ofrecidos"
+
+
+def _recordar_oferta(fecha_iso: str, horarios: list):
+    estado = dict(_estado_conversacion.get() or {})
+    estado[CLAVE_OFERTA] = {"fecha": fecha_iso, "horarios": list(horarios)}
+    _estado_conversacion.set(estado)
+
+
+def _validar_contra_oferta(preferred_date: str) -> str | None:
+    """Motivo por el que ese horario no se puede aceptar, o None si es valido."""
+    oferta = (_estado_conversacion.get() or {}).get(CLAVE_OFERTA)
+    if not oferta or not oferta.get("horarios"):
+        return ("❌ Todavía no consultaste la disponibilidad en esta conversación. "
+                "Llamá primero a `consultar_disponibilidad` y ofrecele al paciente "
+                "los horarios que devuelva. No inventes horarios.")
+
+    texto = (preferred_date or "").strip().replace("T", " ")
+    partes = texto.split(" ")
+    fecha = partes[0] if partes else ""
+    hora = partes[1][:5] if len(partes) > 1 else ""
+
+    if fecha != oferta["fecha"] or hora not in oferta["horarios"]:
+        disponibles = ", ".join(oferta["horarios"])
+        return (f"❌ '{preferred_date}' no es uno de los horarios que le ofreciste al "
+                f"paciente. Para el {oferta['fecha']} los horarios ofrecidos fueron: "
+                f"{disponibles}. Usá exactamente uno de esos, o llamá de nuevo a "
+                f"`consultar_disponibilidad` si el paciente quiere otro día.")
+    return None
 
 
 # ── Estado de la conversacion ────────────────────────────────────────────────
