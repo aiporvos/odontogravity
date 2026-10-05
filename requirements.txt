@@ -1,6 +1,6 @@
 fastapi>=0.100.0
 uvicorn>=0.23.0
-sqlalchemy>=2.0.0
+sqlalchemy>=2.0.0,<2.1  # 2.1 cambia el driver por defecto a psycopg 3 y no arranca
 alembic>=1.11.0
 psycopg2-binary>=2.9.7
 python-jose[cryptography]>=3.3.0
