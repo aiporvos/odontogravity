@@ -36,7 +36,7 @@ const Router = {
                     <div class="empty-state">
                         <div class="empty-state-icon">⚠️</div>
                         <div class="empty-state-text">Error al cargar la página</div>
-                        <div class="empty-state-sub">${err.message}</div>
+                        <div class="empty-state-sub">${UI.escape(err.message)}</div>
                     </div>`;
             }
         } else {

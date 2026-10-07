@@ -75,12 +75,14 @@ _OWNERSHIP_ERROR = (
 
 
 def _ensure_owns_dni(patient, requester_phone: str | None):
-    """Si hay una identidad de canal (WhatsApp), exige que el DNI le pertenezca.
+    """Exige que la ficha de ese DNI sea de quien escribe.
 
-    Si no hay requester_phone (ej. Telegram, que no tiene teléfono), no se
-    aplica verificación y se mantiene el comportamiento anterior.
+    El DNI no es un secreto: lo sabe la familia y está impreso en el documento.
+    La única identidad verificada es el número de WhatsApp, así que sin él
+    (Telegram) o con una ficha sin teléfono no se da acceso: el número lo
+    registra la clínica desde el panel, nunca el bot.
     """
-    if requester_phone and not _phones_match(getattr(patient, "phone", None), requester_phone):
+    if not requester_phone or not _phones_match(getattr(patient, "phone", None), requester_phone):
         raise HTTPException(403, _OWNERSHIP_ERROR)
 
 
@@ -297,14 +299,13 @@ def resolver_paciente(db: Session, dni: str | None, requester_phone: str | None)
         paciente = db.query(Patient).filter(
             Patient.dni == d, Patient.is_deleted == False,  # noqa: E712
         ).first()
-        if paciente and requester_phone:
-            if not (paciente.phone or "").strip():
-                # Ficha cargada desde el panel sin telefono (o con uno vacio):
-                # es el primer WhatsApp de este paciente. Se adopta el numero,
-                # no hay nadie a quien desplazar.
-                paciente.phone = requester_phone
-                db.commit()
-            elif not _phones_match(paciente.phone, requester_phone):
+        if paciente:
+            if not requester_phone or not (paciente.phone or "").strip():
+                # Ficha sin telefono (cargada desde el panel) o canal sin numero
+                # verificado: adoptar el numero entregaba la ficha entera a
+                # cualquiera que supiera el DNI.
+                raise HTTPException(403, _OWNERSHIP_ERROR)
+            if not _phones_match(paciente.phone, requester_phone):
                 # El DNI NO es un secreto: esta impreso en el documento y lo
                 # sabe la familia. Dejar que un DNI solo de acceso a los turnos
                 # de otro desde un numero desconocido seria un agujero de
@@ -462,6 +463,11 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
             ))
     else:
         dni_normalizado = _validar_dni_y_telefono(data.dni, data.phone, data.requester_phone)
+        ficha = db.query(Patient).filter(
+            Patient.dni == dni_normalizado, Patient.is_deleted == False,  # noqa: E712
+        ).first()
+        if ficha:
+            _ensure_owns_dni(ficha, data.requester_phone)
 
     result = create_appointment_logic(
         db=db,

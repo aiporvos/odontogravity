@@ -661,7 +661,7 @@ const OdontogramPage = {
                         <div style="font-size: 0.85rem; color: var(--slate-600); display: flex; align-items: center; gap: 0.25rem;">
                             <span>${symbolLabel}</span>
                         </div>
-                        ${e.description ? `<div style="font-size: 0.8rem; color: var(--slate-500); border-top: 1px dashed var(--slate-100); padding-top: 0.25rem; margin-top: 0.25rem;">${e.description}</div>` : ''}
+                        ${e.description ? `<div style="font-size: 0.8rem; color: var(--slate-500); border-top: 1px dashed var(--slate-100); padding-top: 0.25rem; margin-top: 0.25rem;">${UI.escape(e.description)}</div>` : ''}
                     </div>
                 `;
             }).join('');

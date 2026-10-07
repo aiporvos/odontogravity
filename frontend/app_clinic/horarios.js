@@ -43,7 +43,7 @@ Router.register('horarios', async (container) => {
                     <div class="form-group" style="margin:0;">
                         <label>Profesional</label>
                         <select id="off-prof" class="form-control">
-                            ${professionals.map(p => `<option value="${p.id}">${p.full_name}</option>`).join('')}
+                            ${professionals.map(p => `<option value="${p.id}">${UI.escape(p.full_name)}</option>`).join('')}
                         </select>
                     </div>
                     <div class="form-group" style="margin:0;">
@@ -155,7 +155,7 @@ window.HorariosPage = {
                 <div style="padding:.5rem 0;border-bottom:1px solid var(--slate-100);display:flex;justify-content:space-between;align-items:center;">
                     <div>
                         <strong>${o.date}</strong> — ${prof}
-                        <div style="font-size:.8rem;color:var(--slate-500);">${o.reason || ''}</div>
+                        <div style="font-size:.8rem;color:var(--slate-500);">${UI.escape(o.reason || '')}</div>
                     </div>
                     <button class="btn btn-icon text-red" onclick="HorariosPage.removeTimeOff('${o.id}')">🗑️</button>
                 </div>
@@ -198,7 +198,7 @@ window.HorariosPage = {
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:.75rem 1rem;border-radius:var(--radius-md);border:1px solid var(--border-color);background:var(--bg-surface);">
                             <div>
                                 <div style="font-weight:600;font-size:.95rem;">📅 ${formatted}</div>
-                                <div style="font-size:.8rem;color:var(--slate-500);margin-top:.15rem;">${h.description || 'Feriado'}</div>
+                                <div style="font-size:.8rem;color:var(--slate-500);margin-top:.15rem;">${UI.escape(h.description || 'Feriado')}</div>
                             </div>
                             <button class="btn btn-icon text-red" onclick="HorariosPage.removeHoliday('${h.id}')">🗑️</button>
                         </div>

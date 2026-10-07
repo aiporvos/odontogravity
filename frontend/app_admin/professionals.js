@@ -87,7 +87,7 @@ const ProfessionalsPage = {
                 ],
             });
         } catch (err) {
-            container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
+            container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${UI.escape(err.message)}</div></div>`;
         }
     },
 
@@ -121,7 +121,7 @@ const ProfessionalsPage = {
             <form id="form-prof" class="form-grid">
                 <div class="form-group">
                     <label>Nombre Completo *</label>
-                    <input type="text" name="full_name" value="${prof.full_name}" required>
+                    <input type="text" name="full_name" value="${UI.escape(prof.full_name)}" required>
                 </div>
                 <div class="form-group">
                     <label>Matrícula *</label>
@@ -140,11 +140,11 @@ const ProfessionalsPage = {
                 </div>
                 <div class="form-group">
                     <label>Teléfono</label>
-                    <input type="text" name="phone" value="${prof.phone || ''}">
+                    <input type="text" name="phone" value="${UI.escape(prof.phone || '')}">
                 </div>
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" name="email" value="${prof.email || ''}">
+                    <input type="email" name="email" value="${UI.escape(prof.email || '')}">
                 </div>
                 <div class="form-group form-group-full">
                     <label>Días y horarios que atiende</label>
@@ -155,7 +155,7 @@ const ProfessionalsPage = {
                 </div>
                 <div class="form-group form-group-full">
                     <label>Notas</label>
-                    <textarea name="notes">${prof.notes || ''}</textarea>
+                    <textarea name="notes">${UI.escape(prof.notes || '')}</textarea>
                 </div>
             </form>
         `;

@@ -74,7 +74,7 @@ Router.register('settings', async (container) => {
                 <div class="empty-state">
                     <div class="empty-state-icon">⚠️</div>
                     <div class="empty-state-text">
-                        No se pudo cargar la configuración: ${e.message || 'error de red'}.<br>
+                        No se pudo cargar la configuración: ${UI.escape(e.message || 'error de red')}.<br>
                         No se muestra el formulario para no sobrescribir los datos guardados con valores vacíos.
                     </div>
                     <button class="btn btn-primary" style="margin-top:1rem;" onclick="Router.currentPage=null;Router.navigate('settings')">Reintentar</button>
@@ -102,7 +102,7 @@ Router.register('settings', async (container) => {
                         <div style="padding:.5rem 0;border-bottom:1px solid var(--slate-100);display:flex;justify-content:space-between;align-items:center;">
                             <div>
                                 <strong>${l.name}</strong>
-                                <div style="font-size:.8rem;color:var(--slate-500);">${l.address || ''}</div>
+                                <div style="font-size:.8rem;color:var(--slate-500);">${UI.escape(l.address || '')}</div>
                             </div>
                             <div style="display:flex;gap:.5rem;align-items:center;">
                                 <span class="badge badge-${l.is_active ? 'confirmed' : 'cancelled'}">${l.is_active ? 'Activa' : 'Inactiva'}</span>
@@ -488,7 +488,7 @@ window.SettingsPage = {
         const filas = tipos.map(t => `
             <div style="display:flex;justify-content:space-between;align-items:center;padding:.6rem 0;border-bottom:1px solid var(--slate-100);">
                 <div style="min-width:0;">
-                    <strong>${t.nombre}</strong>
+                    <strong>${UI.escape(t.nombre)}</strong>
                     <span class="badge badge-confirmed" style="margin-left:.4rem;">${t.duracion_minutos} min</span>
                     <div style="font-size:.8rem;color:var(--slate-500);">
                         ${t.especialidad ? `Atiende: ${t.especialidad}` : 'Cualquier profesional'}
@@ -515,7 +515,7 @@ window.SettingsPage = {
                 <div class="form-group">
                     <label>Nombre</label>
                     <input type="text" name="nombre" required placeholder="Ej: Extracción"
-                           value="${t.nombre || ''}">
+                           value="${UI.escape(t.nombre || '')}">
                 </div>
                 <div class="form-group">
                     <label>Duración (minutos)</label>

@@ -1090,12 +1090,11 @@ def create_appointment_logic(
         db.refresh(patient)
     else:
         # Paciente existente: refrescar con los datos obligatorios que tomó el
-        # bot. Teléfono y obra social se actualizan siempre (el último dato es
-        # el más vigente). Nombre/Apellido solo si están vacíos, para no pisar
-        # correcciones hechas desde el panel por recepción.
-        new_phone = requester_phone or phone
-        if new_phone:
-            patient.phone = new_phone
+        # bot. La obra social se actualiza siempre (el último dato es el más
+        # vigente). El teléfono NUNCA: es la credencial que identifica al
+        # paciente, y pisarlo le entregaba la ficha a quien supiera el DNI. Lo
+        # cambia la clínica desde el panel. Nombre/Apellido solo si están
+        # vacíos, para no pisar correcciones hechas por recepción.
         if insurance_name:
             patient.insurance_name = insurance_name
         if patient_name and not (patient.first_name or "").strip():

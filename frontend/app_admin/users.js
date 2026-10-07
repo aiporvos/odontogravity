@@ -40,7 +40,7 @@ const UsersPage = {
                 ],
             });
         } catch (err) {
-            container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
+            container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${UI.escape(err.message)}</div></div>`;
         }
     },
 

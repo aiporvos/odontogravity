@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from uuid import UUID
 from datetime import datetime, date, time
 from typing import Optional
@@ -319,6 +319,15 @@ class BotAppointmentRequest(BaseModel):
     # Lo que pidió sobre día y horario, tal como lo dijo ("a la tarde, menos
     # martes y jueves"). Se revalida al crear, no solo al ofrecer.
     preferencia_horaria: Optional[str] = None
+
+    # Lo dicta el paciente por WhatsApp y termina dibujado en el panel de
+    # recepción: un "nombre" con etiquetas HTML era código ejecutándose ahí.
+    @field_validator("patient_name", "patient_last_name", "reason", "insurance_name")
+    @classmethod
+    def _sin_etiquetas(cls, v):
+        if v is not None and ("<" in v or ">" in v):
+            raise ValueError("no puede contener < ni >")
+        return v
 
 
 class BotCancelRequest(BaseModel):

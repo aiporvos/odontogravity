@@ -47,7 +47,7 @@ Router.register('agenda', async (container) => {
                 <input type="date" id="agenda-date" value="${today}">
                 <select id="agenda-prof">
                     <option value="">Todos los profesionales</option>
-                    ${professionals.map(p => `<option value="${p.id}">${p.full_name}</option>`).join('')}
+                    ${professionals.map(p => `<option value="${p.id}">${UI.escape(p.full_name)}</option>`).join('')}
                 </select>
                 <select id="agenda-status">
                     <option value="">Todos los estados</option>
@@ -253,7 +253,7 @@ Router.register('agenda', async (container) => {
                             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem;">
                                 <div class="appt-name" style="display:flex; align-items:center; gap:.5rem;">
                                     <span>${icons[a.status] || ''}</span>
-                                    ${a.patient ? `${a.patient.last_name}, ${a.patient.first_name}` : 'Paciente'}
+                                    ${a.patient ? `${UI.escape(a.patient.last_name)}, ${UI.escape(a.patient.first_name)}` : 'Paciente'}
                                 </div>
                                 <div style="display:flex; gap:.35rem; align-items:center;">
                                     ${conflictBadge}
@@ -264,8 +264,8 @@ Router.register('agenda', async (container) => {
                             </div>
                             <div class="appt-detail" style="margin-top:.25rem;">
                                 <strong>${UI.formatTime(a.start_time)}</strong> · 
-                                ${a.professional ? a.professional.full_name : ''} · 
-                                ${a.reason || ''}
+                                ${a.professional ? UI.escape(a.professional.full_name) : ''} · 
+                                ${UI.escape(a.reason || '')}
                             </div>
                         </div>
                     `;
@@ -392,7 +392,7 @@ Router.register('agenda', async (container) => {
                         // para ocupar todo el ancho.
                         const lado = `left:calc(${columna * ancho}% + 2px);width:calc(${ancho}% - 4px);right:auto;`;
                         eventsHtml += `<div class="wk-event status-${a.status} ${esSobreturno ? 'wk-conflict' : ''}" style="top:${top}px;height:${height}px;${lado}" onclick="AgendaPage.showAppointment('${a.id}')">
-                            <strong>${UI.formatTime(a.start_time)}</strong> ${a.patient ? a.patient.last_name : ''}
+                            <strong>${UI.formatTime(a.start_time)}</strong> ${a.patient ? UI.escape(a.patient.last_name) : ''}
                             ${esSobreturno ? '<span class="wk-conflict-icon" title="Sobreturno">🔶</span>' : ''}
                             ${pri ? `<span class="wk-pri wk-pri-${pri.toLowerCase()}">${pri}</span>` : ''}
                         </div>`;
@@ -429,7 +429,7 @@ Router.register('agenda', async (container) => {
                                          onclick="AgendaPage.showAppointment('${a.id}')"
                                          style="${hasConflict ? 'border-left: 3px solid var(--danger) !important; font-weight:700;' : ''}">
                                         <span>${hasConflict ? '⚠️' : (icons[a.status] || '')}</span>
-                                        ${a.patient ? a.patient.last_name : '...'}
+                                        ${a.patient ? UI.escape(a.patient.last_name) : '...'}
                                     </div>
                                 `;
                             }).join('')}
@@ -450,7 +450,7 @@ Router.register('agenda', async (container) => {
                 return;
             }
             if (state.tokenDeCarga === token) {
-                content.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
+                content.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${UI.escape(err.message)}</div></div>`;
             }
         }
     }
@@ -862,7 +862,7 @@ const AgendaPage = {
             if (err.status === 409) {
                 const confirmar = await UI.confirm(
                     'Sobreturno',
-                    `${err.message} ¿Confirmás crear el turno igual?`
+                    `${UI.escape(err.message)} ¿Confirmás crear el turno igual?`
                 );
                 if (confirmar) return await intentar({ ...data, force: true });
             }
@@ -874,7 +874,7 @@ const AgendaPage = {
         this._modalPatients = patients;
         const listHtml = () => this._pendingAppts.map((a, i) => {
             const pat = patients.find(p => p.id === a.patient_id);
-            return `<div class="pending-appt-item"><span>🕐 ${a.start_time.replace('T',' ')} — ${pat ? pat.last_name + ', ' + pat.first_name : '?'} — ${a.reason || 'Sin motivo'}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${i})" style="color:var(--danger)">✕</button></div>`;
+            return `<div class="pending-appt-item"><span>🕐 ${a.start_time.replace('T',' ')} — ${pat ? UI.escape(pat.last_name + ', ' + pat.first_name) : '?'} — ${UI.escape(a.reason || 'Sin motivo')}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${i})" style="color:var(--danger)">✕</button></div>`;
         }).join('');
 
         UI.showModal('Nuevo Turno', `
@@ -919,7 +919,7 @@ const AgendaPage = {
                 <div class="form-group">
                     <label>Profesional *</label>
                     <select name="professional_id" required>
-                        ${professionals.map(p => `<option value="${p.id}">${p.full_name}</option>`).join('')}
+                        ${professionals.map(p => `<option value="${p.id}">${UI.escape(p.full_name)}</option>`).join('')}
                     </select>
                 </div>
                 <div class="form-group">
@@ -971,7 +971,7 @@ const AgendaPage = {
         if (listEl) {
             const pat = (this._modalPatients || []).find(p => p.id === data.patient_id);
             const quien = pat ? `${pat.last_name}, ${pat.first_name}` : '?';
-            listEl.innerHTML += `<div class="pending-appt-item"><span>🕐 ${data.start_time.replace('T',' ')} — ${quien} — ${data.reason || 'Sin motivo'}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${this._pendingAppts.length - 1})" style="color:var(--danger)">✕</button></div>`;
+            listEl.innerHTML += `<div class="pending-appt-item"><span>🕐 ${data.start_time.replace('T',' ')} — ${UI.escape(quien)} — ${UI.escape(data.reason || 'Sin motivo')}</span><button class="btn btn-sm btn-ghost" onclick="AgendaPage._removePending(${this._pendingAppts.length - 1})" style="color:var(--danger)">✕</button></div>`;
         }
         // Reset form time +30min. new Date("YYYY-MM-DDTHH:MM") sin zona se
         // interpreta como hora local, pero toISOString() la devuelve en UTC:

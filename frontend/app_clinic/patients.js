@@ -66,7 +66,7 @@ const PatientsPage = {
                 ],
             });
         } catch (err) {
-            container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${err.message}</div></div>`;
+            container.innerHTML = `<div class="empty-state"><div class="empty-state-text">Error: ${UI.escape(err.message)}</div></div>`;
         }
     },
 
@@ -207,11 +207,11 @@ const PatientsPage = {
             <form id="form-patient" class="form-grid">
                 <div class="form-group">
                     <label>Nombre *</label>
-                    <input type="text" name="first_name" value="${patient.first_name}" required>
+                    <input type="text" name="first_name" value="${UI.escape(patient.first_name)}" required>
                 </div>
                 <div class="form-group">
                     <label>Apellido *</label>
-                    <input type="text" name="last_name" value="${patient.last_name}" required>
+                    <input type="text" name="last_name" value="${UI.escape(patient.last_name)}" required>
                 </div>
 <!-- Solo nombre y apellido son obligatorios. Recepcion carga fichas
                      desde la agenda de papel, donde el DNI y el telefono casi nunca
@@ -219,39 +219,39 @@ const PatientsPage = {
                      inventado hace que el recordatorio le llegue a un tercero. -->
                 <div class="form-group">
                     <label>DNI</label>
-                    <input type="text" name="dni" value="${patient.dni && !String(patient.dni).startsWith('TMP-') ? patient.dni : ''}" ${id && patient.dni && !String(patient.dni).startsWith('TMP-') ? 'readonly' : ''} placeholder="Se completa cuando el paciente viene">
+                    <input type="text" name="dni" value="${UI.escape(patient.dni && !String(patient.dni).startsWith('TMP-') ? patient.dni : '')}" ${id && patient.dni && !String(patient.dni).startsWith('TMP-') ? 'readonly' : ''} placeholder="Se completa cuando el paciente viene">
                 </div>
                 <div class="form-group">
                     <label>Teléfono</label>
-                    <input type="text" name="phone" value="${patient.phone || ''}" placeholder="Sin teléfono no recibe recordatorios">
+                    <input type="text" name="phone" value="${UI.escape(patient.phone || '')}" placeholder="Sin teléfono no recibe recordatorios">
                 </div>
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" name="email" value="${patient.email || ''}">
+                    <input type="email" name="email" value="${UI.escape(patient.email || '')}">
                 </div>
                 <div class="form-group">
                     <label>Fecha de Nacimiento</label>
-                    <input type="date" name="date_of_birth" value="${patient.date_of_birth || ''}">
+                    <input type="date" name="date_of_birth" value="${UI.escape(patient.date_of_birth || '')}">
                 </div>
                 <div class="form-group">
                     <label>Dirección</label>
-                    <input type="text" name="address" value="${patient.address || ''}">
+                    <input type="text" name="address" value="${UI.escape(patient.address || '')}">
                 </div>
                 <div class="form-group">
                     <label>Ciudad</label>
-                    <input type="text" name="city" value="${patient.city || ''}">
+                    <input type="text" name="city" value="${UI.escape(patient.city || '')}">
                 </div>
                 <div class="form-group">
                     <label>Obra Social</label>
-                    <input type="text" name="insurance_name" value="${patient.insurance_name || ''}">
+                    <input type="text" name="insurance_name" value="${UI.escape(patient.insurance_name || '')}">
                 </div>
                 <div class="form-group">
                     <label>Nº Afiliado</label>
-                    <input type="text" name="insurance_number" value="${patient.insurance_number || ''}">
+                    <input type="text" name="insurance_number" value="${UI.escape(patient.insurance_number || '')}">
                 </div>
                 <div class="form-group form-group-full">
                     <label>Notas Médicas</label>
-                    <textarea name="medical_notes">${patient.medical_notes || ''}</textarea>
+                    <textarea name="medical_notes">${UI.escape(patient.medical_notes || '')}</textarea>
                 </div>
             </form>
         `;

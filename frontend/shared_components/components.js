@@ -49,7 +49,7 @@ const UI = {
         const container = document.getElementById('toast-container');
         const el = document.createElement('div');
         el.className = `toast toast-${type}`;
-        el.innerHTML = `<span>${icons[type] || ''}</span><span>${message}</span>`;
+        el.innerHTML = `<span>${icons[type] || ''}</span><span>${UI.escape(message)}</span>`;
         container.appendChild(el);
         setTimeout(() => el.remove(), 4000);
     },
