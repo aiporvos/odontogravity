@@ -70,6 +70,11 @@ app = FastAPI(
     description="Sistema de gestión integral para consultorios odontológicos",
     version="1.0.0",
     lifespan=lifespan,
+    # /docs y /openapi.json eran publicos: cualquiera veia el mapa entero de la
+    # API. Solo se prenden a proposito (local o diagnostico).
+    docs_url="/docs" if os.getenv("ENABLE_API_DOCS") == "true" else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if os.getenv("ENABLE_API_DOCS") == "true" else None,
 )
 
 # ── CORS ────────────────────────────────────────────────

@@ -180,21 +180,22 @@ def _firma_valida(raw: bytes, header: str | None, secreto: str) -> bool:
 def _autenticar_webhook(raw: bytes, header: str | None):
     """Corta el request si no viene firmado por YCloud.
 
-    Si no hay secreto configurado no se puede verificar nada: se deja pasar
-    pero se avisa fuerte en el log, para que no quede abierto por olvido.
-    ENFORCE existe para poder desactivarlo desde el panel en una emergencia
-    sin tener que redesplegar.
+    Secreto y ENFORCE salen SOLO del entorno (Dokploy), nunca de app_configs:
+    desde el panel un admin (o quien le robe la sesion) podia apagar la
+    verificacion. Sin secreto no se puede verificar nada, asi que se rechaza:
+    antes se dejaba pasar y cualquiera que conociera la URL se hacia pasar por
+    cualquier paciente.
     """
-    secreto = (get_config("YCLOUD_WEBHOOK_SECRET") or "").strip()
+    secreto = os.getenv("YCLOUD_WEBHOOK_SECRET", "").strip()
     if not secreto:
-        logger.warning(
-            "🔓 YCLOUD_WEBHOOK_SECRET sin configurar: el webhook acepta cualquier "
-            "origen. Cargalo en Configuración → Integraciones y en el panel de YCloud."
+        logger.error(
+            "🔒 Webhook rechazado: YCLOUD_WEBHOOK_SECRET sin configurar. Cargalo "
+            "en el Environment de Dokploy y en el panel de YCloud."
         )
-        return
+        raise HTTPException(503, "Webhook not configured")
     valida = _firma_valida(raw, header, secreto)
 
-    if (get_config("YCLOUD_WEBHOOK_ENFORCE", "true") or "true").strip().lower() == "false":
+    if os.getenv("YCLOUD_WEBHOOK_ENFORCE", "true").strip().lower() == "false":
         # Modo ensayo: no rechaza nada, pero deja dicho en el log si la firma
         # HABRIA pasado. Sirve para activar la verificacion sin arriesgarse a
         # dejar el bot mudo: se despliega asi, se manda un WhatsApp de prueba,

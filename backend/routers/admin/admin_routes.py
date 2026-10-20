@@ -255,13 +255,39 @@ def delete_insurance(ins_id: UUID, db: Session = Depends(get_db)):
     return {"detail": "Obra social eliminada"}
 
 # ── System Config ───────────────────────────────────────
+# Las claves de API se devolvian completas a cualquier admin: con una sesion
+# robada (o con admin123, que estuvo publica) se llevaban las de OpenAI,
+# OpenRouter, YCloud y Telegram. Ahora salen enmascaradas, y si el panel
+# devuelve la mascara al guardar se conserva el valor que ya estaba.
+MASCARA = "••••"
+
+
+def _es_secreto(key: str) -> bool:
+    return key.endswith(("_API_KEY", "_TOKEN", "_SECRET"))
+
+
+def _enmascarar(c: AppConfig) -> dict:
+    valor = c.value or ""
+    if _es_secreto(c.key) and valor:
+        valor = MASCARA + valor[-4:]
+    return {"key": c.key, "value": valor, "description": c.description}
+
+
+def _es_mascara(key: str, value: str | None) -> bool:
+    return _es_secreto(key) and (value or "").startswith(MASCARA)
+
+
 @router.get("/configs", response_model=list[ConfigRead])
 def list_configs(db: Session = Depends(get_db)):
-    return db.query(AppConfig).all()
+    return [_enmascarar(c) for c in db.query(AppConfig).all()]
 
 @router.post("/configs", response_model=ConfigRead, status_code=201)
 def set_config(data: ConfigCreate, db: Session = Depends(get_db)):
     config = db.query(AppConfig).filter(AppConfig.key == data.key).first()
+    if _es_mascara(data.key, data.value):
+        if not config:
+            raise HTTPException(400, "Valor inválido")
+        return _enmascarar(config)
     if config:
         config.value = data.value
         if data.description:
@@ -271,7 +297,7 @@ def set_config(data: ConfigCreate, db: Session = Depends(get_db)):
         db.add(config)
     db.commit()
     db.refresh(config)
-    return config
+    return _enmascarar(config)
 
 
 @router.post("/configs/bulk", response_model=list[ConfigRead])
@@ -298,6 +324,11 @@ def set_configs_bulk(data: dict[str, str] = Body(...), db: Session = Depends(get
         if isinstance(value, str):
             value = value.strip()
         config = existentes.get(key)
+        if _es_mascara(key, value):
+            # El panel devolvio la mascara: el admin no toco ese campo.
+            if config:
+                resultado.append(config)
+            continue
         if config:
             config.value = value
         else:
@@ -308,7 +339,7 @@ def set_configs_bulk(data: dict[str, str] = Body(...), db: Session = Depends(get
     db.commit()
     for c in resultado:
         db.refresh(c)
-    return resultado
+    return [_enmascarar(c) for c in resultado]
 
 
 # ── Test: Disparar recordatorios manualmente ────────────
