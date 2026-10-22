@@ -246,3 +246,37 @@ def test_slot_conflict_ignora_el_propio_turno_al_reprogramar(db, clinica,
     del_dia = [a]
     assert slot_conflict(del_dia, cuando, 30, 1, [silvestro.id]) is not None
     assert slot_conflict(del_dia, cuando, 30, 1, [silvestro.id], exclude_id=a.id) is None
+
+
+def test_reprogramar_sin_dni_usa_el_telefono(db, clinica, silvestro, paciente):
+    """Simulación 22/10: el DNI era obligatorio al reprogramar y el bot no lo pide,
+    así que ningún paciente podía mover su turno por WhatsApp (422 siempre)."""
+    from datetime import timedelta
+    from backend.routers.bot_routes import bot_reschedule_appointment
+    from backend.schemas.schemas import BotRescheduleRequest
+
+    cuando = proximo_dia_habil()
+    t = turno(db, paciente, silvestro, cuando)
+    nuevo = cuando + timedelta(hours=1)
+    bot_reschedule_appointment(BotRescheduleRequest(
+        appointment_id=t.id, new_start_time=nuevo, requester_phone=paciente.phone,
+    ), db=db)
+    db.refresh(t)
+    assert t.start_time == nuevo
+
+
+def test_reprogramar_sin_dni_no_mueve_turnos_ajenos(db, clinica, silvestro, paciente, otro_paciente):
+    from datetime import timedelta
+    from fastapi import HTTPException
+    from backend.routers.bot_routes import bot_reschedule_appointment
+    from backend.schemas.schemas import BotRescheduleRequest
+
+    cuando = proximo_dia_habil()
+    t = turno(db, paciente, silvestro, cuando)
+    with pytest.raises(HTTPException):
+        bot_reschedule_appointment(BotRescheduleRequest(
+            appointment_id=t.id, new_start_time=cuando + timedelta(hours=1),
+            requester_phone=otro_paciente.phone,
+        ), db=db)
+    db.refresh(t)
+    assert t.start_time == cuando

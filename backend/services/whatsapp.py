@@ -94,7 +94,7 @@ async def send_whatsapp_message(number: str, text: str) -> bool:
                 try:
                     logger.info(f"📤 Fallback Evolution: Sending message to {number} via {url}")
                     r = await client.post(url, json=payload, headers=headers)
-                    logger.info(f"📥 Fallback Evolution Response: {r.status_code} - {r.text}")
+                    logger.info(f"📥 Fallback Evolution Response: {r.status_code}")
                     r.raise_for_status()
                 except Exception as e:
                     logger.error(f"❌ Fallback Evolution error: {e}")
@@ -135,7 +135,7 @@ async def send_whatsapp_message(number: str, text: str) -> bool:
         try:
             logger.info(f"📤 Sending WhatsApp message via YCloud to {to_phone} from {from_phone_norm}")
             r = await client.post(url, json=payload, headers=headers)
-            logger.info(f"📥 YCloud API response: {r.status_code} - {r.text}")
+            logger.info(f"📥 YCloud API response: {r.status_code}")
             r.raise_for_status()
             return True
         except Exception as e:

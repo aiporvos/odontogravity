@@ -41,7 +41,7 @@ def dentro_de_la_ventana(db: Session, telefono: str) -> bool:
         db.query(ChatMessage.created_at)
         .join(ChatSession, ChatMessage.session_id == ChatSession.id)
         .filter(
-            ChatSession.platform_user_id.like(f"%{digitos[-8:]}%"),
+            ChatSession.platform_user_id.like(f"%{digitos[-10:]}%"),
             ChatMessage.role == MessageRole.user,
         )
         .order_by(ChatMessage.created_at.desc())
@@ -121,7 +121,8 @@ async def check_reminders():
                 patient = appt.patient
                 # Appointments stored in Argentina time, display as-is
                 time_str = appt.start_time.strftime("%d/%m/%Y a las %H:%M")
-                cancel_link = f"{public_url}/api/public/cancel/{appt.id}"
+                from backend.services.urls import firma_cancelacion
+                cancel_link = f"{public_url}/api/public/cancel/{appt.id}?t={firma_cancelacion(appt.id)}"
 
                 msg = (
                     f"Hola {patient.first_name}, te recordamos tu turno en Silprodent "

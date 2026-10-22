@@ -528,6 +528,15 @@ def cancelar_turno(dni: str = "", appointment_id: str = "") -> str:
 
 def reprogramar_turno(appointment_id: str, new_datetime: str, dni: str = "") -> str:
     """Reprograma un turno existente a una nueva fecha."""
+    import uuid as _uuid
+    try:
+        _uuid.UUID(str(appointment_id).strip())
+    except ValueError:
+        # El modelo pasaba la fecha del turno ("29/10/2026 a las 19:00") y el
+        # backend contestaba con un error de validacion que no entendia.
+        return ("❌ appointment_id tiene que ser el id del turno, no su fecha. "
+                "Llamá a consultar_mis_turnos, tomá el id del turno que quiere "
+                "mover y volvé a llamar a reprogramar_turno con ese id.")
     payload = {
         "dni": dni or None,
         "appointment_id": appointment_id,
@@ -1023,6 +1032,30 @@ def _paciente_eligio_particular(texto: str = "") -> bool:
     return any(f in t for f in _ELIGIO_PARTICULAR)
 
 
+def _cobertura_dicha_por_el_paciente(valor: str) -> bool:
+    """Si la cobertura que registra el modelo salió de lo que dijo el paciente.
+
+    Alcanza con que la haya escrito (completa o sus primeras letras: "jerarq"
+    para Jerárquicos Salud) o tocado el botón. Sin nada dicho (Telegram, primer
+    mensaje) no hay con qué comparar y se deja pasar, como con el motivo.
+    """
+    dichos = [d for d in (list(_dichos_por_el_paciente.get() or []) + [_ultimo_mensaje.get() or ""]) if d]
+    if not dichos:
+        return True
+    v = _sin_acentos_txt(valor).strip()
+    if v == "particular":
+        return any(_paciente_eligio_particular(d) for d in dichos)
+    for d in dichos:
+        t = _sin_acentos_txt(d).strip()
+        if v and v in t:
+            return True
+        if len(t) >= 3 and t in v:     # escribió el comienzo del nombre
+            return True
+        if any(len(p) >= 4 and p in v.split() for p in t.split()):
+            return True
+    return False
+
+
 def _cobertura_registrada() -> str:
     return ((_estado_conversacion.get() or {}).get("obra_social") or "").strip()
 
@@ -1406,6 +1439,15 @@ def recordar_dato(campo: str, valor: str) -> str:
                 f"De eso dependen la duración del turno y qué profesional lo atiende."
             )
         valor = normalizado
+
+    # La cobertura tampoco la decide el modelo. Simulacion 22/10: la paciente
+    # nunca dijo su obra social y el bot registro "Particular" por su cuenta
+    # ("ya tengo que sos particular"); el turno quedo sin su cobertura.
+    if campo == "obra_social" and not _cobertura_dicha_por_el_paciente(valor):
+        return (
+            f"❌ El paciente no dijo que su cobertura sea '{valor.strip()}'. No la "
+            f"supongas: preguntásela con `preguntar_cobertura()`."
+        )
 
     estado = dict(_estado_conversacion.get() or {})
     estado[campo] = valor.strip()

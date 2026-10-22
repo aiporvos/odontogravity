@@ -13,12 +13,45 @@ from backend.services.reminders_loop import notify_admins
 router = APIRouter(prefix="/api/public", tags=["Public"])
 logger = logging.getLogger(__name__)
 
+# Los links que ya se mandaron no tienen firma. Siguen valiendo para los turnos
+# creados hasta esta fecha (la del deploy de la firma); los nuevos, solo firmados.
+import os  # noqa: E402
+from datetime import datetime  # noqa: E402
+LINKS_SIN_FIRMA_HASTA = datetime.fromisoformat(os.getenv("LINKS_SIN_FIRMA_HASTA", "2026-10-24T00:00"))
+
+_LINK_INVALIDO = ("<h1>Link no válido</h1><p>Este link de cancelación no es válido. "
+                  "Si querés cancelar tu turno, escribinos por WhatsApp.</p>")
+_TURNO_PASADO = ("<h1>Turno pasado</h1><p>Este turno ya pasó. Para cualquier cambio "
+                 "escribinos por WhatsApp.</p>")
+
+
+async def _avisar_a_recepcion(mensaje: str):
+    db = SessionLocal()
+    try:
+        await notify_admins(db, mensaje)
+    finally:
+        db.close()
+
+
+def _link_rechazado(appt, t: str | None) -> str | None:
+    """El HTML de rechazo, o None si el link sirve para ese turno."""
+    from backend.services.urls import firma_valida
+    from backend.services.appointment_service import get_clinic_now
+    if not firma_valida(appt.id, t) and not (appt.created_at and appt.created_at < LINKS_SIN_FIRMA_HASTA):
+        return _LINK_INVALIDO
+    if appt.start_time <= get_clinic_now():
+        return _TURNO_PASADO
+    return None
+
 @router.get("/cancel/{appointment_id}", response_class=HTMLResponse)
-async def cancel_appointment_page(appointment_id: UUID, db: Session = Depends(get_db)):
+async def cancel_appointment_page(appointment_id: UUID, t: str | None = None,
+                                  db: Session = Depends(get_db)):
     appt = db.query(Appointment).filter(Appointment.id == appointment_id, Appointment.is_deleted == False).first()
     if not appt:
         return "<h1>Error</h1><p>Turno no encontrado o ya fue eliminado.</p>"
-        
+    if rechazo := _link_rechazado(appt, t):
+        return rechazo
+
     if appt.status == AppointmentStatus.cancelled:
         return "<h1>Turno Cancelado</h1><p>Este turno ya había sido cancelado anteriormente.</p>"
 
@@ -49,7 +82,7 @@ async def cancel_appointment_page(appointment_id: UUID, db: Session = Depends(ge
                 <h2>Cancelar Turno</h2>
                 <p>Hola <b>{safe_first_name}</b>,</p>
                 <p>¿Estás seguro que querés cancelar tu turno del <b>{time_str}</b> en <b>{safe_location}</b>?</p>
-                <form method="POST" action="/api/public/cancel/{appointment_id}/confirm">
+                <form method="POST" action="/api/public/cancel/{appointment_id}/confirm?t={escape(t or '')}">
                     <button type="submit" class="btn">Sí, cancelar turno</button>
                 </form>
             </div>
@@ -59,11 +92,14 @@ async def cancel_appointment_page(appointment_id: UUID, db: Session = Depends(ge
     return html_content
 
 @router.post("/cancel/{appointment_id}/confirm", response_class=HTMLResponse)
-async def confirm_cancel_appointment(appointment_id: UUID, db: Session = Depends(get_db)):
+async def confirm_cancel_appointment(appointment_id: UUID, t: str | None = None,
+                                     db: Session = Depends(get_db)):
     appt = db.query(Appointment).filter(Appointment.id == appointment_id, Appointment.is_deleted == False).first()
     if not appt:
         return "<h1>Error</h1><p>Turno no encontrado.</p>"
-        
+    if rechazo := _link_rechazado(appt, t):
+        return rechazo
+
     if appt.status == AppointmentStatus.cancelled:
         return "<h1>Turno Cancelado</h1><p>El turno ya estaba cancelado.</p>"
 
@@ -76,9 +112,10 @@ async def confirm_cancel_appointment(appointment_id: UUID, db: Session = Depends
     time_str = local_time.strftime("%d/%m/%Y a las %H:%M")
     admin_msg = f"⚠️ *TURNO CANCELADO*\nEl paciente {patient.first_name} {patient.last_name} canceló su turno para el {time_str} en {appt.location}."
     
-    # This is async
+    # La sesion del aviso se cierra al terminar. Antes quedaba abierta: cada
+    # cancelacion por link se llevaba una conexion del pool para siempre.
     import asyncio
-    asyncio.create_task(notify_admins(SessionLocal(), admin_msg))
+    asyncio.create_task(_avisar_a_recepcion(admin_msg))
 
     html_content = """
     <html>

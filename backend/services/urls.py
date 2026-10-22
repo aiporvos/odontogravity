@@ -67,5 +67,22 @@ def url_publica(db: Session) -> str:
     return valor
 
 
+def firma_cancelacion(appointment_id) -> str:
+    """Firma del link de cancelacion: solo la puede generar este servidor.
+
+    Antes alcanzaba con el id del turno para verlo y cancelarlo, y el link no
+    vencia nunca: reenviado o copiado, servia para siempre.
+    """
+    import hashlib
+    import hmac
+    clave = (os.getenv("SECRET_KEY") or "").encode()
+    return hmac.new(clave, f"cancelar:{appointment_id}".encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def firma_valida(appointment_id, firma: str | None) -> bool:
+    import hmac
+    return bool(firma) and hmac.compare_digest(firma, firma_cancelacion(appointment_id))
+
+
 def link_de_cancelacion(db: Session, appointment_id) -> str:
-    return f"{url_publica(db)}/api/public/cancel/{appointment_id}"
+    return f"{url_publica(db)}/api/public/cancel/{appointment_id}?t={firma_cancelacion(appointment_id)}"

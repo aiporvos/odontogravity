@@ -1,19 +1,23 @@
-fastapi>=0.100.0
-uvicorn>=0.23.0
-sqlalchemy>=2.0.0,<2.1  # 2.1 cambia el driver por defecto a psycopg 3 y no arranca
-alembic>=1.11.0
-psycopg2-binary>=2.9.7
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
+# Versiones fijas (22/10/2026): las que instala hoy la imagen y pasan la suite.
+# Con rangos abiertos cada build podia traer otra version (asi entro SQLAlchemy 2.1
+# y el backend no arrancaba). Para actualizar: cambiar aca, correr tests, deployar.
+
+fastapi==0.142.2
+uvicorn==0.54.0
+sqlalchemy==2.0.54  # 2.1 cambia el driver por defecto a psycopg 3 y no arranca
+alembic==1.20.0
+psycopg2-binary==2.9.13
+PyJWT==2.15.1
+passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
-python-multipart>=0.0.6
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
+python-multipart==0.0.32
+pydantic==2.13.5
+pydantic-settings==2.15.0
 # LangChain eliminado — se usa OpenAI function calling nativo (openai>=1.12.0)
-aiogram>=3.3.0
-python-dotenv>=1.0.0
-httpx>=0.25.0
-aiohttp>=3.9.0
-openai>=1.12.0
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
+aiogram==3.31.0
+python-dotenv==1.2.4
+httpx==0.28.1
+aiohttp==3.14.4
+openai==3.26.0
+pytest==9.1.1
+pytest-asyncio==1.4.0

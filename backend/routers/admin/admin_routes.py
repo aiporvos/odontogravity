@@ -375,7 +375,8 @@ async def trigger_reminders_now(hours_override: float = 24, db: Session = Depend
     for appt in appointments:
         patient = appt.patient
         time_str = appt.start_time.strftime("%d/%m/%Y a las %H:%M")
-        cancel_link = f"{public_url}/api/public/cancel/{appt.id}"
+        from backend.services.urls import firma_cancelacion
+        cancel_link = f"{public_url}/api/public/cancel/{appt.id}?t={firma_cancelacion(appt.id)}"
         msg = (
             f"[TEST RECORDATORIO] Hola {patient.first_name}, te recordamos tu turno "
             f"en Silprodent el {time_str} en nuestra sede de {appt.location}.\n\n"

@@ -100,3 +100,27 @@ def test_indicar_llamar_no_crea_derivacion():
     assert r.startswith("✅")
     assert "2604" in r or "llamar" in r.lower()
     assert "anotada" not in r.lower() or "PROHIBIDO" in r
+
+
+# ── Simulación con IA real, 22/10: despedidas con fórmulas de cortesía ──────
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("texto", [
+    "Gracias, quedo atento. ¡Nos vemos!", "Gracias! Ahí estaré. Saludos!",
+    "Perfecto, muchas gracias. Nos vemos el lunes. ¡Saludos!", "Nos vemos!",
+    "listo, gracias, ahi estaremos",
+])
+def test_despedidas_son_cierre(texto):
+    from backend.routers.evolution_router import es_solo_un_cierre
+    assert es_solo_un_cierre(texto)
+
+
+@_pytest.mark.parametrize("texto", [
+    "Hola, buenas tardes", "Gracias, quiero otro turno", "Gracias, ¿me pasás el alias?",
+    "nos vemos el lunes, ¿a qué hora era?",
+])
+def test_saludos_o_pedidos_no_son_cierre(texto):
+    from backend.routers.evolution_router import es_solo_un_cierre
+    assert not es_solo_un_cierre(texto)

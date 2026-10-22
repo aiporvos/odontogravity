@@ -81,9 +81,11 @@ def test_avisa_fuerte_si_queda_en_localhost(db, caplog):
 def test_el_link_de_cancelacion_se_arma_completo(db):
     db.add(AppConfig(key="PUBLIC_APP_URL", value="https://odobot.cluna.ar"))
     db.commit()
+    from backend.services.urls import firma_cancelacion
     link = link_de_cancelacion(db, "2c8433df-e092-4094-aba0-8a8c3a591cf4")
     assert link == (
         "https://odobot.cluna.ar/api/public/cancel/2c8433df-e092-4094-aba0-8a8c3a591cf4"
+        f"?t={firma_cancelacion('2c8433df-e092-4094-aba0-8a8c3a591cf4')}"
     )
 
 
@@ -129,3 +131,69 @@ def test_sin_sedes_cargadas_no_rompe(db):
     db.query(ClinicLocation).delete()
     db.commit()
     assert get_sedes_texto()
+
+
+# ── Link firmado y con vencimiento (22/10) ──────────────────────────────────
+
+def _cliente_publico():
+    from fastapi.testclient import TestClient
+    from backend.main import app
+    return TestClient(app)
+
+
+def _turno_nuevo(db, paciente, profesional, cuando):
+    from conftest import turno
+    from datetime import datetime
+    t = turno(db, paciente, profesional, cuando)
+    t.created_at = datetime(2026, 11, 1)        # posterior a LINKS_SIN_FIRMA_HASTA
+    db.commit()
+    return t
+
+
+def test_el_link_nuevo_lleva_firma(db):
+    from backend.services.urls import link_de_cancelacion, firma_cancelacion
+    import uuid
+    i = uuid.uuid4()
+    assert link_de_cancelacion(db, i).endswith(f"/api/public/cancel/{i}?t={firma_cancelacion(i)}")
+
+
+def test_sin_firma_un_turno_nuevo_no_se_cancela(db, clinica, silvestro, paciente):
+    from conftest import proximo_dia_habil
+    from backend.models.appointment import AppointmentStatus
+    t = _turno_nuevo(db, paciente, silvestro, proximo_dia_habil())
+    c = _cliente_publico()
+    assert "no es válido" in c.get(f"/api/public/cancel/{t.id}").text
+    assert "no es válido" in c.post(f"/api/public/cancel/{t.id}/confirm?t=falsa").text
+    db.refresh(t)
+    assert t.status != AppointmentStatus.cancelled
+
+
+def test_con_firma_se_cancela(db, clinica, silvestro, paciente):
+    from conftest import proximo_dia_habil
+    from backend.models.appointment import AppointmentStatus
+    from backend.services.urls import firma_cancelacion
+    t = _turno_nuevo(db, paciente, silvestro, proximo_dia_habil())
+    c = _cliente_publico()
+    f = firma_cancelacion(t.id)
+    pagina = c.get(f"/api/public/cancel/{t.id}?t={f}").text
+    assert "Cancelar Turno" in pagina and f"confirm?t={f}" in pagina
+    c.post(f"/api/public/cancel/{t.id}/confirm?t={f}")
+    db.refresh(t)
+    assert t.status == AppointmentStatus.cancelled
+
+
+def test_los_links_viejos_siguen_andando(db, clinica, silvestro, paciente):
+    """Turnos creados antes de la firma: el link que ya recibieron sigue sirviendo."""
+    from conftest import proximo_dia_habil, turno
+    from datetime import datetime
+    t = turno(db, paciente, silvestro, proximo_dia_habil())
+    t.created_at = datetime(2026, 10, 1)
+    db.commit()
+    assert "Cancelar Turno" in _cliente_publico().get(f"/api/public/cancel/{t.id}").text
+
+
+def test_un_turno_pasado_no_se_cancela_por_link(db, clinica, silvestro, paciente):
+    from datetime import datetime, timedelta
+    from backend.services.urls import firma_cancelacion
+    t = _turno_nuevo(db, paciente, silvestro, datetime.now() - timedelta(days=1))
+    assert "ya pasó" in _cliente_publico().get(f"/api/public/cancel/{t.id}?t={firma_cancelacion(t.id)}").text

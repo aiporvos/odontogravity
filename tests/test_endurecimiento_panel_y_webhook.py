@@ -82,3 +82,15 @@ def test_docs_apagados_por_defecto():
     from backend.main import app
     assert app.docs_url is None
     assert app.openapi_url is None
+
+
+def test_cabeceras_de_seguridad(db):
+    from fastapi.testclient import TestClient
+    from backend.main import app
+    with TestClient(app) as c:
+        h = c.get("/api/health").headers
+    assert "connect-src 'self'" in h["content-security-policy"]
+    assert "frame-ancestors 'none'" in h["content-security-policy"]
+    assert h["x-frame-options"] == "DENY"
+    assert h["x-content-type-options"] == "nosniff"
+    assert "max-age" in h["strict-transport-security"]

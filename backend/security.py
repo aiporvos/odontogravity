@@ -6,7 +6,10 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+# PyJWT en lugar de python-jose: jose esta sin mantenimiento y tiene
+# vulnerabilidades sin version corregida (pip-audit 22/10/2026).
+import jwt
+from jwt import PyJWTError as JWTError
 
 # Hack for passlib compatibility with bcrypt 4.0.0+
 # https://github.com/pyca/bcrypt/issues/684
@@ -46,6 +49,18 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
+def huella_password(user) -> str:
+    """Un pedazo del hash de la contraseña, para atar el token a ella.
+
+    Sin esto, cambiar la contraseña no cerraba nada: quien tuviera un token
+    seguia entrando las 8 h que dura. Ahora el token lleva esta huella y deja
+    de valer apenas cambia la contraseña. No revela nada: es un sha256 del
+    hash bcrypt, no de la contraseña.
+    """
+    import hashlib
+    return hashlib.sha256((user.hashed_password or "").encode()).hexdigest()[:16]
+
+
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
@@ -73,6 +88,10 @@ async def get_current_user(
 
     user = db.query(User).filter(User.id == UUID(user_id), User.is_deleted == False).first()
     if user is None:
+        raise credentials_exception
+    # Token de antes de un cambio de contraseña (o de antes de que existiera la
+    # huella): no vale.
+    if payload.get("pwh") != huella_password(user):
         raise credentials_exception
     return user
 

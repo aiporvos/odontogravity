@@ -339,7 +339,10 @@ class BotCancelRequest(BaseModel):
 
 
 class BotRescheduleRequest(BaseModel):
-    dni: str
+    # Opcional, como al cancelar. Era obligatorio y el bot no pide DNI (lo
+    # identifica el WhatsApp), asi que reprogramar devolvia 422 SIEMPRE: en la
+    # simulacion del 22/10 ningun paciente pudo mover su turno por el bot.
+    dni: Optional[str] = None
     appointment_id: UUID
     new_start_time: datetime
     requester_phone: Optional[str] = None

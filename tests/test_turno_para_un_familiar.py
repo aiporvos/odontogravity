@@ -137,3 +137,24 @@ def test_con_varios_en_el_telefono_y_sin_nombre_si_pregunta(
     with pytest.raises(HTTPException) as e:
         _pedir(db, cuando=cuando + timedelta(hours=1))
     assert "¿Para quién es?" in e.value.detail
+
+
+# ── Simulación con IA real, 22/10 ───────────────────────────────────────────
+
+def test_el_familiar_sin_apellido_pide_el_apellido(db, clinica, silvestro, titular):
+    """«Tomás» solo recibía «este número ya tiene una ficha» y el bot mandaba a llamar."""
+    with pytest.raises(HTTPException) as e:
+        _pedir(db, nombre="Tomás")
+    assert e.value.status_code == 400
+    assert "apellido de Tomás" in e.value.detail
+
+
+@pytest.mark.parametrize("nombre, apellido", [
+    ("Tu nombre", "Tu apellido"), ("Tu esposa", "Torres"), ("Paula", "Apellido"),
+    ("PACIENTE", "Luna"),
+])
+def test_no_se_agenda_con_un_nombre_de_relleno(db, clinica, silvestro, titular, nombre, apellido):
+    with pytest.raises(HTTPException) as e:
+        _pedir(db, nombre=nombre, apellido=apellido)
+    assert e.value.status_code == 400 and "no es un nombre real" in e.value.detail
+    assert db.query(Appointment).count() == 0

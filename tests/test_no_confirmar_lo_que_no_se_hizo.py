@@ -173,3 +173,25 @@ def test_ofrecer_horarios_usa_plantilla_con_slots_reales(monkeypatch):
     assert "09:00" in texto and "11:00" in texto
     assert "jueves 17 de septiembre de 2026" in texto
     assert "¿Cuál te sirve?" in texto
+
+
+def test_si_agendo_sale_la_confirmacion_aunque_el_modelo_hable_de_otros_horarios(monkeypatch):
+    """Simulación 22/10: después de agendar, el modelo volvió a consultar y escribió
+    horarios; salió la lista otra vez y el paciente nunca supo que ya tenía turno."""
+    from bot import ai_agent
+    from bot.tools import appointment_tools as tools
+    confirmacion = "Listo 😊 Turno agendado con Dra. Elena Murad. Fecha: 2026-10-26 18:00:00."
+    guion = [
+        _Mensaje(None, [_LlamadaAHerramienta("agendar_turno")]),
+        _Mensaje("Te agendé a las 18:00. También tengo 19:00 y 20:00 si preferís."),
+    ]
+
+    def ejecutar(nombre, args):
+        tools.registrar_confirmacion_turno(confirmacion)
+        return "✅ Turno agendado con Dra. Elena Murad"
+
+    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (_Cliente(guion), "modelo-de-prueba"))
+    monkeypatch.setattr(ai_agent, "execute_tool", ejecutar)
+    monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
+    texto, _, _ = ai_agent.chat("18:00", [], "5492604046245", {"motivo": "Conducto", "obra_social": "Galeno"})
+    assert texto == confirmacion

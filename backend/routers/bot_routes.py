@@ -63,7 +63,11 @@ def _phones_match(stored: str | None, requester: str | None) -> bool:
         return True
     d_stored = "".join(filter(str.isdigit, stored))
     d_req = "".join(filter(str.isdigit, requester))
-    return bool(d_stored) and bool(d_req) and d_stored[-8:] == d_req[-8:]
+    # 10 digitos = caracteristica + numero (el numero nacional argentino). Con
+    # 8 coincidian numeros distintos con el mismo final (otra area u otro pais)
+    # y uno podia ver los turnos del otro. Datos de produccion 22/10: las fichas
+    # con telefono tienen 10, 11 o 13 digitos, todas cubiertas.
+    return len(d_stored) >= 10 and len(d_req) >= 10 and d_stored[-10:] == d_req[-10:]
 
 
 # Mensaje uniforme cuando el DNI consultado no pertenece a quien escribe.
@@ -116,7 +120,7 @@ def buscar_pacientes_por_telefono(db: Session, requester_phone: str | None) -> l
         return []
     flexibles = [
         p for p in activos
-        if p.phone and "".join(filter(str.isdigit, p.phone))[-8:] == d_req[-8:]
+        if p.phone and _phones_match(p.phone, requester_phone)
     ]
     return flexibles if len(flexibles) == 1 else []
 
@@ -402,6 +406,23 @@ def _es_la_misma_persona(ficha, nombre: str | None, apellido: str | None) -> boo
     return pedido == _nombre_normalizado(ficha.first_name, ficha.last_name)
 
 
+# Lo que el modelo escribe cuando no sabe el nombre. Simulacion 22/10: quedo
+# un turno a nombre de "Tu nombre Tu apellido" y otro de "Tu esposa".
+_NOMBRES_DE_RELLENO = {
+    "tu nombre", "tu apellido", "nombre", "apellido", "paciente", "nombre del paciente",
+    "apellido del paciente", "tu esposa", "tu esposo", "tu hijo", "tu hija", "tu mama",
+    "tu papa", "mi esposa", "mi esposo", "mi hijo", "mi hija", "desconocido", "sin nombre",
+    "n/a", "xxx", "test",
+}
+
+
+def _es_nombre_de_relleno(texto: str | None) -> bool:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", (texto or "").strip().lower())
+    t = " ".join("".join(c for c in t if not unicodedata.combining(c)).split())
+    return t in _NOMBRES_DE_RELLENO
+
+
 @router.post("/appointments", dependencies=[Depends(verify_bot_key)])
 def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(get_db)):
     # Paciente que ya existe: no hace falta que tipee nada. Si el numero de
@@ -409,6 +430,12 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
     # Con varias personas en el mismo numero (familia) hay que preguntar.
     nombre = data.patient_name
     apellido = data.patient_last_name
+    relleno = [x for x in (nombre, apellido) if _es_nombre_de_relleno(x)]
+    if relleno:
+        raise HTTPException(400, (
+            f"'{relleno[0]}' no es un nombre real. Preguntale al paciente a nombre "
+            "de quién va el turno (nombre y apellido) y volvé a agendar con eso."
+        ))
     if not (data.dni or "").strip():
         conocido, opciones = resolver_paciente(db, None, data.requester_phone)
         # El DNI de la ficha del telefono se reutiliza SOLO si el turno es para
@@ -426,6 +453,14 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
             # Turno para otra persona desde el mismo telefono: ficha propia, sin
             # heredar el DNI. Queda pendiente para que lo cargue recepcion.
             dni_normalizado = None
+        elif conocido and (nombre or "").strip():
+            # Simulacion 22/10: "Tomás" sin apellido recibia el mensaje de abajo,
+            # que no dice que falta, y el bot terminaba mandando a llamar.
+            raise HTTPException(400, (
+                f"Falta el apellido de {nombre.strip()}. Es otra persona que la "
+                "de este teléfono, así que necesita su propia ficha: preguntale "
+                "solo el apellido y volvé a agendar."
+            ))
         elif conocido:
             raise HTTPException(400, (
                 "Este número ya tiene una ficha. Si el turno es para esa misma "
@@ -623,6 +658,11 @@ def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends
                  f"Ofrecele otro al paciente."
         )
 
+    from backend.services.appointment_service import tomar_sillon
+    if conflicto := tomar_sillon(db, appt.location, data.new_start_time, duracion,
+                                 exclude_id=appt.id):
+        raise HTTPException(409, f"{conflicto} Ofrecele otro horario al paciente.")
+
     appt.start_time = data.new_start_time
     # Se mantiene confirmado: si volvia a "pending" el recordatorio dejaba de
     # dispararse, porque el loop solo notifica turnos confirmados.
@@ -703,6 +743,17 @@ def bot_resolver_motivo(data: dict = Body(...), db: Session = Depends(get_db)):
     dichos = [d for d in (data.get("dichos") or []) if d]
     if not propuesto:
         return {"ok": False, "motivo": None, "razon": "vacio"}
+
+    # "Consulta / Control": el propio prompt le enseña esa forma al modelo
+    # ("control → Consulta / Control"). Entera caia en otro tipo, se rechazaba
+    # con "el paciente no lo dijo" y el bot pedia confirmar el motivo una y
+    # otra vez (simulacion 21/10: cinco veces, y despues mando a llamar).
+    if "/" in propuesto:
+        for parte in (p.strip() for p in propuesto.split("/")):
+            if parte:
+                r = bot_resolver_motivo({"motivo": parte, "dichos": dichos}, db)
+                if r.get("ok"):
+                    return r
 
     # El nombre de un profesional NO es un motivo. Paso en produccion: el
     # paciente escribio "para silverte" —queria turno con el Dr. Silvestro— y

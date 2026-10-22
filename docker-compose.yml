@@ -15,6 +15,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-dentibot}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Medido en produccion 21/10: ~45 MB. El tope evita que un desborde se
+    # coma la memoria del VPS, que comparte con los demas clientes.
+    mem_limit: 512m
     # Sin `ports:`: Docker se saltea el firewall del host, y con el puerto
     # publicado la base de pacientes quedaba abierta a internet. El backend la
     # alcanza por la red interna.
@@ -78,6 +81,8 @@ services:
       # redesplegar, por si algun dia el secreto queda desincronizado.
       YCLOUD_WEBHOOK_ENFORCE: ${YCLOUD_WEBHOOK_ENFORCE:-true}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # Medido en produccion 21/10: ~110 MB.
+    mem_limit: 512m
     # Sin `ports:`: entra solo por Traefik (HTTPS). Publicado, el 8000 servia
     # la API en HTTP plano directo a la IP del VPS.
     networks:

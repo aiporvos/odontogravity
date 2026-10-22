@@ -94,6 +94,9 @@ def save_message(db: Session, session_id, role: MessageRole, content: str):
     db.commit()
     time.sleep(0.02) # Ensure next message has a different timestamp
 
+MAX_BYTES_AUDIO = 16 * 1024 * 1024
+
+
 async def transcribe_audio_url(url: str) -> str:
     """Transcribe audio from URL using OpenAI Whisper."""
     openai_key = get_config("OPENAI_API_KEY")
@@ -120,6 +123,12 @@ async def transcribe_audio_url(url: str) -> str:
             logger.error(f"❌ Exception downloading audio: {e}")
             return ""
         
+        # WhatsApp no manda audios de mas de 16 MB: algo mas grande no es un
+        # audio de un paciente y no se escribe a disco ni se manda a transcribir.
+        if len(audio_resp.content) > MAX_BYTES_AUDIO:
+            logger.warning("⚠️ Audio descartado: %d bytes (tope %d)", len(audio_resp.content), MAX_BYTES_AUDIO)
+            return ""
+
         file_path = f"/tmp/wa_audio_{datetime.now().timestamp()}.ogg"
         with open(file_path, "wb") as f:
             f.write(audio_resp.content)
@@ -134,7 +143,7 @@ async def transcribe_audio_url(url: str) -> str:
                 r = await client.post(trans_url, headers=openai_headers, files=trans_files, timeout=60)
                 r.raise_for_status()
                 transcribed_text = r.json()["text"]
-                logger.info(f"✅ Whisper transcription success: {transcribed_text[:100]}...")
+                logger.info(f"✅ Audio transcripto ({len(transcribed_text)} caracteres)")
                 return transcribed_text
         except Exception as e:
             logger.error(f"❌ WhatsApp transcription error: {e}")
@@ -390,7 +399,7 @@ async def ycloud_webhook(request: Request, background_tasks: BackgroundTasks):
         return {"status": "replied_unsupported_type"}
 
     if text:
-        logger.info(f"🤖 Procesando texto: {text}")
+        logger.info(f"🤖 Procesando texto ({len(text)} caracteres)")
         background_tasks.add_task(encolar_texto, remote_jid, text)
         return {"status": "processing_text"}
 
@@ -589,6 +598,21 @@ _AGRADECE = re.compile(
     re.IGNORECASE,
 )
 
+# "Perfecto, muchas gracias": varias juntas, sin nada mas, tambien cierran.
+_PALABRAS_DE_CIERRE = {
+    "gracias", "muchas", "mil", "perfecto", "perfecta", "listo", "lista", "genial", "ok",
+    "dale", "barbaro", "buenisimo", "joya", "excelente", "bueno", "buenisimo", "igualmente",
+    "de", "una", "re", "graciass", "graciasss",
+}
+
+_CORTESIA = re.compile(
+    r"\b(nos\s+vemos(\s+el\s+\w+)?|ahi\s+estar(e|emos)|alli\s+estar(e|emos)|"
+    r"quedo\s+atent[oa]|saludos?|que\s+tengas?\s+(un\s+)?(lindo|buen|excelente|hermoso)\s+"
+    r"(dia|tarde|noche|finde|fin\s+de\s+semana)|buen\s+(dia|finde)|buenas\s+(tardes|noches)|"
+    r"hasta\s+(luego|pronto|manana|el\s+\w+)|chau|un\s+abrazo|besos?|bendiciones)\b",
+    re.IGNORECASE,
+)
+
 _PIDE_ALGO_MAS = re.compile(
     r"[?¿]|\b(turno|cancel|reprogram|cambiar|precio|cuanto|alias|direccion|"
     r"donde|horario|necesito|quiero|puedo|me\s+pas|consulta)\b",
@@ -607,7 +631,12 @@ def es_solo_un_cierre(texto: str) -> bool:
         return False
     if _PIDE_ALGO_MAS.search(limpio):
         return False
-    return bool(_AGRADECE.match(limpio))
+    # Sin las despedidas tiene que quedar un agradecimiento (o nada). Simulacion
+    # 22/10: "Gracias, quedo atento. ¡Nos vemos!" despues de agendar no se
+    # reconocia como cierre y el bot volvia a ofrecer horarios.
+    resto = _CORTESIA.sub(" ", limpio)
+    resto = re.sub(r"[\s!\.,¡☺️😊🙏👍❤️]+", " ", resto).strip()
+    return not resto or bool(_AGRADECE.match(resto)) or set(resto.lower().split()) <= _PALABRAS_DE_CIERRE
 
 
 # Aviso de demora / "vamos en camino" sobre un turno que ya tiene.
@@ -1083,7 +1112,7 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             response, opciones, estado_nuevo = await loop.run_in_executor(
                 None, chat, text, history, requester_phone, estado_previo
             )
-            logger.info(f"🤖 IA respondió: {response[:50]}...")
+            logger.info(f"🤖 IA respondió ({len(response)} caracteres)")
 
             # 0) Un cierre no reabre nada. Si el paciente solo agradeció o
             # acusó recibo, se responde corto y no se consulta ninguna
@@ -1113,8 +1142,14 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             ultimas = [m["content"] for m in history if m["role"] == "assistant"][-RESPUESTAS_A_MIRAR:]
             dichos = [m["content"] for m in history if m["role"] == "user"] + [text]
             estado_nuevo = dict(estado_nuevo or {})
-            accion, rescate, botones = resolver_loop(
-                response, ultimas, opciones, estado_previo, dichos,
+            # En un hilo: el rescate puede consultar la agenda, y esa
+            # herramienta le pega por HTTP a este mismo servidor. Llamada desde
+            # el event loop lo bloqueaba: el servidor no podia atenderse a si
+            # mismo, el pedido vencia a los 30 s y el paciente recibia
+            # "Error consultando disponibilidad: timed out" mientras todos los
+            # demas pacientes y el panel quedaban congelados.
+            accion, rescate, botones = await asyncio.to_thread(
+                resolver_loop, response, ultimas, opciones, estado_previo, dichos,
             )
             pausar_despues_de_enviar = False
             if accion == "rescate":

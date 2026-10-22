@@ -184,3 +184,37 @@ def test_los_botones_se_reconocen_sin_pasar_por_el_modelo():
     assert motivo_por_boton_conducto("Consulta (30 min)") == "Consulta por conducto"
     assert motivo_por_boton_conducto("si") is None
     assert motivo_por_boton_conducto("consulta") is None, "Texto libre va por el modelo"
+
+
+# ── Simulación con IA real, 22/10: el modelo pregunta por su cuenta, mal ──────
+
+@pytest.mark.parametrize("parafraseo", [
+    "¡Buen día! 😊 Para el tratamiento de conducto, ¿venís derivado o es para una consulta de evaluación?",
+    "¿Vení derivado? ¿Es para una consulta de evaluación o ya para realizar el tratamiento de conducto?",
+])
+def test_la_pregunta_mal_armada_se_repone_con_tiempos_y_botones(monkeypatch, parafraseo):
+    from bot import ai_agent
+    from bot.tools import appointment_tools as tools
+    from backend.services.appointment_service import (
+        PREGUNTA_CONDUCTO_PACIENTE, BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO,
+    )
+    from tests.test_no_confirmar_lo_que_no_se_hizo import _Cliente, _Mensaje
+
+    monkeypatch.setattr(ai_agent, "_build_client",
+                        lambda p: (_Cliente([_Mensaje(parafraseo)]), "modelo-de-prueba"))
+    monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
+    texto, opciones, _ = ai_agent.chat("Necesito un turno para un conducto", [], "5492604046245", {})
+    assert texto == PREGUNTA_CONDUCTO_PACIENTE
+    assert opciones and opciones.get("opciones") == [BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO]
+
+
+def test_con_el_motivo_ya_resuelto_no_se_vuelve_a_preguntar(monkeypatch):
+    from bot import ai_agent
+    from tests.test_no_confirmar_lo_que_no_se_hizo import _Cliente, _Mensaje
+    texto_modelo = "Perfecto, la consulta por conducto es de 30 minutos. ¿Qué día te viene bien?"
+    monkeypatch.setattr(ai_agent, "_build_client",
+                        lambda p: (_Cliente([_Mensaje(texto_modelo)]), "modelo-de-prueba"))
+    monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
+    texto, _, _ = ai_agent.chat("vengo derivado para un conducto", [], "5492604046245",
+                                {"motivo": "Consulta por conducto"})
+    assert texto == texto_modelo

@@ -182,3 +182,17 @@ def test_alta_con_alguien_que_no_existe_nombra_a_los_reales(db, clinica, grillas
 def test_los_nombres_reales_en_una_frase(db, silvestro, murad):
     from backend.services.appointment_service import nombres_profesionales_activos
     assert nombres_profesionales_activos(db) == "Dr. Sergio Silvestro y Dra. Lucía Murad"
+
+
+# ── Simulación con IA real, 22/10 ───────────────────────────────────────────
+
+def test_si_el_pedido_no_hace_el_motivo_se_ofrece_quien_si():
+    """El genérico «no pude confirmar los horarios» tapaba la explicación útil."""
+    from bot.ai_agent import ofrecer_quien_lo_atiende
+    msg = ofrecer_quien_lo_atiende([
+        '{"available_slots": [], "message": "Dr. Martin Silvestro no hace Ortodoncia. '
+        'Eso lo atiende Dra. Elena Murad. Preguntale al paciente si quiere..."}'
+    ])
+    assert msg.startswith("Dr. Martin Silvestro no hace ortodoncia")
+    assert msg.endswith("¿Querés que te busque turno con Dra. Elena Murad?")
+    assert ofrecer_quien_lo_atiende(["sin nada que ver"]) is None

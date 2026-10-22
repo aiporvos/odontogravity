@@ -28,6 +28,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(levelname)s: %(name)s: %(message)s"
 )
+from backend.logs_privados import instalar as _tapar_numeros_en_logs  # noqa: E402
+_tapar_numeros_en_logs()
 logger = logging.getLogger(__name__)
 logger.info("🚀 Silprodent Backend Starting...")
 
@@ -112,6 +114,41 @@ async def no_cache_frontend(request, call_next):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    return response
+
+
+# ── Cabeceras de seguridad ──────────────────────────────
+# El panel tiene el token en localStorage: si algo se inyectara, connect-src
+# 'self' le impide mandarlo a otro dominio y frame-ancestors evita que lo
+# metan en un iframe ajeno. script-src lleva 'unsafe-inline' porque el panel
+# usa onclick en linea (85): sacarlo es un cambio grande del frontend.
+CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    "img-src 'self' data: blob:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+CABECERAS_SEGURIDAD = {
+    "Content-Security-Policy": CSP,
+    "Strict-Transport-Security": "max-age=31536000",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+@app.middleware("http")
+async def cabeceras_de_seguridad(request, call_next):
+    response = await call_next(request)
+    for k, v in CABECERAS_SEGURIDAD.items():
+        response.headers.setdefault(k, v)
     return response
 
 # ── Routers ─────────────────────────────────────────────

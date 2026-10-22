@@ -127,3 +127,18 @@ def test_requiere_la_key_del_bot(cliente):
                      json={"motivo": "limpieza", "dichos": []},
                      headers={"x-bot-key": "clave-que-no-es"})
     assert r.status_code == 403
+
+
+# ── "Consulta / Control": la forma que el prompt le enseña al modelo ────────
+
+def test_acepta_alternativas_con_barra_si_el_paciente_dijo_una(cliente):
+    """Simulación 21/10: el paciente dijo «revisión general», el modelo registró
+    «Consulta / Control» y se rechazaba; el bot pidió confirmar cinco veces."""
+    d = _resolver(cliente, "Consulta / Control", ["quería un control", "revisión general"])
+    assert d["ok"] is True
+    assert d["motivo"] == "Control"
+
+
+def test_la_barra_no_sirve_para_colar_un_motivo_que_no_dijo(cliente):
+    d = _resolver(cliente, "Limpieza / Extracción", ["hola", "quiero un turno"])
+    assert d["ok"] is False

@@ -50,6 +50,12 @@ def get_config(key: str, default: str = ""):
     return valor.strip() if isinstance(valor, str) else valor
 
 
+# Lo que recibe el prompt si la base no responde. Antes iban valores fijos que
+# el modelo repetia como ciertos (horario viejo, OSDE como cubierta, "San Rafael"
+# como direccion).
+SIN_DATO = "(no se pudo leer de la base: no lo afirmes; si el paciente lo pregunta, indicale llamar al consultorio)"
+
+
 def get_especialistas_texto() -> str:
     """Los profesionales y sus especialidades, tal como estan cargados en el panel.
 
@@ -92,7 +98,7 @@ def get_sedes_texto() -> str:
             ClinicLocation.is_active == True,    # noqa: E712
         ).order_by(ClinicLocation.name).all()
         if not sedes:
-            return "San Rafael"
+            return SIN_DATO
 
         partes = []
         for s in sedes:
@@ -106,7 +112,7 @@ def get_sedes_texto() -> str:
             partes.append(linea)
         return " | ".join(partes)
     except Exception:
-        return "San Rafael"
+        return SIN_DATO
     finally:
         db.close()
 
@@ -137,7 +143,7 @@ def get_horarios_texto() -> str:
         # Días hábiles sin tarde: lo más claro es listar lo que hay.
         return " · ".join(lineas)
     except Exception:
-        return "Lunes a Viernes · mañana y tarde (salvo miércoles tarde)"
+        return SIN_DATO
     finally:
         db.close()
 
@@ -178,7 +184,8 @@ def get_active_insurances() -> list[str]:
         insurances = db.query(Insurance).filter(Insurance.is_active == True).all()
         return [i.name for i in insurances]
     except Exception:
-        return ["PAMI", "OSDE", "Sancor Salud", "Medifé", "Swiss Medical"]
+        # Una lista fija mentia: OSDE no se atiende. Sin base, ninguna.
+        return []
     finally:
         db.close()
 
@@ -1123,6 +1130,38 @@ El objetivo es **resolver la necesidad del paciente de forma natural, segura y c
 """
 
 
+_NOMBRE_PROF = r"(?:Dra?\.\s*)?[^.\n\"]+?"
+_NO_HACE = re.compile(rf"(?P<pedido>{_NOMBRE_PROF}) no hace (?P<motivo>[^.\n]+)\. "
+                      rf"Eso lo atiende (?P<quien>{_NOMBRE_PROF}(?: o {_NOMBRE_PROF})*)\.(?:\s|$)")
+
+
+def ofrecer_quien_lo_atiende(resultados_tools: list[str]) -> str | None:
+    """Si una herramienta dijo "X no hace Y; lo atiende Z", eso es lo que hay que decir.
+
+    Simulacion 22/10: pidio un control de ortodoncia con Silvestro. El backend
+    contesto bien ("Silvestro no hace Ortodoncia. Eso lo atiende Murad"), el
+    modelo invento horarios de Murad, el filtro los bloqueo y salio el generico
+    "no pude confirmar los horarios": el paciente nunca supo por que, y termino
+    derivado a llamar.
+    """
+    for r in reversed(resultados_tools or []):
+        if m := _NO_HACE.search(r or ""):
+            quien = m.group("quien").strip()
+            return (f"{m.group('pedido').strip()} no hace {m.group('motivo').strip().lower()}; "
+                    f"eso lo atiende {quien}. ¿Querés que te busque turno con {quien}?")
+    return None
+
+
+def _pregunta_conducto_sin_resolver(texto: str) -> bool:
+    """El paciente habló de conducto y todavía no se sabe si es consulta o tratamiento."""
+    from bot.tools import appointment_tools as t
+    if ((t._estado_conversacion.get() or {}).get("motivo") or "").strip():
+        return False
+    dichos = " ".join(list(t._dichos_por_el_paciente.get() or []) + [t._ultimo_mensaje.get() or ""])
+    junto = t._sin_acentos_txt(dichos)
+    return any(p in junto for p in ("conducto", "endodoncia", "nervio"))
+
+
 def saludo_segun_hora(hora: int) -> tuple[str, str]:
     """Devuelve (saludo, despedida) correctos para esa hora.
 
@@ -1816,7 +1855,7 @@ def chat(user_message: str, history: list[dict] | None = None,
         if estado_hoy.get("motivo") and estado_hoy.get("obra_social"):
             logger.error(
                 "AI_AGENT -> El paciente aceptó buscar/agendar y el modelo no "
-                "ofreció horarios. Consulta el código. Mensaje: %s", texto[:200],
+                "ofreció horarios. Consulta el código. Mensaje: %d caracteres (texto omitido)", len(texto),
             )
             reiniciar_disponibilidad()
             return _consultar_yo_mismo() or _SIN_HORARIOS
@@ -1827,7 +1866,7 @@ def chat(user_message: str, history: list[dict] | None = None,
             return None
         logger.error(
             "AI_AGENT -> El paciente aceptó pero falta un dato y el modelo no lo "
-            "pidió. Pregunta el código. Mensaje: %s", texto[:200],
+            "pidió. Pregunta el código. Mensaje: %d caracteres (texto omitido)", len(texto),
         )
         texto_p, botones = pregunta
         if botones:
@@ -1917,19 +1956,34 @@ def chat(user_message: str, history: list[dict] | None = None,
                 if suaviza_inexistente(texto, resultados_tools):
                     logger.error(
                         "AI_AGENT -> Suavizó a 'no disponible' un profesional que NO "
-                        "existe. Mensaje: %s", texto[:200],
+                        "existe. Mensaje: %d caracteres (texto omitido)", len(texto),
                     )
                     texto = mensaje_inexistente_desde_tool(resultados_tools) or texto
                 # La pregunta de conducto tiene que llevar los dos tiempos: el
                 # paciente elige entre 30' y 1 hora, no entre dos frases vagas.
-                if any("consulta de evaluación (30 minutos)" in (r or "") for r in resultados_tools):
-                    if "conducto" in texto.lower() and "?" in texto and "30" not in texto:
-                        from backend.services.appointment_service import PREGUNTA_CONDUCTO_PACIENTE
-                        logger.warning(
-                            "AI_AGENT -> Parafraseó la pregunta de conducto sin los "
-                            "tiempos; se repone textual. Mensaje: %s", texto[:200],
-                        )
-                        return PREGUNTA_CONDUCTO_PACIENTE
+                #
+                # Tambien cuando el modelo pregunta por su cuenta, sin que una
+                # herramienta se lo pida. Simulacion 22/10: "¿venís derivado o es
+                # para una consulta de evaluación?" pone derivado y evaluacion
+                # como alternativas y ni nombra el tratamiento ni los tiempos.
+                pidio_la_tool = any("consulta de evaluación (30 minutos)" in (r or "")
+                                    for r in resultados_tools)
+                if (pidio_la_tool or _pregunta_conducto_sin_resolver(texto)) and (
+                    "?" in texto and "30" not in texto
+                    and any(p in texto.lower() for p in ("conducto", "derivad", "evaluaci"))
+                ):
+                    from backend.services.appointment_service import (
+                        PREGUNTA_CONDUCTO_PACIENTE, BOTON_CONSULTA_CONDUCTO,
+                        BOTON_TRATAMIENTO_CONDUCTO,
+                    )
+                    from bot.tools.appointment_tools import set_opciones_ofrecidas
+                    logger.warning(
+                        "AI_AGENT -> Parafraseó la pregunta de conducto sin los "
+                        "tiempos; se repone textual. Mensaje: %d caracteres (texto omitido)", len(texto),
+                    )
+                    set_opciones_ofrecidas([BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO],
+                                           siempre=True, tipo="botones")
+                    return PREGUNTA_CONDUCTO_PACIENTE
                 if inexistente:
                     # Sigue nombrando a "Sosa" como si existiera, o no aclaró
                     # que no existe: lo dice el código.
@@ -1938,8 +1992,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                     nombra_reales = any(a in texto.lower() for a in reales)
                     if not (aclaro and nombra_reales):
                         logger.error(
-                            "AI_AGENT -> Siguió como si '%s' existiera. Mensaje: %s",
-                            inexistente, texto[:200],
+                            "AI_AGENT -> Siguió como si '%s' existiera. Mensaje: %d caracteres (texto omitido)",
+                            inexistente, len(texto),
                         )
                         return mensaje_profesional_inexistente(inexistente)
                 return corregir_apellidos(texto)
@@ -1964,13 +2018,20 @@ def chat(user_message: str, history: list[dict] | None = None,
                     if _promete_sin_cumplir(result, agendo_de_verdad):
                         logger.error(
                             "AI_AGENT -> El modelo confirmó un turno que NUNCA se agendó. "
-                            "Mensaje bloqueado: %s", result[:200],
+                            "Mensaje bloqueado: %d caracteres (texto omitido)", len(result),
                         )
                         return _SIN_RESPALDO, None, get_estado_conversacion()
+                    # Si en esta vuelta se agendo de verdad, sale la confirmacion
+                    # del turno guardado y nada mas. Simulacion 22/10: despues de
+                    # agendar, el modelo volvio a consultar y escribio horarios;
+                    # el filtro de horarios inventados devolvio la lista de nuevo,
+                    # el paciente nunca supo que ya tenia turno y eligio otro.
+                    if agendo_de_verdad and (conf := confirmacion_turno_agendada()):
+                        return conf, None, get_estado_conversacion()
                     if result and not derivo_de_verdad and _PROMETE_AVISO.search(result):
                         logger.error(
                             "AI_AGENT -> Prometió contacto/derivación sin indicar "
-                            "llamar. Mensaje bloqueado: %s", result[:200],
+                            "llamar. Mensaje bloqueado: %d caracteres (texto omitido)", len(result),
                         )
                         return _AVISO_SIN_CASO, None, get_estado_conversacion()
 
@@ -1979,19 +2040,19 @@ def chat(user_message: str, history: list[dict] | None = None,
                     if inventados:
                         logger.error(
                             "AI_AGENT -> El modelo ofreció horarios que NINGUNA "
-                            "herramienta devolvió (%s). Consultado: %s. Mensaje: %s",
-                            ", ".join(inventados), consultado, result[:200],
+                            "herramienta devolvió (%s). Consultado: %s. Mensaje: %d caracteres (texto omitido)",
+                            ", ".join(inventados), consultado, len(result),
                         )
                         rearmado = (_mensaje_con_los_horarios_reales(consultado)
                                     or _consultar_yo_mismo())
-                        return (rearmado or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
+                        return (rearmado or ofrecer_quien_lo_atiende(resultados_tools) or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
 
                     rearmado_negacion = _niega_habiendo_horarios(result, consultado)
                     if rearmado_negacion:
                         logger.error(
                             "AI_AGENT -> El modelo negó disponibilidad con horarios "
-                            "reales en mano. Consultado: %s. Mensaje: %s",
-                            consultado, result[:200],
+                            "reales en mano. Consultado: %s. Mensaje: %d caracteres (texto omitido)",
+                            consultado, len(result),
                         )
                         return rearmado_negacion, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
@@ -1999,11 +2060,11 @@ def chat(user_message: str, history: list[dict] | None = None,
                     if atribuido:
                         logger.error(
                             "AI_AGENT -> Atribuyó horarios a '%s' sin haber consultado "
-                            "por esa persona. Consultado: %s. Mensaje: %s",
-                            atribuido, consultado, result[:200],
+                            "por esa persona. Consultado: %s. Mensaje: %d caracteres (texto omitido)",
+                            atribuido, consultado, len(result),
                         )
                         propio = _consultar_yo_mismo()
-                        return ((propio or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
+                        return ((propio or ofrecer_quien_lo_atiende(resultados_tools) or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
                                 get_estado_conversacion())
                     # Camino normal: horarios y confirmación los arma el código.
                     result = _respuesta_con_plantillas(result, consultado, agendo_de_verdad)
@@ -2044,7 +2105,8 @@ def chat(user_message: str, history: list[dict] | None = None,
                         "indicar_llamar_consultorio", "derivar_a_recepcion",
                     ) and tool_result.startswith("✅"):
                         derivo_de_verdad = True
-                    logger.info(f"  🔧 {tc.function.name}({json.dumps(args, ensure_ascii=False)[:120]}) → {tool_result[:100]}...")
+                    # Los argumentos traen nombre, DNI y motivo: solo el nombre de la tool.
+                    logger.info(f"  🔧 {tc.function.name}(…) → {len(tool_result)} caracteres")
                     conv.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -2061,16 +2123,18 @@ def chat(user_message: str, history: list[dict] | None = None,
             )
             _registrar_uso(response, "cierre sin tools")
             final = response.choices[0].message.content or ""
+            if agendo_de_verdad and (conf := confirmacion_turno_agendada()):
+                return conf, None, get_estado_conversacion()
             if _promete_sin_cumplir(final, agendo_de_verdad):
                 logger.error(
                     "AI_AGENT -> El modelo confirmó un turno que NUNCA se agendó "
-                    "(tras agotar las rondas). Mensaje bloqueado: %s", final[:200],
+                    "(tras agotar las rondas). Mensaje bloqueado: %d caracteres (texto omitido)", len(final),
                 )
                 return _SIN_RESPALDO, None, get_estado_conversacion()
             if final and not derivo_de_verdad and _PROMETE_AVISO.search(final):
                 logger.error(
                     "AI_AGENT -> Prometió contacto/derivación sin indicar "
-                    "llamar. Mensaje bloqueado: %s", final[:200],
+                    "llamar. Mensaje bloqueado: %d caracteres (texto omitido)", len(final),
                 )
                 return _AVISO_SIN_CASO, None, get_estado_conversacion()
 
@@ -2079,19 +2143,19 @@ def chat(user_message: str, history: list[dict] | None = None,
             if inventados:
                 logger.error(
                     "AI_AGENT -> Ofreció horarios que NINGUNA herramienta devolvió "
-                    "(%s) tras agotar las rondas. Mensaje: %s",
-                    ", ".join(inventados), final[:200],
+                    "(%s) tras agotar las rondas. Mensaje: %d caracteres (texto omitido)",
+                    ", ".join(inventados), len(final),
                 )
                 rearmado = (_mensaje_con_los_horarios_reales(consultado)
                             or _consultar_yo_mismo())
-                return (rearmado or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
+                return (rearmado or ofrecer_quien_lo_atiende(resultados_tools) or _SIN_HORARIOS), tomar_opciones_ofrecidas(), get_estado_conversacion()
 
             rearmado_negacion = _niega_habiendo_horarios(final, consultado)
             if rearmado_negacion:
                 logger.error(
                     "AI_AGENT -> Negó disponibilidad con horarios reales "
-                    "(tras agotar rondas). Consultado: %s. Mensaje: %s",
-                    consultado, final[:200],
+                    "(tras agotar rondas). Consultado: %s. Mensaje: %d caracteres (texto omitido)",
+                    consultado, len(final),
                 )
                 return rearmado_negacion, tomar_opciones_ofrecidas(), get_estado_conversacion()
 
@@ -2099,11 +2163,11 @@ def chat(user_message: str, history: list[dict] | None = None,
             if atribuido:
                 logger.error(
                     "AI_AGENT -> Atribuyó horarios a '%s' sin consultar por esa "
-                    "persona, tras agotar las rondas. Mensaje: %s",
-                    atribuido, final[:200],
+                    "persona, tras agotar las rondas. Mensaje: %d caracteres (texto omitido)",
+                    atribuido, len(final),
                 )
                 propio = _consultar_yo_mismo()
-                return ((propio or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
+                return ((propio or ofrecer_quien_lo_atiende(resultados_tools) or _SIN_HORARIOS), tomar_opciones_ofrecidas(),
                         get_estado_conversacion())
             final = _respuesta_con_plantillas(final, consultado, agendo_de_verdad)
             rescatado = _rescatar_afirmacion(final, consultado, agendo_de_verdad)

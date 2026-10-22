@@ -26,6 +26,11 @@ COPY . .
 ARG GIT_COMMIT=""
 ENV GIT_COMMIT=$GIT_COMMIT
 
+# Sin root: si alguien llegara a ejecutar algo adentro, no es dueño del
+# contenedor. La app solo escribe en /tmp (audios a transcribir).
+RUN useradd --system --uid 10001 --no-create-home app
+USER app
+
 # Expose port
 EXPOSE 8000
 

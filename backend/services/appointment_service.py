@@ -132,25 +132,49 @@ def match_insurance(nombre: str, db: Session):
     # social distinta de "OSPELSYM" y no debe darse por cubierta. Ante la duda
     # conviene devolver None: el bot avisa que no esta cubierta y el paciente
     # corrige, que es mejor que agendar con una cobertura que no se atiende.
-    palabras_buscado = {p for p in buscado.split() if len(p) >= 3}
+    palabras_buscado = _palabras_distintivas(buscado)
 
     activas = db.query(Insurance).filter(Insurance.is_active == True).all()
+
+    # Primero el nombre (o el codigo) exacto, contra TODAS. Antes se cortaba en
+    # la primera que coincidiera por palabras, y el orden de la tabla decidia.
     for ins in activas:
-        candidato = " ".join(_sin_acentos(ins.name).split())
-        if not candidato:
-            continue
-        if buscado == candidato:
+        if buscado == " ".join(_sin_acentos(ins.name).split()):
             return ins
         if ins.code and _sin_acentos(ins.code).strip() == buscado:
             return ins
 
-        palabras_candidato = {p for p in candidato.split() if len(p) >= 3}
-        if not palabras_buscado or not palabras_candidato:
+    # Despues por palabras, sin las genericas. "tv salud" se quedaba solo con
+    # "salud" ("tv" es corta) y esa palabra esta en Jerarquicos Salud, SanCor
+    # Salud, Federada Salud...: todas se guardaban como "tv salud".
+    if not palabras_buscado:
+        return None
+    candidatos = []
+    for ins in activas:
+        palabras_candidato = _palabras_distintivas(" ".join(_sin_acentos(ins.name).split()))
+        if not palabras_candidato:
             continue
         # "OSDE 210" contiene a "OSDE"; "Swiss" es parte de "Swiss Medical".
         if palabras_candidato <= palabras_buscado or palabras_buscado <= palabras_candidato:
-            return ins
-    return None
+            candidatos.append((len(palabras_candidato & palabras_buscado), ins))
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda c: -c[0])
+    # Dos igual de buenas: ante la duda no se adivina (ver arriba).
+    if len(candidatos) > 1 and candidatos[0][0] == candidatos[1][0]:
+        return None
+    return candidatos[0][1]
+
+
+# Palabras que comparten muchas obras sociales y no identifican a ninguna.
+_PALABRAS_GENERICAS = {
+    "salud", "obra", "social", "medical", "medica", "medico", "servicios",
+    "prepaga", "plan", "the", "del", "los", "las",
+}
+
+
+def _palabras_distintivas(texto: str) -> set[str]:
+    return {p for p in texto.split() if len(p) >= 3 and p not in _PALABRAS_GENERICAS}
 
 
 def obras_sociales_frecuentes(db: Session, limite: int = 8) -> list[str]:
@@ -524,6 +548,16 @@ def _tipo_para_motivo(db: Session, reason: str):
         matcheo = False
         for c in candidatos:
             c_norm = _sin_acentos(c)
+            # Un sinonimo de varias palabras ("consulta por conducto") cuenta
+            # solo si estan TODAS. Comparado entero por prefijo, cualquier
+            # "consulta" le sumaba: "una consulta para que lo revisen" a un
+            # chico de 8 años quedo como Consulta por conducto (simulacion 22/10).
+            partes = _palabras(c_norm)
+            if len(partes) > 1:
+                if all(any(_misma_palabra(w, p) for p in palabras) for w in partes):
+                    matcheo = True
+                    score += 10
+                continue
             for p in palabras:
                 if not _misma_palabra(c_norm, p):
                     continue
@@ -541,7 +575,10 @@ def _tipo_para_motivo(db: Session, reason: str):
 
     if not mejores:
         return None
-    mejores.sort(key=lambda x: (-x[0], x[1].nombre or ""))
+    # Empate: gana el tipo con especialidad. "Control de ortodoncia" empataba
+    # entre Control y Ortodoncia, y por orden alfabetico quedaba Control, que
+    # puede atender cualquiera: el turno se le dio a quien no hace ortodoncia.
+    mejores.sort(key=lambda x: (-x[0], 0 if x[1].especialidad else 1, x[1].nombre or ""))
     return mejores[0][1]
 
 
@@ -1035,14 +1072,15 @@ def create_appointment_logic(
         db, start, duration_minutes, location, insurance_name, candidatos,
     )
     if motivo:
-        return {"error": f"{motivo} Ofrecele otro horario al paciente."}
+        return {"error": f"{motivo} Ofrecele otro horario al paciente.{_libres_ese_dia(db, start, reason, location, insurance_name)}"}
 
     # Quien lo atiende: uno que este LIBRE en ese horario, no el primero de la
     # lista. Antes se tomaba candidatos[0] aunque estuviera ocupado, y ese es el
     # origen de los turnos encimados.
     prof = profesional_libre(db, candidatos, start, duration_minutes, location)
     if not prof:
-        return {"error": "Ese horario ya está ocupado. Ofrecele otro al paciente."}
+        return {"error": "Ese horario ya está ocupado. Ofrecele otro al paciente."
+                         + _libres_ese_dia(db, start, reason, location, insurance_name)}
 
     # Find or create patient
     # Con DNI se busca por DNI. Sin DNI (paciente nuevo que solo dio su nombre)
@@ -1089,6 +1127,22 @@ def create_appointment_logic(
         db.commit()
         db.refresh(patient)
     else:
+        if channel in CANALES_DEL_BOT and (
+            previo := turno_futuro_del_mismo_motivo(db, patient.id, reason)
+        ):
+            # Simulacion 21/10: una paciente quedo con tres limpiezas seguidas
+            # el mismo viernes. Cada "mejor otro horario" generaba un alta
+            # nueva en vez de mover la que ya tenia.
+            return {
+                "error": (
+                    f"{patient.first_name} ya tiene un turno de {previo.reason} el "
+                    f"{fecha_en_palabras(previo.start_time)} a las "
+                    f"{previo.start_time.strftime('%H:%M')} (appointment_id={previo.id}). "
+                    "No se agenda otro igual: preguntale si quiere cambiar ese turno "
+                    "a este horario (reprogramar_turno) o dejarlo como está."
+                ),
+                "turno_existente": str(previo.id),
+            }
         # Paciente existente: refrescar con los datos obligatorios que tomó el
         # bot. La obra social se actualiza siempre (el último dato es el más
         # vigente). El teléfono NUNCA: es la credencial que identifica al
@@ -1103,6 +1157,10 @@ def create_appointment_logic(
             patient.last_name = patient_last_name
         db.commit()
         db.refresh(patient)
+
+    if conflicto := tomar_sillon(db, location, start, duration_minutes):
+        return {"error": f"{conflicto} Ofrecele otro horario al paciente."
+                         + _libres_ese_dia(db, start, reason, location, insurance_name)}
 
     appt = Appointment(
         patient_id=patient.id,
@@ -1140,8 +1198,73 @@ def create_appointment_logic(
         "datetime": str(appt.start_time),
     }
 
+def _libres_ese_dia(db: Session, start: datetime, reason: str, location, obra_social) -> str:
+    """" Libres ese día: 18:45, 19:00." para sumar a un error de horario ocupado.
+
+    Simulacion 22/10: una pareja pidio dos limpiezas seguidas. El turno de ella
+    choco con el de el (recien agendado), la herramienta solo dijo "ya hay un
+    turno en ese horario" y el modelo se perdio hasta mandar a llamar.
+    """
+    try:
+        r = get_available_slots(db, start.date().isoformat(), location, reason, obra_social or "Particular")
+    except Exception:
+        return ""
+    if r.get("date") != str(start.date()):
+        return ""
+    despues = [h for h in r.get("available_slots") or [] if h > start.strftime("%H:%M")]
+    libres = (despues or r.get("available_slots") or [])[:4]
+    return f" Libres ese día: {', '.join(libres)}." if libres else " Ese día no queda otro horario libre."
+
+
+def tomar_sillon(db: Session, location: str | None, start: datetime, duration_minutes: int,
+                 exclude_id=None) -> str | None:
+    """Toma el candado de la agenda de ese día y sede, y re-verifica el sillón.
+
+    Devuelve el motivo si ya no hay lugar, o None si se puede guardar. El
+    candado vive hasta el commit de quien llama: dos reservas simultáneas se
+    ponen en fila y la segunda ve el turno de la primera.
+
+    La base ya impide que un MISMO profesional tenga dos turnos encimados
+    (EXCLUDE por profesional), pero el sillón es uno para los dos: Murad a las
+    10:00 (60') y Silvestro a las 10:30 entraban juntos si llegaban a la vez.
+    """
+    from sqlalchemy import text
+    clave = f"agenda:{(location or '').strip().lower()}:{start.date().isoformat()}"
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": clave})
+    del_dia = get_day_appointments(db, start.date(), location)
+    conflicto = slot_conflict(del_dia, start, duration_minutes, get_chairs_per_location(db),
+                              exclude_id=exclude_id)
+    if conflicto:
+        db.rollback()   # suelta el candado ya: no se va a escribir nada
+    return conflicto
+
+
+CANALES_DEL_BOT = (AppointmentChannel.bot_whatsapp, AppointmentChannel.bot_telegram)
+
+
+def turno_futuro_del_mismo_motivo(db: Session, patient_id, reason: str):
+    """El próximo turno activo del paciente con el mismo tipo de consulta, o None.
+
+    El motivo se compara por tipo de consulta ("limpieza" y "Limpieza dental"
+    son lo mismo); si no hay tipo, por el texto.
+    """
+    tipo = _tipo_para_motivo(db, reason)
+    clave = tipo.nombre if tipo else (reason or "").strip().lower()
+    futuros = db.query(Appointment).filter(
+        Appointment.patient_id == patient_id,
+        Appointment.is_deleted == False,  # noqa: E712
+        Appointment.status.in_([AppointmentStatus.confirmed, AppointmentStatus.pending]),
+        Appointment.start_time > get_clinic_now(),
+    ).order_by(Appointment.start_time).all()
+    for a in futuros:
+        t = _tipo_para_motivo(db, a.reason or "")
+        if (t.nombre if t else (a.reason or "").strip().lower()) == clave:
+            return a
+    return None
+
+
 DIAS_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
-MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio",
+MESES =["enero", "febrero", "marzo", "abril", "mayo", "junio",
          "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
 
@@ -1574,4 +1697,10 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
             motivo = f"el {fecha_en_palabras(day)} ya no quedaban horarios libres"
         return siguiente(motivo)
 
+    # Se nombra a quien atiende ESE dia, no al primero de la lista. Simulacion
+    # 22/10: un martes (solo atiende Murad) el bot ofrecia "con el Dr. Silvestro"
+    # y despues el turno quedaba con Murad.
+    trabajan = [c for c in candidatos if franjas_del_dia(db, day, [c])]
+    if trabajan:
+        prof_name = " o ".join(c.full_name for c in trabajan)
     return respuesta(repartir_slots(available_slots), profesional=prof_name)
