@@ -1,0 +1,49 @@
+/* ═══════════════════════════════════════════════════════
+   SILPRODENT · Paleta de marca
+   Sacada del logo oficial (Instagram @silprodent.ok, 10/11/2026).
+   Fuente única de los colores del sistema: styles.css usa estos tokens.
+   ═══════════════════════════════════════════════════════ */
+:root {
+    /* Turquesa de marca: "odontología" y el círculo del diente */
+    --sil-teal-950: #062a30;   /* fondos muy oscuros, sidebar en modo oscuro */
+    --sil-teal-900: #0a3a42;   /* sidebar, títulos sobre claro */
+    --sil-teal-800: #0b4f59;
+    --sil-teal-700: #006573;   /* hover/pressed de botones */
+    --sil-teal-600: #00737f;
+    --sil-teal-500: #00808f;   /* ★ COLOR DE MARCA (blanco encima: contraste AA 4,7:1) */
+    --sil-teal-400: #2fa3ae;
+    --sil-aqua-300: #7fd3da;   /* píxeles claros del logo, acentos */
+    --sil-aqua-200: #a8e3e8;
+    --sil-aqua-100: #ccf0f0;   /* píxeles más claros del logo, fondos de selección */
+    --sil-aqua-50:  #ecf8f9;   /* fondos suaves, hover de filas */
+
+    /* Grafito de "SILPRODENT" y grises de los píxeles */
+    --sil-ink:      #2b2b2b;   /* ★ texto de marca */
+    --sil-gray-700: #4a5558;
+    --sil-gray-500: #6b787b;   /* texto secundario (AA sobre blanco) */
+    --sil-gray-400: #9aa5a8;   /* píxeles grises del logo */
+    --sil-gray-300: #c4cccd;
+    --sil-gray-200: #dde4e5;   /* bordes */
+    --sil-gray-100: #eef2f3;
+    --sil-gray-50:  #f6f9f9;   /* fondo general de la app */
+    --sil-white:    #ffffff;
+
+    /* Funcionales (armonizados con el turquesa) */
+    --sil-success: #1f9d6b;  --sil-success-50: #e3f5ec;
+    --sil-warning: #d98a1c;  --sil-warning-50: #fdf1dd;
+    --sil-danger:  #d64550;  --sil-danger-50:  #fbe6e8;
+    --sil-info:    var(--sil-teal-400);
+
+    /* Odontograma: convención clínica, NO cambiar por la marca */
+    --sil-odo-preexistente: #c62828;  /* rojo */
+    --sil-odo-prestacion:   #1e66d0;  /* azul */
+
+    /* Tipografías */
+    --sil-font-marca:  'Michroma', 'Lexend', sans-serif;          /* "odontología" (extendida, geométrica) */
+    --sil-font-marca2: 'Exo 2', 'Lexend', sans-serif;             /* "SILPRODENT" 800 itálica */
+    --sil-font-titulos: 'Lexend', system-ui, sans-serif;
+    --sil-font-texto:   'Inter', system-ui, sans-serif;
+
+    /* Degradado de los píxeles del logo (turquesa → aqua → gris) */
+    --sil-gradiente-pixeles: linear-gradient(90deg, var(--sil-teal-500), var(--sil-aqua-300) 55%, var(--sil-gray-300));
+}

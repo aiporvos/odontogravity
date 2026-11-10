@@ -37,7 +37,7 @@ Router.register('horarios', async (container) => {
             <div class="card">
                 <div class="card-header"><h2>🚫 Ausencias de profesionales</h2></div>
                 <p style="font-size:.85rem;color:var(--slate-500);margin-bottom:1rem;">
-                    Marcá un día en que un profesional no atiende. El bot no ofrecerá ese día y los turnos existentes aparecerán para reprogramar en el Dashboard.
+                    Marcá un día en que un profesional no atiende. El bot no ofrecerá ese día y los turnos existentes aparecerán para reprogramar en Inicio.
                 </p>
                 <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:end;margin-bottom:1rem;">
                     <div class="form-group" style="margin:0;">

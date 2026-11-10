@@ -26,14 +26,14 @@ Router.register('agenda', async (container) => {
 
     container.innerHTML = `
         <div class="page-header">
-            <h1>Agenda de Turnos</h1>
+            <h1>Agenda</h1>
             <div class="page-header-actions">
                 <div class="btn-group" style="margin-right:1rem">
                     <button class="btn btn-ghost btn-sm" data-view="day">Día</button>
                     <button class="btn btn-ghost btn-sm active" data-view="week">Semana</button>
                     <button class="btn btn-ghost btn-sm" data-view="month">Mes</button>
                 </div>
-                <button class="btn btn-primary" id="btn-new-appointment">+ Nuevo Turno</button>
+                <button class="btn btn-primary" id="btn-new-appointment">+ Nuevo turno</button>
             </div>
         </div>
 
@@ -61,7 +61,7 @@ Router.register('agenda', async (container) => {
                     <option value="priority">Agrupado por Prioridad</option>
                 </select>
             </div>
-            <div id="agenda-header-info" style="margin-bottom: 1.5rem; font-weight: 700; color: var(--slate-700); text-transform: capitalize; font-size: 1.1rem;"></div>
+            <div id="agenda-header-info" style="margin-bottom: 1.5rem; font-weight: 700; color: var(--slate-700); font-size: 1.1rem;"></div>
             <div id="agenda-content" class="agenda-timeline"></div>
         </div>
     `;

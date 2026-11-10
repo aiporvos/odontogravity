@@ -33,18 +33,52 @@
         const password = document.getElementById('login-password').value;
         const btn = document.getElementById('login-btn');
         btn.disabled = true;
-        btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;border-width:2px;"></div>';
+        const btnHtml = btn.innerHTML;
+        btn.innerHTML = '<div class="spinner" style="width:20px;height:20px;border-width:2px;"></div><span>Ingresando…</span>';
 
         try {
             await API.login(email, password);
             showApp();
         } catch (err) {
             loginError.textContent = err.message;
+            document.getElementById('login-password').select();
         } finally {
             btn.disabled = false;
-            btn.innerHTML = '<span>Iniciar Sesión</span>';
+            btn.innerHTML = btnHtml;
         }
     });
+
+
+    // ── Detalles del login ────────────────────────────
+    (function loginDetalles() {
+        const h = new Date().getHours();
+        const saludo = h >= 5 && h < 13 ? 'Buen día' : h >= 13 && h < 20 ? 'Buenas tardes' : 'Buenas noches';
+        const greet = document.getElementById('login-greeting');
+        if (greet) greet.textContent = saludo;
+        const year = document.getElementById('login-year');
+        if (year) year.textContent = new Date().getFullYear();
+
+        const pass = document.getElementById('login-password');
+        const toggle = document.getElementById('login-toggle-pass');
+        const ojoAbierto = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+        const ojoCerrado = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-2.8 3.8M6.6 6.6A17.4 17.4 0 0 0 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2M2 2l20 20"/></svg>';
+        toggle?.addEventListener('click', () => {
+            const mostrar = pass.type === 'password';
+            pass.type = mostrar ? 'text' : 'password';
+            toggle.innerHTML = mostrar ? ojoCerrado : ojoAbierto;
+            toggle.setAttribute('aria-pressed', String(mostrar));
+            toggle.setAttribute('aria-label', mostrar ? 'Ocultar contraseña' : 'Mostrar contraseña');
+            pass.focus();
+        });
+
+        const caps = document.getElementById('login-caps');
+        const revisarMayus = (e) => {
+            if (caps && e.getModifierState) caps.classList.toggle('visible', e.getModifierState('CapsLock'));
+        };
+        pass?.addEventListener('keydown', revisarMayus);
+        pass?.addEventListener('keyup', revisarMayus);
+        pass?.addEventListener('blur', () => caps?.classList.remove('visible'));
+    })();
 
     // ── Show App ───────────────────────────────────────
     function showApp() {
@@ -55,8 +89,11 @@
         const user = API.user;
         if (user) {
             document.getElementById('user-name').textContent = user.full_name;
-            document.getElementById('user-role').textContent = user.role;
-            document.getElementById('user-avatar').textContent = user.full_name.charAt(0).toUpperCase();
+            const roles = { admin: 'Administración', receptionist: 'Recepción', professional: 'Profesional' };
+            document.getElementById('user-role').textContent = roles[user.role] || user.role;
+            const inicial = (user.full_name || '').split(/\s+/)
+                .find(p => p && !/^(dr|dra|od|lic)\.?$/i.test(p)) || user.full_name || '?';
+            document.getElementById('user-avatar').textContent = inicial.charAt(0).toUpperCase();
 
             // Admin ve todo el menú de Administración.
             // Recepción ve solo "Configuración" (para encender/apagar el bot y los

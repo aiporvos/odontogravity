@@ -80,7 +80,7 @@ const UI = {
     formatTime(dateStr) {
         if (!dateStr) return '-';
         const d = new Date(dateStr);
-        return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+        return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
     },
 
     formatDateTime(dateStr) {

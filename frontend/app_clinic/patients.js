@@ -6,7 +6,7 @@ Router.register('patients', async (container) => {
         <div class="page-header">
             <h1>Pacientes</h1>
             <div class="page-header-actions">
-                <button class="btn btn-primary" id="btn-new-patient">+ Nuevo Paciente</button>
+                <button class="btn btn-primary" id="btn-new-patient">+ Nuevo paciente</button>
             </div>
         </div>
         <div class="card">
@@ -61,8 +61,8 @@ const PatientsPage = {
                      html: p => UI.escape(p.insurance_name || '-')},
                     {titulo: 'Acciones', orden: false, valor: () => '', html: p => `
                         <button class="btn btn-sm btn-ghost" onclick="PatientsPage.showForm('${p.id}')">Editar</button>
-                        <button class="btn btn-sm btn-primary" onclick="PatientsPage.viewOdontogram('${p.id}')">🦷</button>
-                        <button class="btn btn-sm btn-danger" onclick="PatientsPage.deletePatient('${p.id}')">✕</button>`},
+                        <button class="btn btn-sm btn-primary" onclick="PatientsPage.viewOdontogram('${p.id}')" title="Abrir el odontograma">Odontograma</button>
+                        <button class="btn btn-sm btn-danger" onclick="PatientsPage.deletePatient('${p.id}')" title="Borrar paciente">Borrar</button>`},
                 ],
             });
         } catch (err) {

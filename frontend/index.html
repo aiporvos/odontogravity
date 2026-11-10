@@ -4,37 +4,88 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Silprodent - Sistema de gestión integral para consultorios odontológicos">
-    <title>Silprodent</title>
+    <title>Silprodent · Odontología</title>
+    <meta name="theme-color" content="#0a3a42">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700;900&family=Paytone+One&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lexend:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="preload" as="image" href="brand/login-hero.webp" fetchpriority="high">
+    <link rel="stylesheet" href="brand/silprodent-paleta.css">
     <link rel="stylesheet" href="styles.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦷</text></svg>">
+    <link rel="icon" href="brand/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="brand/favicon-32.png">
+    <link rel="apple-touch-icon" href="brand/favicon-180.png">
 </head>
 <body>
     <!-- ═══════════════ LOGIN SCREEN ═══════════════ -->
     <div id="login-screen" class="login-screen">
-        <div class="login-container">
-            <div class="login-brand">
-                <div class="login-logo">🦷</div>
-                <h1>Silprodent</h1>
-                <p>Sistema de Gestión Integral</p>
+        <section class="login-hero" aria-hidden="true">
+            <img class="login-hero-img" src="brand/login-hero.webp" alt="" decoding="async">
+            <div class="login-hero-overlay"></div>
+            <div class="login-pixels">
+                <span style="--x:12%;--y:22%;--s:9px;--d:8s"></span>
+                <span style="--x:22%;--y:48%;--s:6px;--d:11s;--delay:-3s"></span>
+                <span style="--x:8%;--y:66%;--s:12px;--d:10s;--delay:-6s;--c:rgba(255,255,255,.45)"></span>
+                <span style="--x:34%;--y:30%;--s:7px;--d:9s;--delay:-2s"></span>
+                <span style="--x:70%;--y:26%;--s:10px;--d:12s;--delay:-5s"></span>
+                <span style="--x:82%;--y:44%;--s:6px;--d:8s;--delay:-1s;--c:rgba(255,255,255,.5)"></span>
+                <span style="--x:90%;--y:62%;--s:11px;--d:10s;--delay:-7s"></span>
+                <span style="--x:62%;--y:52%;--s:5px;--d:9s;--delay:-4s"></span>
             </div>
-            <form id="login-form" class="login-form">
-                <div class="form-group">
-                    <label for="login-email">Email</label>
-                    <input type="email" id="login-email" placeholder="admin@dentalstudio.com" required autocomplete="email">
+            <div class="login-hero-content">
+                <img class="login-hero-logo" src="brand/logo-texto-blanco.png" alt="Odontología Silprodent" width="720" height="145">
+                <div class="login-hero-copy">
+                    <h2>Tu consultorio,<br>siempre en orden.</h2>
+                    <p>Turnos, pacientes y odontograma en un solo lugar, listos cuando los necesitás.</p>
                 </div>
-                <div class="form-group">
-                    <label for="login-password">Contraseña</label>
-                    <input type="password" id="login-password" placeholder="••••••••" required autocomplete="current-password">
+                <ul class="login-hero-chips">
+                    <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Agenda</li>
+                    <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="7" r="4"/><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/></svg>Pacientes</li>
+                    <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3C8.5 3 6.5 5.5 6.5 8.2c0 2.6 1 4.3 1.8 6 .8 1.8 1.2 4.3 1.7 6 .2.6 1 .6 1.2 0l.8-3 .8 3c.2.6 1 .6 1.2 0 .5-1.7.9-4.2 1.7-6 .8-1.7 1.8-3.4 1.8-6C17.5 5.5 15.5 3 12 3z"/></svg>Odontograma</li>
+                    <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Asistente de WhatsApp</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="login-panel">
+            <div class="login-container">
+                <img class="login-emblem" src="brand/emblema-silprodent.png" alt="" width="64" height="64">
+                <div class="login-brand">
+                    <h1 id="login-greeting">Te damos la bienvenida</h1>
+                    <p>Ingresá con tu usuario del consultorio.</p>
                 </div>
-                <button type="submit" id="login-btn" class="btn btn-primary btn-block">
-                    <span>Iniciar Sesión</span>
-                </button>
-                <p id="login-error" class="login-error"></p>
-            </form>
-        </div>
+                <form id="login-form" class="login-form">
+                    <div class="form-group">
+                        <label for="login-email">Email</label>
+                        <div class="login-field">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="m22 7-10 6L2 7"/></svg>
+                            <input type="email" id="login-email" placeholder="tu@email.com" required autocomplete="username" inputmode="email" autofocus>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Contraseña</label>
+                        <div class="login-field">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                            <input type="password" id="login-password" placeholder="Tu contraseña" required autocomplete="current-password">
+                            <button type="button" class="login-toggle-pass" id="login-toggle-pass" aria-label="Mostrar contraseña" aria-pressed="false">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                            </button>
+                        </div>
+                        <p class="login-caps" id="login-caps" role="status">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 12h4v6h8v-6h4z"/></svg>
+                            Las mayúsculas están activadas
+                        </p>
+                    </div>
+                    <button type="submit" id="login-btn" class="btn btn-primary btn-block">
+                        <span>Ingresar</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                    </button>
+                    <p id="login-error" class="login-error" role="alert" aria-live="assertive"></p>
+                </form>
+                <p class="login-help">¿No podés entrar? Pedile a la administración del consultorio que te restablezca la contraseña.</p>
+            </div>
+            <footer class="login-footer">© <span id="login-year">2026</span> Odontología Silprodent</footer>
+        </section>
     </div>
 
     <!-- ═══════════════ MAIN APP ═══════════════ -->
@@ -42,15 +93,15 @@
         <!-- SIDEBAR -->
         <aside id="sidebar" class="sidebar">
             <div class="sidebar-brand">
-                <span class="brand-icon">🦷</span>
-                <span class="brand-text">Silprodent</span>
+                <img class="brand-emblem" src="brand/emblema-silprodent.png" alt="" width="42" height="42">
+                <img class="brand-wordmark" src="brand/logo-texto-blanco.png" alt="Odontología Silprodent" width="720" height="145">
             </div>
             <nav class="sidebar-nav">
                 <div class="nav-section">
                     <span class="nav-label">Clínica</span>
                     <a href="#" class="nav-item active" data-page="dashboard" id="nav-dashboard">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-                        <span>Dashboard</span>
+                        <span>Inicio</span>
                     </a>
                     <a href="#" class="nav-item" data-page="agenda" id="nav-agenda">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
@@ -108,7 +159,7 @@
                 </button>
                 <div class="omnibox" id="omnibox">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                    <input type="text" id="omnibox-input" placeholder="Buscar paciente, profesional, DNI..." autocomplete="off">
+                    <input type="text" id="omnibox-input" placeholder="Buscar paciente por nombre o DNI…" autocomplete="off">
                     <div class="omnibox-results" id="omnibox-results"></div>
                 </div>
                 <div class="topbar-actions">
