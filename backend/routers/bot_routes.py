@@ -777,6 +777,18 @@ def bot_resolver_motivo(data: dict = Body(...), db: Session = Depends(get_db)):
     if aclaracion is not None:
         if not aclaracion.get("ok"):
             return aclaracion
+        # El tratamiento (60') solo despues de la consulta por conducto (30'),
+        # venga derivado o no: ahi se hace el odontograma y se pide la
+        # autorizacion a la obra social. Se verifica en el sistema, no se le
+        # cree al modelo ni a lo que diga el paciente.
+        from backend.services.appointment_service import (
+            MOTIVO_TRATAMIENTO_CONDUCTO, RAZON_SIN_CONSULTA_PREVIA,
+            tuvo_consulta_por_conducto,
+        )
+        if aclaracion["motivo"] == MOTIVO_TRATAMIENTO_CONDUCTO:
+            pacientes = buscar_pacientes_por_telefono(db, data.get("telefono"))
+            if not tuvo_consulta_por_conducto(db, pacientes):
+                return {"ok": False, "motivo": None, "razon": RAZON_SIN_CONSULTA_PREVIA}
         # Preferir el nombre canónico de la tabla si ya está sembrado.
         tipo_aclarado = _tipo_para_motivo(db, aclaracion["motivo"])
         return {

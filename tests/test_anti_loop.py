@@ -129,7 +129,8 @@ def test_rescate_de_conducto_va_con_los_dos_botones():
         A, [A], None, estado, dichos=["quiero un tratamiento de conducto", "sí"],
     )
     assert accion == "rescate"
-    assert opciones["opciones"] == ["Consulta (30 min)", "Tratamiento (1 hora)"]
+    from backend.services.appointment_service import BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO
+    assert opciones["opciones"] == [BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO]
 
 
 def test_segunda_vez_deriva():

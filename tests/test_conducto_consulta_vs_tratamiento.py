@@ -41,11 +41,11 @@ def cliente(db):
         yield c
 
 
-def _resolver(cliente, motivo, dichos):
+def _resolver(cliente, motivo, dichos, telefono=None):
     import os
     r = cliente.post(
         "/api/bot/resolver-motivo",
-        json={"motivo": motivo, "dichos": dichos},
+        json={"motivo": motivo, "dichos": dichos, "telefono": telefono},
         headers={"x-bot-key": os.environ["BOT_API_KEY"]},
     )
     assert r.status_code == 200, r.text
@@ -118,15 +118,61 @@ def test_api_acepta_consulta_por_conducto(cliente):
     assert d["duracion"] == 30
 
 
-def test_api_acepta_realizar_conducto(cliente):
-    d = _resolver(
-        cliente,
-        "Conducto",
-        ["tratamiento de conducto", "para realizármelo ya"],
-    )
+# Pedido del consultorio, 10/11/2026: el tratamiento (60') solo despues de la
+# consulta por conducto (30'), venga derivado o no.
+TEL = "5492604111222"
+
+
+def _con_consulta_previa(db, dias=-7, estado=None, motivo="Consulta por conducto"):
+    from datetime import datetime, timedelta
+    from backend.models.appointment import Appointment, AppointmentStatus
+    from backend.models.patient import Patient
+    from backend.models.professional import Professional
+    pac = Patient(first_name="Ana", last_name="Paz", phone=TEL)
+    pro = Professional(full_name="Dra. Prueba", license_number="MP-TEST-1", specialties=["Endodoncia"], locations=[])
+    db.add_all([pac, pro]); db.flush()
+    db.add(Appointment(patient_id=pac.id, professional_id=pro.id, reason=motivo,
+                       start_time=datetime.now() + timedelta(days=dias),
+                       status=estado or AppointmentStatus.completed))
+    db.commit()
+
+
+def test_api_sin_consulta_previa_no_da_el_tratamiento(cliente):
+    from backend.services.appointment_service import RAZON_SIN_CONSULTA_PREVIA
+    d = _resolver(cliente, "Conducto", ["tratamiento de conducto", "para realizármelo ya"], TEL)
+    assert d["ok"] is False
+    assert d["razon"] == RAZON_SIN_CONSULTA_PREVIA
+
+
+def test_api_derivado_para_hacerse_el_conducto_igual_va_a_consulta(cliente):
+    d = _resolver(cliente, "Conducto", ["me derivaron para hacerme el conducto"], TEL)
+    assert d["ok"] is False, "Venga derivado o no, primero la consulta de 30'"
+
+
+def test_api_con_consulta_previa_da_el_tratamiento(cliente, db):
+    _con_consulta_previa(db)
+    d = _resolver(cliente, "Conducto", ["tratamiento de conducto", "Ya hice la consulta"], TEL)
     assert d["ok"] is True
     assert d["motivo"] == "Conducto"
     assert d["duracion"] == 60
+
+
+@pytest.mark.parametrize("dias,estado,motivo", [
+    (+3, None, "Consulta por conducto"),        # todavia no paso
+    (-7, "cancelled", "Consulta por conducto"),  # se cancelo
+    (-7, None, "Limpieza"),                      # otra cosa
+])
+def test_api_lo_que_no_cuenta_como_consulta_previa(cliente, db, dias, estado, motivo):
+    from backend.models.appointment import AppointmentStatus
+    _con_consulta_previa(db, dias, AppointmentStatus(estado) if estado else None, motivo)
+    d = _resolver(cliente, "Conducto", ["conducto", "Ya hice la consulta"], TEL)
+    assert d["ok"] is False
+
+
+def test_api_sin_telefono_no_da_el_tratamiento(cliente, db):
+    _con_consulta_previa(db)
+    d = _resolver(cliente, "Conducto", ["conducto", "Ya hice la consulta"], None)
+    assert d["ok"] is False
 
 
 def test_pregunta_incluye_los_dos_tiempos():
@@ -139,14 +185,19 @@ def test_pregunta_incluye_los_dos_tiempos():
 # de una o dos palabras tiene que alcanzar; si no, se repregunta y es un loop.
 
 @pytest.mark.parametrize("respuesta,motivo,minutos", [
-    ("Tratamiento (1 hora)", "Conducto", 60),
+    ("Ya hice la consulta", "Conducto", 60),
+    ("sí", "Conducto", 60),
+    ("si, ya la hice", "Conducto", 60),
+    ("ya", "Conducto", 60),
     ("tratamiento", "Conducto", 60),
     ("el tratamiento", "Conducto", 60),
     ("una hora", "Conducto", 60),
     ("1 hora", "Conducto", 60),
     ("60", "Conducto", 60),
     ("ya para hacérmelo", "Conducto", 60),
-    ("Consulta (30 min)", "Consulta por conducto", 30),
+    ("Necesito la consulta", "Consulta por conducto", 30),
+    ("no", "Consulta por conducto", 30),
+    ("todavía no", "Consulta por conducto", 30),
     ("consulta", "Consulta por conducto", 30),
     ("vengo derivado", "Consulta por conducto", 30),
     ("30", "Consulta por conducto", 30),
@@ -180,8 +231,8 @@ def test_tratamiento_en_la_frase_larga_inicial_no_alcanza():
 
 def test_los_botones_se_reconocen_sin_pasar_por_el_modelo():
     from bot.tools.appointment_tools import motivo_por_boton_conducto
-    assert motivo_por_boton_conducto("Tratamiento (1 hora)") == "Conducto"
-    assert motivo_por_boton_conducto("Consulta (30 min)") == "Consulta por conducto"
+    assert motivo_por_boton_conducto("Ya hice la consulta") == "Conducto"
+    assert motivo_por_boton_conducto("Necesito la consulta") == "Consulta por conducto"
     assert motivo_por_boton_conducto("si") is None
     assert motivo_por_boton_conducto("consulta") is None, "Texto libre va por el modelo"
 

@@ -368,21 +368,29 @@ Podés preguntar:
 
 # 🦷 CONDUCTO / ENDODONCIA — REGLA OBLIGATORIA
 
-Si el paciente pide turno por conducto, endodoncia o "matar el nervio", **NO
-ofrezcas horarios todavía**. Preguntá siempre, en un solo mensaje:
+El tratamiento de conducto (1 hora) SIEMPRE va después de una consulta por
+conducto (30 minutos), venga derivado o no: en esa consulta se hace el
+odontograma y se pide la autorización a la obra social.
 
-«¿Vení derivado? ¿Es para una consulta de evaluación (30 minutos) o ya para
-realizar el tratamiento de conducto (1 hora)?»
+Si el paciente pide turno por conducto, endodoncia o "matar el nervio", **NO
+ofrezcas horarios todavía**. Decile, en un solo mensaje:
+
+«Para el tratamiento de conducto primero hay que hacer una consulta de 30
+minutos, aunque vengas derivado: ahí se hace el odontograma y se pide la
+autorización a la obra social. Después, el tratamiento se agenda con 1 hora.
+¿Ya hiciste esa consulta con nosotros?»
 
 Según la respuesta:
 
-* consulta / evaluación / viene derivado para que lo vean →
+* todavía no / necesita la consulta / viene derivado →
   `recordar_dato('motivo', 'Consulta por conducto')` → **30 minutos**
-* ya para realizarse / hacerme el conducto →
-  `recordar_dato('motivo', 'Conducto')` → **1 hora**
+* ya hizo la consulta →
+  `recordar_dato('motivo', 'Conducto')` → **1 hora**. El sistema verifica que
+  la consulta figure; si no figura, te devuelve qué decirle. Nunca insistas
+  con el turno de 1 hora si el sistema lo rechazó.
 
 🚫 PROHIBIDO registrar `Conducto` o `tratamiento de conducto` a secas.
-🚫 PROHIBIDO asumir 60 minutos porque dijo "conducto".
+🚫 PROHIBIDO dar 1 hora porque dijo "conducto", "derivado" o "hacerme el conducto".
 
 ---
 
@@ -1563,7 +1571,23 @@ def chat(user_message: str, history: list[dict] | None = None,
     forzadas = []
     # Toco un boton de la pregunta de conducto: el motivo queda decidido por
     # codigo. El modelo solo tiene que seguir (horarios), no interpretarlo.
-    if motivo_boton := motivo_por_boton_conducto(user_message):
+    motivo_boton = motivo_por_boton_conducto(user_message)
+    if motivo_boton:
+        from backend.services.appointment_service import MOTIVO_TRATAMIENTO_CONDUCTO
+        from bot.tools.appointment_tools import _motivo_dicho_por_el_paciente
+        from bot.tools.appointment_tools import set_opciones_ofrecidas as _botones_conducto
+        if motivo_boton == MOTIVO_TRATAMIENTO_CONDUCTO:
+            # "Ya hice la consulta": el turno de 1 hora solo si el sistema
+            # registra esa consulta. Lo verifica el backend con el historial.
+            ok, normalizado, razon = _motivo_dicho_por_el_paciente(motivo_boton)
+            if ok:
+                motivo_boton = normalizado
+            else:
+                motivo_boton = None
+                from backend.services.appointment_service import BOTON_CONSULTA_CONDUCTO
+                _botones_conducto([BOTON_CONSULTA_CONDUCTO], siempre=True, tipo="botones")
+                forzadas.append(razon or "No se pudo verificar la consulta por conducto.")
+    if motivo_boton:
         estado_ahora = {**estado_ahora, "motivo": motivo_boton}
         estado = estado_ahora
         set_estado_conversacion(estado)
@@ -1979,7 +2003,7 @@ def chat(user_message: str, history: list[dict] | None = None,
                 # herramienta se lo pida. Simulacion 22/10: "¿venís derivado o es
                 # para una consulta de evaluación?" pone derivado y evaluacion
                 # como alternativas y ni nombra el tratamiento ni los tiempos.
-                pidio_la_tool = any("consulta de evaluación (30 minutos)" in (r or "")
+                pidio_la_tool = any("Ya hiciste esa consulta" in (r or "")
                                     for r in resultados_tools)
                 if (pidio_la_tool or _pregunta_conducto_sin_resolver(texto)) and (
                     "?" in texto and "30" not in texto

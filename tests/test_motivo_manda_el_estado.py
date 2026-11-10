@@ -74,4 +74,5 @@ def test_la_pregunta_de_conducto_va_con_botones(monkeypatch):
     assert r.startswith("❌")
     pub = tools.tomar_opciones_ofrecidas()
     assert pub and pub["tipo"] == "botones"
-    assert pub["opciones"] == ["Consulta (30 min)", "Tratamiento (1 hora)"]
+    from backend.services.appointment_service import BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO
+    assert pub["opciones"] == [BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO]

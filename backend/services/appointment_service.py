@@ -620,9 +620,11 @@ def _duracion_hardcodeada(reason: str) -> int:
     return 15
 
 
-# Pedido del consultorio: si piden conducto, SIEMPRE aclarar si viene derivado
-# y si es consulta de evaluación (30') o ya realizar el tratamiento (60').
-# "tratamiento de conducto" a secas es ambiguo: casi todos lo dicen así.
+# Pedido del consultorio: el tratamiento de conducto (60') SIEMPRE va despues
+# de una consulta por conducto (30'), venga derivado o no. En esa consulta se
+# hace el odontograma y se pide la autorizacion a la obra social (10/11/2026:
+# "tiene que ser la consulta si o si, ya venga derivado o no").
+# Por eso el turno de 1 hora solo se da si el sistema registra esa consulta.
 MOTIVO_CONSULTA_CONDUCTO = "Consulta por conducto"
 MOTIVO_TRATAMIENTO_CONDUCTO = "Conducto"
 
@@ -630,16 +632,33 @@ MOTIVO_TRATAMIENTO_CONDUCTO = "Conducto"
 # codigo la repone textual (arnes 21/09: "¿Vení derivado o es para realizar el
 # tratamiento directamente?", sin 30' ni 1 hora).
 PREGUNTA_CONDUCTO_PACIENTE = (
-    "¿Venís derivado? ¿Es para una consulta de evaluación (30 minutos) "
-    "o ya para realizar el tratamiento de conducto (1 hora)?"
+    "Para el tratamiento de conducto primero hay que hacer una consulta de "
+    "30 minutos, aunque vengas derivado: ahí se hace el odontograma y se pide "
+    "la autorización a la obra social. Después, el tratamiento se agenda con "
+    "1 hora. ¿Ya hiciste esa consulta con nosotros?"
 )
 
 PREGUNTA_CONDUCTO = (
-    "Antes de ofrecer horarios, preguntale exactamente esto: "
+    "Antes de ofrecer horarios, decile exactamente esto: "
     f"«{PREGUNTA_CONDUCTO_PACIENTE}» "
-    "Según la respuesta registrá motivo='Consulta por conducto' (30') "
-    "o motivo='Conducto' (60'). "
+    "Si todavía no la hizo, registrá motivo='Consulta por conducto' (30'). "
+    "Si dice que ya la hizo, registrá motivo='Conducto' (60'): el sistema "
+    "verifica que la consulta figure. "
     "🚫 PROHIBIDO asumir ni registrar 'Conducto' / 'tratamiento de conducto' a secas."
+)
+
+# Cuando dice que ya hizo la consulta pero el sistema no la tiene.
+TEXTO_SIN_CONSULTA_PREVIA = (
+    "No encuentro registrada una consulta por conducto a tu nombre, y el "
+    "tratamiento solo se puede agendar después de esa consulta de 30 minutos. "
+    "Te doy un turno para la consulta, o si la hiciste hace poco, comunicate "
+    "con el consultorio y lo revisan."
+)
+RAZON_SIN_CONSULTA_PREVIA = (
+    "El paciente dice que ya hizo la consulta por conducto, pero NO figura en "
+    "el sistema, así que NO se puede dar el turno de 1 hora. Decile exactamente: "
+    f"«{TEXTO_SIN_CONSULTA_PREVIA}» "
+    "Si quiere la consulta, registrá motivo='Consulta por conducto' (30')."
 )
 
 _MARCAS_CONSULTA_CONDUCTO = (
@@ -660,19 +679,24 @@ _MARCAS_TRATAMIENTO_CONDUCTO = (
 
 # Los botones que el bot muestra con la pregunta. El texto que vuelve al tocar
 # uno es exactamente este, y se resuelve sin pasar por el modelo.
-BOTON_CONSULTA_CONDUCTO = "Consulta (30 min)"
-BOTON_TRATAMIENTO_CONDUCTO = "Tratamiento (1 hora)"
+BOTON_CONSULTA_CONDUCTO = "Necesito la consulta"
+BOTON_TRATAMIENTO_CONDUCTO = "Ya hice la consulta"
 
-# Respuestas CORTAS a la pregunta ("¿consulta o tratamiento?"). Solo valen
+# Respuestas CORTAS a la pregunta ("¿ya hiciste la consulta?"). Solo valen
 # cuando el ultimo dicho es breve: "tratamiento" a secas contesta la pregunta,
 # pero "quiero un tratamiento de conducto" es la frase ambigua inicial.
+# Las afirmativas/negativas sueltas se comparan enteras: "si" o "no" como
+# subcadena aparecen dentro de cualquier palabra.
+_RESPUESTA_SI = {"si", "si ya", "si la hice", "si ya la hice", "ya", "ya la hice", "ya hice"}
+_RESPUESTA_NO = {"no", "no todavia", "todavia no", "aun no", "no la hice", "no aun", "nop"}
 _RESPUESTA_CORTA_TRATAMIENTO = (
     "tratamiento", "1 hora", "una hora", "1 hs", "1hs", "60", "hacerme",
-    "hacermelo", "realizar", "realizarlo", "el conducto", "ya",
+    "hacermelo", "realizar", "realizarlo", "el conducto", "ya hice",
+    "ya la hice", "ya tuve", "ya me la hice", "ya fui",
 )
 _RESPUESTA_CORTA_CONSULTA = (
     "consulta", "evaluacion", "derivad", "30", "media hora", "revision",
-    "que me vean", "control",
+    "que me vean", "control", "necesito",
 )
 _MAX_PALABRAS_RESPUESTA_CORTA = 4
 
@@ -696,6 +720,11 @@ def _respuesta_corta_a_la_pregunta(ultimo: str):
         return 60
     if t == _sin_acentos(BOTON_CONSULTA_CONDUCTO):
         return 30
+    sin_signos = t.strip(" .,!¡?¿")
+    if sin_signos in _RESPUESTA_NO:
+        return 30
+    if sin_signos in _RESPUESTA_SI:
+        return 60
     if _tiene_marca(t, _RESPUESTA_CORTA_TRATAMIENTO):
         return 60
     if _tiene_marca(t, _RESPUESTA_CORTA_CONSULTA):
@@ -742,6 +771,30 @@ def resolver_ambiguiedad_conducto(propuesto: str, dichos: list[str] | None = Non
             "duracion": 30,
         }
     return {"ok": False, "motivo": None, "razon": PREGUNTA_CONDUCTO}
+
+
+def tuvo_consulta_por_conducto(db: Session, pacientes: list) -> bool:
+    """True si alguno de esos pacientes ya tuvo una consulta por conducto.
+
+    Cuenta si el turno ya paso y no fue cancelado ni ausente. No se exige
+    "completed": recepcion no siempre marca los turnos atendidos.
+    """
+    ids = [p.id for p in pacientes or []]
+    if not ids:
+        return False
+    previos = (
+        db.query(Appointment)
+        .filter(
+            Appointment.patient_id.in_(ids),
+            Appointment.start_time <= datetime.now(),
+            Appointment.status.notin_([AppointmentStatus.cancelled, AppointmentStatus.no_show]),
+        )
+        .all()
+    )
+    return any(
+        _sin_acentos(a.reason or "") == _sin_acentos(MOTIVO_CONSULTA_CONDUCTO)
+        for a in previos
+    )
 
 
 DIAS_DE_LA_SEMANA = ["lunes", "martes", "miércoles", "jueves", "viernes",

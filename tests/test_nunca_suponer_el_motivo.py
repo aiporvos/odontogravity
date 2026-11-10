@@ -76,16 +76,15 @@ def test_entiende_que_sacarse_una_muela_es_una_extraccion(cliente):
     assert d["duracion"] == 30
 
 
-def test_devuelve_el_nombre_canonico(cliente):
-    """Así el turno queda guardado siempre con el mismo texto.
-
-    'matar el nervio' ya implica realizar el tratamiento (60'), no una
-    consulta de evaluación: no hace falta la pregunta de aclaración.
+def test_matar_el_nervio_sin_consulta_previa_va_a_consulta(cliente):
+    """'matar el nervio' es realizar el tratamiento (60'), pero desde el
+    10/11/2026 el tratamiento solo se da despues de la consulta por conducto
+    (30'): sin esa consulta en el sistema, se rechaza y se ofrece la consulta.
     """
+    from backend.services.appointment_service import RAZON_SIN_CONSULTA_PREVIA
     d = _resolver(cliente, "me tienen que matar el nervio", ["me tienen que matar el nervio"])
-    assert d["ok"] is True
-    assert d["motivo"] == "Conducto"
-    assert d["duracion"] == 60
+    assert d["ok"] is False
+    assert d["razon"] == RAZON_SIN_CONSULTA_PREVIA
 
 
 def test_conducto_a_secas_exige_aclaracion(cliente):

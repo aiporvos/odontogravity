@@ -72,7 +72,9 @@ def _motivo_dicho_por_el_paciente(valor: str):
     try:
         r = httpx.post(
             f"{API_BASE}/api/bot/resolver-motivo",
-            json={"motivo": valor, "dichos": list(_dichos_por_el_paciente.get())},
+            json={"motivo": valor, "dichos": list(_dichos_por_el_paciente.get()),
+                  # Para verificar si ya tuvo la consulta por conducto.
+                  "telefono": _requester_phone.get()},
             headers=HEADERS, timeout=15,
         )
         r.raise_for_status()
@@ -1420,17 +1422,23 @@ def recordar_dato(campo: str, valor: str) -> str:
                 # La pregunta de conducto va con dos botones: una respuesta
                 # de un toque en vez de texto libre que despues hay que
                 # interpretar. El texto del boton se resuelve por codigo.
-                if "conducto" in razon.lower() and "30" in razon:
-                    from backend.services.appointment_service import (
-                        BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO,
-                    )
+                from backend.services.appointment_service import (
+                    BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO,
+                    RAZON_SIN_CONSULTA_PREVIA,
+                )
+                if razon == RAZON_SIN_CONSULTA_PREVIA:
+                    # Dijo que ya la hizo y no figura: solo se le ofrece la
+                    # consulta. Volver a mostrar "Ya hice la consulta" lo
+                    # dejaria dando vueltas.
+                    set_opciones_ofrecidas([BOTON_CONSULTA_CONDUCTO], siempre=True, tipo="botones")
+                elif "conducto" in razon.lower() and "30" in razon:
                     set_opciones_ofrecidas(
                         [BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO],
                         siempre=True, tipo="botones",
                     )
                     razon += (
-                        " Le estás mostrando dos botones (Consulta 30 min / "
-                        "Tratamiento 1 hora): hacé la pregunta en UNA frase corta."
+                        f" Le estás mostrando dos botones ({BOTON_CONSULTA_CONDUCTO} / "
+                        f"{BOTON_TRATAMIENTO_CONDUCTO}): mandá el texto tal cual, sin agregar otra pregunta."
                     )
                 return f"❌ {razon}"
             return (
@@ -1512,9 +1520,9 @@ def pregunta_por_lo_que_falta(estado: dict | None, dichos: list[str] | None = No
             from backend.services.appointment_service import (
                 BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO,
             )
+            from backend.services.appointment_service import PREGUNTA_CONDUCTO_PACIENTE
             return (
-                "Para el conducto: ¿es una consulta (30 min, por ejemplo si venís "
-                "derivado) o ya el tratamiento (1 hora)?",
+                PREGUNTA_CONDUCTO_PACIENTE,
                 {"opciones": [BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO],
                  "siempre": True, "tipo": "botones"},
             )
