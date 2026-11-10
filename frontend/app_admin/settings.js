@@ -182,7 +182,24 @@ Router.register('settings', async (container) => {
                         <h4 style="margin-bottom:.8rem;">OpenAI Config</h4>
                         <div class="form-group">
                             <label>Modelo</label>
-                            <input type="text" name="OPENAI_MODEL" value="${getConfig('OPENAI_MODEL') || 'gpt-4o-mini'}" placeholder="gpt-4o-mini">
+                            ${(() => {
+                                // Modelos disponibles con la clave del consultorio (verificados el 10/11/2026).
+                                // Si el guardado no está en la lista, se agrega igual para no perderlo.
+                                const modelos = [
+                                    ['gpt-4.1-mini', 'gpt-4.1-mini · Recomendado (el mejor en las pruebas)'],
+                                    ['gpt-4o-mini', 'gpt-4o-mini · El más económico'],
+                                    ['gpt-4.1', 'gpt-4.1 · Más preciso, más caro'],
+                                    ['gpt-5.4-nano', 'gpt-5.4-nano · Muy económico, menos preciso'],
+                                    ['gpt-5.4-mini', 'gpt-5.4-mini · Razona más, más lento'],
+                                    ['gpt-5.4', 'gpt-5.4 · Muy preciso, caro'],
+                                    ['gpt-5.5', 'gpt-5.5 · El más potente, el más caro'],
+                                ];
+                                const actual = getConfig('OPENAI_MODEL') || 'gpt-4o-mini';
+                                if (!modelos.some(([v]) => v === actual)) modelos.push([actual, `${actual} · actual`]);
+                                return `<select name="OPENAI_MODEL" class="form-control">${modelos.map(([v, t]) =>
+                                    `<option value="${UI.escape(v)}" ${v === actual ? 'selected' : ''}>${UI.escape(t)}</option>`).join('')}</select>`;
+                            })()}
+                            <small style="color:var(--fg-muted);">El cambio se aplica al próximo mensaje que reciba el bot.</small>
                         </div>
                         <div class="form-group">
                             <label>API Key</label>

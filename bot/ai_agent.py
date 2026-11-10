@@ -1197,6 +1197,19 @@ def clinica_abierta_ahora(db_now) -> bool:
         db.close()
 
 
+# ── Parámetros según el modelo ───────────────────────────────────────────────
+
+def _parametros_modelo(model: str) -> dict:
+    """Los gpt-5.x y los o-series no aceptan temperature ni max_tokens: piden
+    max_completion_tokens, y con margen porque el razonamiento también consume
+    de ese tope. El resto (gpt-4o, gpt-4.1, Gemini, Llama...) sigue igual.
+    El modelo se elige desde el panel, así que esto tiene que andar con todos."""
+    nombre = (model or "").split("/")[-1].lower()
+    if nombre.startswith(("gpt-5", "o1", "o3", "o4")):
+        return {"max_completion_tokens": 4000}
+    return {"temperature": 0.3, "max_tokens": 1000}
+
+
 # ── Provider client builder ──────────────────────────────────────────────────
 
 def _build_client(provider: str):
@@ -2004,8 +2017,7 @@ def chat(user_message: str, history: list[dict] | None = None,
                     messages=conv,
                     tools=TOOL_DEFINITIONS,
                     tool_choice="auto",
-                    temperature=0.3,
-                    max_tokens=1000,
+                    **_parametros_modelo(model),
                 )
                 _registrar_uso(response, f"ronda {round_num + 1}/{MAX_TOOL_ROUNDS}")
 
@@ -2118,8 +2130,7 @@ def chat(user_message: str, history: list[dict] | None = None,
             response = client.chat.completions.create(
                 model=model,
                 messages=conv,
-                temperature=0.3,
-                max_tokens=1000,
+                **_parametros_modelo(model),
             )
             _registrar_uso(response, "cierre sin tools")
             final = response.choices[0].message.content or ""
