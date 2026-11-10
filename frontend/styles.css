@@ -2181,12 +2181,22 @@ tbody tr:hover { background: var(--primary-light); }
 
 /* Formularios */
 .form-group label { color: var(--slate-600); font-weight: 600; font-size: .86rem; }
+/* Texto de todos los campos con el color del tema: sin esto el navegador los
+   pinta negros y en modo oscuro no se leen (horarios, fechas, filtros). */
+:root { color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { color-scheme: dark; } }
+input, select, textarea { color: var(--fg); }
+input::placeholder, textarea::placeholder { color: var(--fg-faint); opacity: 1; }
+select option { background: var(--bg-surface); color: var(--fg); }
+
 .form-group input, .form-group select, .form-group textarea,
 .form-control {
     border: 1px solid var(--border-strong);
     border-radius: var(--radius);
     min-height: 42px;
+    padding: .55rem .8rem;
     background: var(--bg-surface);
+    color: var(--fg);
 }
 .form-group input:hover, .form-group select:hover, .form-group textarea:hover { border-color: var(--fg-faint); }
 .form-group input:focus, .form-group select:focus, .form-group textarea:focus,
