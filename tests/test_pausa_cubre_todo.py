@@ -81,3 +81,24 @@ def test_el_aviso_de_archivo_no_soportado_respeta_la_pausa(db):
     assert bot_silenciado(JID) is True, (
         "El aviso de archivo no soportado se seguiría enviando"
     )
+
+
+async def test_con_el_bot_pausado_el_audio_no_se_procesa(db, monkeypatch):
+    """Ni descarga ni OpenAI ni historial: el audio no sale del sistema."""
+    from unittest.mock import AsyncMock
+
+    from backend.models.chat_session import ChatMessage
+    from backend.routers import evolution_router as er
+
+    db.add(AppConfig(key="BOT_IS_ACTIVE", value="false"))
+    db.commit()
+    transcribir = AsyncMock(return_value="hola")
+    enviar = AsyncMock()
+    monkeypatch.setattr(er, "transcribe_audio_url", transcribir)
+    monkeypatch.setattr(er, "send_whatsapp_message", enviar)
+
+    await er.handle_audio_message(JID, "https://audio")
+
+    transcribir.assert_not_called()
+    enviar.assert_not_called()
+    assert db.query(ChatMessage).count() == 0

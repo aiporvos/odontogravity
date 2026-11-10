@@ -1219,6 +1219,12 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             db.close()
 
 async def handle_audio_message(remote_jid: str, url: str):
+    # Con el bot pausado el audio no se descarga, no va a OpenAI ni se guarda.
+    if (get_config("BOT_IS_ACTIVE", "true") or "true").strip().lower() == "false":
+        logger.info("⏸️ Bot pausado (global): audio de %s sin procesar.",
+                    ofuscar_telefono(remote_jid))
+        return
+
     text = await transcribe_audio_url(url)
     if text:
         # Tambien por el agrupador: un audio seguido de un texto que lo
