@@ -1423,6 +1423,13 @@ def chat(user_message: str, history: list[dict] | None = None,
                         args = {}
                     tool_result = execute_tool(tc.function.name, args)
                     resultados_tools.append(tool_result)
+                    if tc.function.name in (
+                        "agendar_turno", "cancelar_turno", "reprogramar_turno",
+                    ) and tool_result.startswith("✅"):
+                        # La agenda cambió: el webhook manda esta respuesta
+                        # aunque el paciente haya escrito de nuevo mientras tanto.
+                        set_estado_conversacion(
+                            {**get_estado_conversacion(), "accion_hecha": True})
                     if tc.function.name == "agendar_turno" and tool_result.startswith("✅"):
                         agendo_de_verdad = True
                     if tc.function.name in (
@@ -1502,7 +1509,6 @@ def chat(user_message: str, history: list[dict] | None = None,
             logger.error("AI_AGENT -> Falló OpenAI (%s): %s", model, e)
 
     return (
-        "No pudimos procesar tu solicitud automáticamente debido a un "
-        "inconveniente técnico con nuestra Inteligencia Artificial. "
-        "Un agente se pondrá en contacto a la brevedad."
+        "Perdón, tuve un problema para procesar tu mensaje. 🙏 Probá de nuevo "
+        f"en unos minutos o llamá al consultorio al *{telefono_consultorio()}*."
     ), None, get_estado_conversacion()

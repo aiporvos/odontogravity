@@ -306,13 +306,18 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
         t["repeticiones"] = 0
 
     if t.get("terminado"):
-        estado = _cortar_flujo(estado)
+        # Pedido cerrado: el siguiente arranca limpio. Si quedaran el motivo o
+        # el día, el próximo turno (o el agente general) los heredaba.
+        estado = {k: v for k, v in _cortar_flujo(estado).items()
+                  if k not in ("motivo", "fecha_hora", "paciente")}
+        if t.get("agendado"):
+            estado["accion_hecha"] = True
     else:
         estado[CLAVE] = t
-    # Compatibilidad con el agente general, que lee estas claves del estado.
-    for k in ("motivo", "obra_social"):
-        if t.get(k):
-            estado[k] = t[k]
+        # Compatibilidad con el agente general, que lee estas claves del estado.
+        for k in ("motivo", "obra_social"):
+            if t.get(k):
+                estado[k] = t[k]
     if not history:
         nombre = t.get("ficha_nombre")
         texto = f"¡{_saludo().capitalize()}{', ' + nombre if nombre else ''}! 😊 {texto}"
@@ -748,6 +753,7 @@ def _confirmacion(t: dict, d: dict) -> str:
 def _agendar(t: dict, telefono: str):
     estado_http, d = _alta(t, t["hora"], telefono)
     if estado_http == 200:
+        t["agendado"] = True
         return _confirmacion(t, d), None
 
     detalle = str(d.get("detail") or "")

@@ -127,6 +127,8 @@ def test_conocido_para_si_mismo(consultorio, paciente, monkeypatch):
     (turno,) = _turnos(consultorio)
     assert turno.patient_id == paciente.id and turno.reason == "Extracción"
     assert flujo_turno.CLAVE not in c.estado
+    # Pedido cerrado: no deja el motivo para el próximo y avisa que agendó.
+    assert "motivo" not in c.estado and c.estado.get("accion_hecha") is True
 
 
 # ── Número nuevo: el "mío" que terminó buscado como obra social ─────────────

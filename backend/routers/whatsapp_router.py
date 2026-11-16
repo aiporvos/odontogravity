@@ -1073,6 +1073,13 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
 
             history = load_history(db, session.id)
 
+            # Sin mensajes en la ventana es otra conversación: los datos de la
+            # anterior (motivo, día, para quién, un turno a medio sacar) no se
+            # arrastran. Antes el historial vencía a las 6 h y el estado nunca,
+            # así que el paciente volvía a la semana y el bot seguía el pedido viejo.
+            if not history and session.context_data:
+                session.context_data = None
+
             # El historial guarda cada parte tal como la escribió la persona;
             # al modelo se le pasa el conjunto. Si se guardara solo el texto
             # unido, la conversación quedaría registrada distinto de como pasó.
@@ -1110,24 +1117,34 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
                 await send_whatsapp_message(remote_jid, response)
                 return
 
+            # Un cierre no reabre nada ni llama a la IA. Pero "ok" o "dale"
+            # también son la respuesta a una pregunta del bot: ahí NO es un
+            # cierre. Antes se llamaba igual al modelo (que podía agendar) y
+            # después se tapaba la respuesta con "¡De nada!": la confirmación
+            # del turno se perdía.
+            estado_previo = _cargar_estado(session)
+            ultima_del_bot = next(
+                (m["content"] for m in reversed(history) if m["role"] == "assistant"), "")
+            from bot.flujo_turno import CLAVE as _CLAVE_TURNO
+            if history and es_solo_un_cierre(text) and (
+                "graci" in text.lower()
+                or (_CLAVE_TURNO not in estado_previo and "?" not in ultima_del_bot)
+            ):
+                response = "¡De nada! Cualquier cosa, escribime. 😊"
+                save_message(db, session.id, MessageRole.assistant, response)
+                await send_whatsapp_message(remote_jid, response)
+                return
+
             logger.info(f"🧠 Consultando a la IA para {remote_jid}...")
             # Identidad de la conversación: número real de WhatsApp del remitente.
             # Sirve para que el backend verifique que el DNI pertenece a quien escribe.
             requester_phone = normalize_to_e164(remote_jid)
             # chat is sync, run in executor to not block event loop
             loop = asyncio.get_event_loop()
-            estado_previo = _cargar_estado(session)
             response, opciones, estado_nuevo = await loop.run_in_executor(
                 None, chat, text, history, requester_phone, estado_previo
             )
             logger.info(f"🤖 IA respondió ({len(response)} caracteres)")
-
-            # 0) Un cierre no reabre nada. Si el paciente solo agradeció o
-            # acusó recibo, se responde corto y no se consulta ninguna
-            # herramienta ni se vuelve a enumerar el turno.
-            if es_solo_un_cierre(text) and history:
-                response = "¡De nada! Cualquier cosa, escribime. 😊"
-                opciones = None
 
             # 1) Si la charla ya venía empezada, no se vuelve a presentar.
             if history:
@@ -1160,7 +1177,6 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # paso esta y tiene su propio limite de intentos. El rescate
             # cambiaba la respuesta por detras y lo dejaba desincronizado
             # (simulacion 16/11: "Tengo obra social" terminaba buscado como OS).
-            from bot.flujo_turno import CLAVE as _CLAVE_TURNO
             if _CLAVE_TURNO in estado_nuevo or _CLAVE_TURNO in (estado_previo or {}):
                 accion, rescate, botones = None, None, None
             else:
@@ -1181,6 +1197,9 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
                 response, opciones = _mensaje_llamar("loop"), None
                 pausar_despues_de_enviar = True
 
+            # Si en esta vuelta se agendó, canceló o movió un turno, la
+            # respuesta sale sí o sí (ver el chequeo de versión más abajo).
+            accion_hecha = estado_nuevo.pop("accion_hecha", False)
             estado_nuevo[CLAVE_ULTIMAS_OPCIONES] = _firma_opciones(opciones)
             _guardar_estado(db, session, estado_nuevo)
 
@@ -1202,7 +1221,9 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # Llegó otro mensaje mientras se generaba: esta respuesta contesta
             # algo que la persona ya corrigió ("11" / "perdón, 12"). La descarta
             # el lote nuevo, que sí tiene el mensaje completo.
-            if version_actual(remote_jid) != version:
+            # Salvo que ya se haya hecho algo en la agenda: esa confirmación no
+            # se puede perder, el turno existe.
+            if version_actual(remote_jid) != version and not accion_hecha:
                 logger.info(
                     "↩️ %s escribió de nuevo mientras se generaba la respuesta: "
                     "se descarta la vieja.", ofuscar_telefono(remote_jid),
@@ -1225,11 +1246,12 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # ANTES de llegar al chequeo de pausa, este mensaje se colaba igual
             # con el bot apagado.
             if not bot_silenciado(remote_jid):
+                from bot.tools.appointment_tools import telefono_consultorio
                 await send_whatsapp_message(
                     remote_jid,
-                    "Lo siento, tuve un problema interno al procesar tu mensaje. "
-                    "Por favor, avisale al administrador que revise la configuración "
-                    "de la Inteligencia Artificial (API Keys o Modelos).",
+                    "Perdón, tuve un problema para procesar tu mensaje. 🙏 Probá de "
+                    "nuevo en unos minutos o llamá al consultorio al "
+                    f"*{telefono_consultorio()}*.",
                 )
         finally:
             db.close()
