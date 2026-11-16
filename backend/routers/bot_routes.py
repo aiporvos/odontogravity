@@ -958,4 +958,5 @@ def bot_get_availability(data: BotAvailabilityRequest, db: Session = Depends(get
     return get_available_slots(db, target_date, sede_efectiva(db, data.location), data.reason,
                               data.obra_social,
                               preferencia_horaria=data.preferencia_horaria,
-                              profesional_pedido=data.profesional_pedido)
+                              profesional_pedido=data.profesional_pedido,
+                              eligio_fecha=bool(data.date))

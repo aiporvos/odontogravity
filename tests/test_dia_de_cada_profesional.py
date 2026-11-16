@@ -151,3 +151,34 @@ def test_lo_que_si_hace_se_busca_normal(db, clinica, grillas, silvestro, murad):
     r = get_available_slots(db, _proximo(0).date().isoformat(), "San Rafael",
                             "Ortodoncia", profesional_pedido="Murad")
     assert "Murad" in (r.get("professional") or ""), r
+
+
+# ── Sin día pedido no se cuenta ningún día salteado ───────────────────────
+# Captura real del 15/11/2026, 22:44 (domingo): el paciente no había dicho
+# ningún día y el bot le contestó "el domingo 15 de noviembre no hay nadie
+# disponible para Consulta por conducto. Tengo turno el lunes 30...". El
+# domingo lo puso el sistema (busca desde hoy), no el paciente.
+
+def test_sin_dia_pedido_no_menciona_el_dia_de_hoy(db, clinica, grillas, murad):
+    from backend.services.appointment_service import get_available_slots
+
+    domingo = _proximo(6).date().isoformat()
+    r = get_available_slots(db, domingo, "San Rafael", "Consulta",
+                            profesional_pedido="Murad", eligio_fecha=False)
+
+    assert r["available_slots"], "Debería encontrar el primer día con lugar"
+    assert r["movido"] is False
+    assert r["motivo_salto"] is None
+    assert "domingo" not in (r["fecha_texto"] or "")
+
+
+def test_si_pidio_el_domingo_se_le_dice(db, clinica, grillas, murad):
+    """Si el paciente SÍ pidió ese día, explicarle por qué no sigue siendo útil."""
+    from backend.services.appointment_service import get_available_slots
+
+    domingo = _proximo(6).date().isoformat()
+    r = get_available_slots(db, domingo, "San Rafael", "Consulta",
+                            profesional_pedido="Murad")
+
+    assert r["movido"] is True
+    assert "domingo" in (r["motivo_salto"] or "")

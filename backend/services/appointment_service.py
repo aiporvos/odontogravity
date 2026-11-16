@@ -1576,11 +1576,16 @@ MAX_DIAS_BUSQUEDA = 28
 def get_available_slots(db: Session, target_date: str, location: str, reason: str,
                         obra_social: str = "Particular", recursive_depth=0,
                         fecha_pedida=None, motivo_salto=None, preferencia_horaria=None,
-                        profesional_pedido=None):
+                        profesional_pedido=None, eligio_fecha=True):
     """Calculate free slots for a given date and location based on clinic schedule.
 
     fecha_pedida y motivo_salto se arrastran entre llamadas recursivas para poder
     contarle al paciente que el dia que pidio no estaba y por que.
+
+    eligio_fecha=False: el paciente no pidio ningun dia y se busca desde hoy.
+    Ahi no hay "dia pedido" que explicar: se ofrece el primero con lugar. Sin
+    esto, un domingo a la noche el bot decia "el domingo 15 no hay nadie
+    disponible" a quien nunca habia pedido el domingo.
     """
     clinic_now = get_clinic_now()
     try:
@@ -1600,11 +1605,11 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         return get_available_slots(
             db, (day + timedelta(days=1)).isoformat(), location, reason, obra_social,
             recursive_depth + 1, fecha_pedida, motivo_salto or motivo, preferencia_horaria,
-            profesional_pedido,
+            profesional_pedido, eligio_fecha,
         )
 
     def respuesta(slots, mensaje=None, profesional=None):
-        movido = day != fecha_pedida
+        movido = eligio_fecha and day != fecha_pedida
         return {
             "date": str(day),
             "fecha_texto": fecha_en_palabras(day),
