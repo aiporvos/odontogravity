@@ -54,6 +54,10 @@ CASOS = [
     ("sí", "¿Seguís atendiéndote como *particular*?", {"respuesta_si_no": "si", "obra_social": None}),
     ("no, ahora tengo OSDE", "¿Seguís atendiéndote como *particular*?",
      {"respuesta_si_no": "no", "obra_social": "OSDE"}),
+    ("Soy Nicolás Vega, tengo brackets y necesito un control mensual. Me recomendaron al Dr. Silvestro.", "",
+     {"motivo": "Ortodoncia", "profesional": "Silvestro"}),
+    ("Quiero pedir un turno para mi hijo Tomás, de 8 años, porque le duele un diente.", "",
+     {"motivo": "Odontopediatría", "para_quien": "otra_persona", "nombre": "Tomás"}),
 ]
 
 
