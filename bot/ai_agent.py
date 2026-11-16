@@ -791,7 +791,7 @@ def chat(user_message: str, history: list[dict] | None = None,
     forzadas = []
     # Toco un boton de la pregunta de conducto: el motivo queda decidido por
     # codigo. El modelo solo tiene que seguir (horarios), no interpretarlo.
-    motivo_boton = motivo_por_boton_conducto(user_message)
+    motivo_boton = motivo_por_boton_conducto(user_message, respuestas_bot[-1] if respuestas_bot else "")
     if motivo_boton:
         from backend.services.appointment_service import MOTIVO_TRATAMIENTO_CONDUCTO
         from bot.tools.appointment_tools import _motivo_dicho_por_el_paciente
@@ -803,9 +803,15 @@ def chat(user_message: str, history: list[dict] | None = None,
             if ok:
                 motivo_boton = normalizado
             else:
-                motivo_boton = None
-                from backend.services.appointment_service import BOTON_CONSULTA_CONDUCTO
+                # No figura la consulta: se le dice por codigo, sin pasar por
+                # el modelo (lo parafraseaba hasta perder el "no la encuentro").
+                from backend.services.appointment_service import (
+                    BOTON_CONSULTA_CONDUCTO, RAZON_SIN_CONSULTA_PREVIA, TEXTO_SIN_CONSULTA_PREVIA,
+                )
                 _botones_conducto([BOTON_CONSULTA_CONDUCTO], siempre=True, tipo="botones")
+                if razon == RAZON_SIN_CONSULTA_PREVIA:
+                    return TEXTO_SIN_CONSULTA_PREVIA, tomar_opciones_ofrecidas(), get_estado_conversacion()
+                motivo_boton = None
                 forzadas.append(razon or "No se pudo verificar la consulta por conducto.")
     if motivo_boton:
         estado_ahora = {**estado_ahora, "motivo": motivo_boton}

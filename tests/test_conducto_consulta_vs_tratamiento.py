@@ -316,3 +316,58 @@ def test_si_el_modelo_ya_lo_dijo_bien_no_se_toca(monkeypatch):
     texto, _, _ = ai_agent.chat("si", [], "5492604046245", {})
 
     assert texto == bien
+
+
+# ── Prueba real 15/11 (2): "si" escrito a mano, el modelo ni llamó herramientas ─
+
+def _charla_conducto(monkeypatch, respuesta, verificacion):
+    from bot import ai_agent
+    from bot.tools import appointment_tools as tools
+    from backend.services.appointment_service import PREGUNTA_CONDUCTO_PACIENTE
+    from tests.test_no_confirmar_lo_que_no_se_hizo import _Cliente, _Mensaje
+
+    llamadas = []
+    monkeypatch.setattr(tools, "_motivo_dicho_por_el_paciente",
+                        lambda v: (llamadas.append(v), verificacion)[1])
+    monkeypatch.setattr(ai_agent, "_build_client",
+                        lambda: (_Cliente([_Mensaje("¿Qué día te vendría bien?")]), "modelo-de-prueba"))
+    monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
+    history = [
+        {"role": "user", "content": "me das un turno para un tratamiento de conducto??"},
+        {"role": "assistant", "content": PREGUNTA_CONDUCTO_PACIENTE},
+    ]
+    texto, opciones, estado = ai_agent.chat(respuesta, history, "5492604046245", {})
+    return texto, opciones, estado, llamadas
+
+
+@pytest.mark.parametrize("respuesta", ["si", "Sí", "ya la hice", "si ya"])
+def test_si_escrito_sin_consulta_registrada(monkeypatch, respuesta):
+    from backend.services.appointment_service import (
+        RAZON_SIN_CONSULTA_PREVIA, TEXTO_SIN_CONSULTA_PREVIA, BOTON_CONSULTA_CONDUCTO,
+        MOTIVO_TRATAMIENTO_CONDUCTO,
+    )
+    texto, opciones, _, llamadas = _charla_conducto(
+        monkeypatch, respuesta, (False, None, RAZON_SIN_CONSULTA_PREVIA))
+    assert llamadas == [MOTIVO_TRATAMIENTO_CONDUCTO], "Tiene que verificar la consulta previa"
+    assert texto == TEXTO_SIN_CONSULTA_PREVIA
+    assert opciones and opciones.get("opciones") == [BOTON_CONSULTA_CONDUCTO]
+
+
+def test_si_escrito_con_consulta_registrada_da_una_hora(monkeypatch):
+    from backend.services.appointment_service import MOTIVO_TRATAMIENTO_CONDUCTO
+    _, _, estado, _ = _charla_conducto(
+        monkeypatch, "si", (True, MOTIVO_TRATAMIENTO_CONDUCTO, None))
+    assert estado.get("motivo") == MOTIVO_TRATAMIENTO_CONDUCTO
+
+
+@pytest.mark.parametrize("respuesta", ["no", "todavía no", "aun no"])
+def test_no_escrito_va_a_la_consulta(monkeypatch, respuesta):
+    from backend.services.appointment_service import MOTIVO_CONSULTA_CONDUCTO
+    _, _, estado, llamadas = _charla_conducto(monkeypatch, respuesta, (True, None, None))
+    assert estado.get("motivo") == MOTIVO_CONSULTA_CONDUCTO
+    assert llamadas == [], "La consulta de 30' no necesita verificar nada"
+
+
+def test_un_si_suelto_sin_la_pregunta_no_decide_nada():
+    from bot.tools.appointment_tools import motivo_por_boton_conducto
+    assert motivo_por_boton_conducto("si", "¿Tenés obra social?") is None

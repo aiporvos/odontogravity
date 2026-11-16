@@ -1470,21 +1470,32 @@ def recordar_dato(campo: str, valor: str) -> str:
 _estado_conversacion: contextvars.ContextVar = contextvars.ContextVar("estado_conv", default=None)
 
 
-def motivo_por_boton_conducto(texto: str) -> str | None:
+def motivo_por_boton_conducto(texto: str, ultima_del_bot: str = "") -> str | None:
     """El motivo que corresponde si el paciente toco un boton de conducto.
 
-    Solo el texto exacto del boton: el texto libre ("consulta", "una hora")
-    lo interpreta el backend en resolver-motivo, con el contexto de la charla.
+    El texto exacto del boton, o una respuesta corta ("si", "no", "ya la
+    hice", "todavia no") cuando lo ultimo que pregunto el bot fue justamente
+    "¿Ya hiciste esa consulta con nosotros?". Prueba real 15/11: el paciente
+    escribio "si" y el modelo no llamo a ninguna herramienta; paso a la consulta
+    de 30' como si no hubiera escuchado. Una respuesta asi no se le deja a la IA.
+    El resto del texto libre lo interpreta el backend en resolver-motivo.
     """
     from backend.services.appointment_service import (
         BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO,
         MOTIVO_CONSULTA_CONDUCTO, MOTIVO_TRATAMIENTO_CONDUCTO,
+        _respuesta_corta_a_la_pregunta,
     )
     t = " ".join((texto or "").strip().lower().split())
     if t == BOTON_TRATAMIENTO_CONDUCTO.lower():
         return MOTIVO_TRATAMIENTO_CONDUCTO
     if t == BOTON_CONSULTA_CONDUCTO.lower():
         return MOTIVO_CONSULTA_CONDUCTO
+    if "ya hiciste esa consulta" in (ultima_del_bot or "").lower():
+        minutos = _respuesta_corta_a_la_pregunta(texto)
+        if minutos == 60:
+            return MOTIVO_TRATAMIENTO_CONDUCTO
+        if minutos == 30:
+            return MOTIVO_CONSULTA_CONDUCTO
     return None
 
 
