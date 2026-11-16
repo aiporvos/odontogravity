@@ -387,3 +387,15 @@ def test_pide_un_profesional_que_no_hace_esa_practica(consultorio, paciente, mon
     assert "no la hace" in t and "Murad" in t and "con ella" in t
     t = c.dice("dale", respuesta_si_no="si")
     assert "Murad" in t and "horario" in t.lower()
+
+
+def test_el_nombre_se_pide_cada_vez_distinto(consultorio, monkeypatch):
+    """Prueba en producción 16/11: "un lunes" y "mío" repetían la misma frase."""
+    c = Charla(monkeypatch, TEL_NUEVO)
+    t1 = c.dice("quiero un turnopara una extraccion", intencion="sacar_turno", motivo="Extracción")
+    t2 = c.dice("un lunes", dia="un lunes", para_quien="yo")
+    t3 = c.dice("mio", para_quien="yo")
+    assert len({t1, t2, t3}) == 3
+    assert not any(t.startswith("Perdón") for t in (t2, t3))
+    t = c.dice("Ana Prueba", nombre="Ana", apellido="Prueba")
+    assert "obra social o particular" in t

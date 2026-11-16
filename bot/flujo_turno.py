@@ -581,14 +581,20 @@ def _falta_persona(t: dict):
 
     # Número nuevo, u otra persona: hacen falta nombre y apellido.
     if not t.get("nombre"):
-        ya_pregunto = t.get("esperando") == "nombre"
+        # Cada vez con otras palabras: repetir la misma frase suena a máquina
+        # trabada ("mío", "un lunes" no son un nombre, pero tampoco un error).
+        vez = t.get("veces_nombre", 0) if t.get("esperando") == "nombre" else 0
+        t["veces_nombre"] = vez + 1
         t["esperando"] = "nombre"
         if quien == "otra_persona":
-            return "¿Cómo se llama la persona que se va a atender? Nombre y apellido.", None
-        if ya_pregunto and quien == "yo":
-            # "mío", "para mí": ya se sabe que es para él, falta cómo se llama.
-            return "Dale 😊 ¿Cómo es tu nombre y apellido, así lo agendo a tu nombre?", None
-        return "¿A nombre de quién agendo el turno? Necesito nombre y apellido.", None
+            frases = ["¿Cómo se llama la persona que se va a atender? Nombre y apellido.",
+                      "¿Me pasás el nombre y apellido de quien se va a atender?",
+                      "Para reservarlo necesito su nombre y apellido, por ejemplo: *Ana Pérez*."]
+        else:
+            frases = ["¿A nombre de quién agendo el turno? Necesito nombre y apellido.",
+                      "Dale 😊 ¿Cómo es tu nombre y apellido, así lo agendo a tu nombre?",
+                      "Para reservarlo necesito tu nombre y apellido, por ejemplo: *Juan Pérez*."]
+        return frases[min(vez, len(frases) - 1)], None
     if not t.get("apellido"):
         t["esperando"] = "apellido"
         return f"¿Y el apellido de {t['nombre']}?", None
