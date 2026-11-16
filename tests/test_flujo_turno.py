@@ -137,7 +137,7 @@ def test_numero_nuevo_dice_mio(consultorio, monkeypatch):
     assert "nombre y apellido" in t
     t = c.dice("mio", para_quien="yo")
     assert "obra social" not in t.lower()
-    assert "tu nombre y apellido" in t
+    assert "tu nombre y apellido" in t and not t.startswith("Perdón")
     t = c.dice("Ana Pérez", nombre="Ana", apellido="Pérez")
     assert "obra social o particular" in t
     t = c.dice("Tengo obra social")

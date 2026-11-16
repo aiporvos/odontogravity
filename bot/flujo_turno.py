@@ -581,11 +581,13 @@ def _falta_persona(t: dict):
 
     # Número nuevo, u otra persona: hacen falta nombre y apellido.
     if not t.get("nombre"):
+        ya_pregunto = t.get("esperando") == "nombre"
         t["esperando"] = "nombre"
         if quien == "otra_persona":
             return "¿Cómo se llama la persona que se va a atender? Nombre y apellido.", None
-        if quien == "yo":
-            return "Perfecto. ¿Me decís tu nombre y apellido?", None
+        if ya_pregunto and quien == "yo":
+            # "mío", "para mí": ya se sabe que es para él, falta cómo se llama.
+            return "Dale 😊 ¿Cómo es tu nombre y apellido, así lo agendo a tu nombre?", None
         return "¿A nombre de quién agendo el turno? Necesito nombre y apellido.", None
     if not t.get("apellido"):
         t["esperando"] = "apellido"
