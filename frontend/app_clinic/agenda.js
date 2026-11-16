@@ -164,6 +164,13 @@ Router.register('agenda', async (container) => {
                 status: status,
             });
 
+            // Feriados: la agenda los muestra y no deja cargar turnos encima.
+            // Antes el día se veía como cualquier otro y recién el servidor
+            // rechazaba el turno al guardar.
+            AgendaPage._holidays = await API.getHolidays().catch(() => AgendaPage._holidays || []);
+            const feriado = iso => (AgendaPage._holidays || []).find(h => h.date === iso);
+            const avisoFeriado = h => h ? `<div class="agenda-feriado">📅 ${UI.escape(AgendaPage._holidayMsg(h))}</div>` : '';
+
             // Deteccion de conflictos: mismo profesional al mismo tiempo, o mas
             // turnos superpuestos que sillones tiene la sede. Antes solo miraba
             // "mismo profesional", asi que un sobreturno con OTRO profesional en
@@ -207,14 +214,15 @@ Router.register('agenda', async (container) => {
             const grouping = document.getElementById('agenda-grouping')?.value || 'chronological';
 
             if (state.view === 'day') {
+                const feriadoHoy = avisoFeriado(feriado(dateFrom.slice(0, 10)));
                 if (appointments.length === 0) {
-                    return pintar(`<div class="empty-state"><div class="empty-state-text">No hay turnos hoy</div></div>`);
+                    return pintar(feriadoHoy || `<div class="empty-state"><div class="empty-state-text">No hay turnos hoy</div></div>`);
                 }
 
                 // Show conflict banner if there are conflicts
-                let bannerHtml = '';
+                let bannerHtml = feriadoHoy;
                 if (conflictIds.size > 0) {
-                    bannerHtml = `
+                    bannerHtml += `
                         <div class="card" style="background:var(--danger-light); border-color:var(--danger); margin-bottom:1.5rem; padding: 1rem;">
                             <div style="display:flex; gap:1rem; align-items:center;">
                                 <div style="font-size:1.5rem;">⚠️</div>
@@ -346,9 +354,11 @@ Router.register('agenda', async (container) => {
                     const cur = new Date(startDate); cur.setDate(startDate.getDate() + i);
                     const iso = cur.toISOString().split('T')[0];
                     dayDates.push(iso);
+                    const f = feriado(iso);
                     hdrHtml += `<div class="wk-header-cell ${iso === today ? 'current-day' : ''}">
                         <div class="wk-day-name">${days[i]}</div>
                         <div class="wk-day-num">${cur.getDate()}</div>
+                        ${f ? `<div class="feriado-tag" title="${UI.escape(f.description || 'Feriado')}">Feriado</div>` : ''}
                     </div>`;
                 }
 
@@ -362,11 +372,14 @@ Router.register('agenda', async (container) => {
                 // Each day column
                 dayDates.forEach(iso => {
                     const dayAppts = appointments.filter(a => a.start_time.startsWith(iso));
+                    const esFeriado = !!feriado(iso);
                     let slotsHtml = '';
                     for (let h = START_HOUR; h < END_HOUR; h++) {
                         for (let m = 0; m < 60; m += 30) {
                             const t = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
-                            slotsHtml += `<div class="wk-slot ${m === 0 ? 'wk-slot-hour' : ''}" data-date="${iso}" data-time="${t}" ondblclick="AgendaPage.quickNew('${iso}','${t}')"></div>`;
+                            slotsHtml += esFeriado
+                                ? `<div class="wk-slot wk-slot-feriado ${m === 0 ? 'wk-slot-hour' : ''}" title="Feriado: la clínica está cerrada"></div>`
+                                : `<div class="wk-slot ${m === 0 ? 'wk-slot-hour' : ''}" data-date="${iso}" data-time="${t}" ondblclick="AgendaPage.quickNew('${iso}','${t}')"></div>`;
                         }
                     }
 
@@ -421,6 +434,7 @@ Router.register('agenda', async (container) => {
                     html += `
                         <div class="calendar-day-cell">
                             <div class="calendar-day-header ${iso === today ? 'current-day' : ''}">${d}</div>
+                            ${feriado(iso) ? `<div class="feriado-tag" title="${UI.escape(feriado(iso).description || 'Feriado')}">Feriado</div>` : ''}
                             ${dayAppts.slice(0, 4).map(a => {
                                 const icons = { pending:'⏳', confirmed:'✅', completed:'🏁', cancelled:'❌', no_show:'🚫' };
                                 const hasConflict = conflictIds.has(a.id);
