@@ -1232,7 +1232,11 @@ def chat(user_message: str, history: list[dict] | None = None,
                 # como alternativas y ni nombra el tratamiento ni los tiempos.
                 pidio_la_tool = any("Ya hiciste esa consulta" in (r or "")
                                     for r in resultados_tools)
-                if (pidio_la_tool or _pregunta_conducto_sin_resolver(texto)) and (
+                # Y SIEMPRE que haga la pregunta ("¿ya hiciste esa consulta?"),
+                # aunque la escriba bien: sale el texto fijo con los dos botones.
+                # Prueba real 15/11: vino pegada a un saludo y sin botones.
+                hace_la_pregunta = "ya hiciste esa consulta" in (texto or "").lower()
+                if hace_la_pregunta or (pidio_la_tool or _pregunta_conducto_sin_resolver(texto)) and (
                     "?" in texto and "30" not in texto
                     and any(p in texto.lower() for p in ("conducto", "derivad", "evaluaci"))
                 ):

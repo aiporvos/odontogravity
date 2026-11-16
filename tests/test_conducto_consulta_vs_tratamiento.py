@@ -371,3 +371,23 @@ def test_no_escrito_va_a_la_consulta(monkeypatch, respuesta):
 def test_un_si_suelto_sin_la_pregunta_no_decide_nada():
     from bot.tools.appointment_tools import motivo_por_boton_conducto
     assert motivo_por_boton_conducto("si", "¿Tenés obra social?") is None
+
+
+def test_la_pregunta_bien_escrita_igual_sale_fija_y_con_botones(monkeypatch):
+    """Prueba real 15/11: «Buenas noches, Claudio 😊. Veo que aún no has venido
+    a la clínica. Para el tratamiento de conducto primero... ¿Ya hiciste esa
+    consulta con nosotros?» salió sin botones."""
+    from bot import ai_agent
+    from backend.services.appointment_service import (
+        PREGUNTA_CONDUCTO_PACIENTE, BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO,
+    )
+    from tests.test_no_confirmar_lo_que_no_se_hizo import _Cliente, _Mensaje
+    modelo = ("Buenas noches, Claudio 😊. Veo que aún no has venido a la clínica. "
+              + PREGUNTA_CONDUCTO_PACIENTE)
+    monkeypatch.setattr(ai_agent, "_build_client",
+                        lambda: (_Cliente([_Mensaje(modelo)]), "modelo-de-prueba"))
+    monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
+    texto, opciones, _ = ai_agent.chat("me das un turno para un tratamiento de conducto??",
+                                       [], "5492604046245", {})
+    assert texto == PREGUNTA_CONDUCTO_PACIENTE
+    assert opciones and opciones.get("opciones") == [BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO]
