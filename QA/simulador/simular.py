@@ -4,11 +4,11 @@ Levanta el backend de verdad (FastAPI + bot) en esta máquina, sobre una base
 descartable con la configuración de producción y SIN pacientes reales. Los
 pacientes son otra IA con una personalidad y un objetivo; le escriben al bot
 por el webhook firmado, igual que YCloud. Lo que el bot "manda" a WhatsApp se
-intercepta: no sale nada. La única salida permitida es OpenRouter.
+intercepta: no sale nada. La única salida permitida es OpenAI.
 
 Uso (la clave entra por el entorno, nunca por argumento):
 
-    SIM_OPENROUTER_KEY=... .venv/bin/python QA/simulador/simular.py \
+    SIM_OPENAI_KEY=... .venv/bin/python QA/simulador/simular.py \
         --config ruta/config-produccion.json --personas ruta/personas.json \
         --salida ruta/resultados [--solo 01-extraccion-directa,02-...]
 """
@@ -37,23 +37,16 @@ SECRETO_WEBHOOK = secrets.token_hex(16)
 NUMERO_BOT = "5492604590071"
 NUMERO_AVISOS = "5492600000000"   # ADMIN_NOTIFY_NUMBERS falso
 PUERTO = 8765
-PROVEEDOR = os.getenv("SIM_PROVEEDOR", "openai")          # openai | openrouter
-if PROVEEDOR == "openai":
-    CLAVE = os.environ.get("SIM_OPENAI_KEY", "").strip()
-    URL_IA = "https://api.openai.com/v1"
-    MODELO_BOT = os.getenv("SIM_MODELO_BOT", "gpt-4o-mini")            # = producción
-    MODELO_PACIENTE = os.getenv("SIM_MODELO_PACIENTE", "gpt-4o-mini")
-    MODELO_JUEZ = os.getenv("SIM_MODELO_JUEZ", "gpt-4.1-mini")
-else:
-    CLAVE = os.environ.get("SIM_OPENROUTER_KEY", "").strip()
-    URL_IA = "https://openrouter.ai/api/v1"
-    MODELO_BOT = os.getenv("SIM_MODELO_BOT", "openai/gpt-4o-mini")
-    MODELO_PACIENTE = os.getenv("SIM_MODELO_PACIENTE", "google/gemini-2.5-flash")
-    MODELO_JUEZ = os.getenv("SIM_MODELO_JUEZ", "anthropic/claude-haiku-4.5")
+# El bot usa solo OpenAI; el simulador tambien.
+CLAVE = os.environ.get("SIM_OPENAI_KEY", "").strip()
+URL_IA = "https://api.openai.com/v1"
+MODELO_BOT = os.getenv("SIM_MODELO_BOT", "gpt-4o-mini")            # = producción
+MODELO_PACIENTE = os.getenv("SIM_MODELO_PACIENTE", "gpt-4o-mini")
+MODELO_JUEZ = os.getenv("SIM_MODELO_JUEZ", "gpt-4.1-mini")
 TOPE_USD = float(os.getenv("SIM_TOPE_USD", "1.5"))
 
 if not CLAVE:
-    sys.exit(f"Falta la clave de {PROVEEDOR} en el entorno.")
+    sys.exit("Falta SIM_OPENAI_KEY en el entorno.")
 if "test" not in URL_BASE_SIM.rsplit("/", 1)[-1]:
     sys.exit("La base de simulación tiene que llamarse con 'test': se borra entera.")
 
@@ -66,7 +59,7 @@ os.environ.update(
     YCLOUD_WEBHOOK_ENFORCE="true",
     YCLOUD_API_KEY="clave-falsa-simulador",
     YCLOUD_FROM_PHONE=NUMERO_BOT,
-    OPENAI_API_KEY="",
+    OPENAI_API_KEY=CLAVE,
     ALLOWED_ORIGINS="http://localhost",
     API_BASE_URL=f"http://127.0.0.1:{PUERTO}",
     PUBLIC_APP_URL="https://odobot.cluna.ar",
@@ -74,9 +67,9 @@ os.environ.update(
 
 import httpx  # noqa: E402
 
-# ── Salidas: YCloud interceptado, OpenRouter real, todo lo demás bloqueado ──
+# ── Salidas: YCloud interceptado, OpenAI real, todo lo demás bloqueado ──
 ENVIADOS: dict[str, list[dict]] = {}
-PERMITIDOS = {"127.0.0.1", "localhost", "openrouter.ai", "api.openai.com"}
+PERMITIDOS = {"127.0.0.1", "localhost", "api.openai.com"}
 
 # USD por millón de tokens (entrada, entrada cacheada, salida). Precios de lista.
 PRECIOS = {"gpt-4o-mini": (0.15, 0.075, 0.60), "gpt-4.1-mini": (0.40, 0.10, 1.60),
@@ -314,11 +307,9 @@ def preparar_base(config: dict, personas: dict):
     cfg = {
         "CHAIRS_PER_LOCATION": config["config_no_secreta"].get("CHAIRS_PER_LOCATION", "1"),
         "BOT_IS_ACTIVE": "true",
-        "AI_PROVIDER": PROVEEDOR, "AI_PROVIDER_2": "none", "AI_PROVIDER_3": "none",
-        ("OPENAI_API_KEY" if PROVEEDOR == "openai" else "OPENROUTER_API_KEY"): CLAVE,
-        ("OPENAI_MODEL" if PROVEEDOR == "openai" else "OPENROUTER_MODEL"): MODELO_BOT,
+        "OPENAI_MODEL": MODELO_BOT,
         "ADMIN_NOTIFY_NUMBERS": NUMERO_AVISOS,
-        "YCLOUD_API_KEY": "clave-falsa-simulador", "YCLOUD_FROM_PHONE": NUMERO_BOT,
+        "YCLOUD_FROM_PHONE": NUMERO_BOT,
         "PUBLIC_APP_URL": "https://odobot.cluna.ar",
     }
     for k, v in cfg.items():
@@ -643,13 +634,6 @@ async def _juzgar(ia, conv, transcript, cambios):
         return {"resultado": "?", "resumen": crudo[:300]}
 
 
-def _uso_openrouter():
-    if PROVEEDOR != "openrouter":
-        return None
-    r = httpx.get("https://openrouter.ai/api/v1/key", headers={"Authorization": f"Bearer {CLAVE}"}, timeout=20)
-    return (r.json().get("data") or {}).get("usage")
-
-
 async def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
@@ -665,7 +649,6 @@ async def main():
         convs = [c for c in convs if c["id"] in ids]
 
     preparar_base(config, personas)
-    uso_inicial = _uso_openrouter()
 
     import uvicorn
     from openai import AsyncOpenAI
@@ -717,20 +700,18 @@ async def main():
 
     final = foto_turnos()
     globales = chequeos_globales(final, config) + chequeos_de_profesional(final, config)
-    uso_final = _uso_openrouter()
     servidor.should_exit = True
     await tarea
 
     os.makedirs(args.salida, exist_ok=True)
     marca = datetime.now().strftime("%Y-%m-%d_%H%M")
     json.dump({"resultados": resultados, "chequeos_globales": globales, "agenda_final": final,
-               "costo_usd": GASTO["usd"] if PROVEEDOR == "openai" else (uso_final or 0) - (uso_inicial or 0),
+               "costo_usd": GASTO["usd"],
                "modelos": {"bot": MODELO_BOT, "paciente": MODELO_PACIENTE, "juez": MODELO_JUEZ}},
               open(os.path.join(args.salida, f"sim_{marca}.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=1)
     print("CHEQUEOS GLOBALES:", globales or "ninguno")
-    print(f"COSTO USD: {GASTO['usd']:.4f} en {GASTO['llamadas']} llamadas" if PROVEEDOR == "openai"
-          else f"COSTO USD: {((uso_final or 0) - (uso_inicial or 0)):.4f}")
+    print(f"COSTO USD: {GASTO['usd']:.4f} en {GASTO['llamadas']} llamadas")
     print("SALIDA:", os.path.join(args.salida, f"sim_{marca}.json"))
 
 

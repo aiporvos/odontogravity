@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from backend.models.config import AppConfig
-from backend.routers.evolution_router import bot_silenciado, get_or_create_session
+from backend.routers.whatsapp_router import bot_silenciado, get_or_create_session
 
 JID = "5492604305278@s.whatsapp.net"
 
@@ -60,7 +60,7 @@ def test_la_pausa_es_por_conversacion(db):
 
 def test_ante_un_error_responde_igual(db, monkeypatch):
     """Peor que responder de más es dejar al paciente sin ninguna respuesta."""
-    from backend.routers import evolution_router as er
+    from backend.routers import whatsapp_router as er
 
     def explota(*a, **k):
         raise RuntimeError("base caída")
@@ -88,7 +88,7 @@ async def test_con_el_bot_pausado_el_audio_no_se_procesa(db, monkeypatch):
     from unittest.mock import AsyncMock
 
     from backend.models.chat_session import ChatMessage
-    from backend.routers import evolution_router as er
+    from backend.routers import whatsapp_router as er
 
     db.add(AppConfig(key="BOT_IS_ACTIVE", value="false"))
     db.commit()

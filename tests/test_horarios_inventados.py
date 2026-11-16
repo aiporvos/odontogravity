@@ -39,7 +39,7 @@ def _correr(monkeypatch, texto, disponibilidad=None, estado=None):
             d.get("profesional"), d.get("fecha"), d.get("fecha_texto"), d.get("slots"))
 
     guion = [_Mensaje(texto)]
-    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (_Cliente(guion), "m"))
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (_Cliente(guion), "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "ok")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: estado or {})

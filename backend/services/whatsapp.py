@@ -8,18 +8,7 @@ from backend.models.config import AppConfig
 
 logger = logging.getLogger(__name__)
 
-def get_config(key: str, default: str = "") -> str:
-    """Helper to fetch config from DB AppConfig table or environment variables."""
-    db = SessionLocal()
-    try:
-        conf = db.query(AppConfig).filter(AppConfig.key == key).first()
-        if conf and conf.value:
-            return conf.value
-    except Exception as e:
-        logger.warning(f"Error fetching config '{key}' from database: {e}")
-    finally:
-        db.close()
-    return os.getenv(key, default)
+from backend.services.config import get_config
 
 def normalize_to_e164(number: str) -> str:
     """Normalizes phone number to strict E.164 format with '+' prefix for YCloud."""
@@ -75,33 +64,7 @@ async def send_whatsapp_message(number: str, text: str) -> bool:
     from_phone = get_config("YCLOUD_FROM_PHONE", "")
     
     if not api_key:
-        # Fallback to check if EVOLUTION config exists for compatibility
-        logger.warning("YCLOUD_API_KEY is not configured. Checking for Evolution API fallback...")
-        url_base = get_config("EVOLUTION_API_URL", "").rstrip("/")
-        evo_key = get_config("EVOLUTION_API_KEY", "")
-        instance = get_config("EVOLUTION_INSTANCE_ID", "")
-        
-        if url_base and evo_key and instance:
-            # Fallback legacy Evolution sending
-            url = f"{url_base}/message/sendText/{instance}"
-            headers = {
-                "apikey": evo_key,
-                "Content-Type": "application/json"
-            }
-            # Evolution uses number with JID suffix or plain
-            payload = {"number": number, "text": text}
-            async with httpx.AsyncClient() as client:
-                try:
-                    logger.info(f"📤 Fallback Evolution: Sending message to {number} via {url}")
-                    r = await client.post(url, json=payload, headers=headers)
-                    logger.info(f"📥 Fallback Evolution Response: {r.status_code}")
-                    r.raise_for_status()
-                except Exception as e:
-                    logger.error(f"❌ Fallback Evolution error: {e}")
-                    return False
-            return True
-        
-        logger.warning("❌ No WhatsApp configuration found (neither YCloud nor Evolution)!")
+        logger.warning("❌ YCLOUD_API_KEY sin configurar: no se puede enviar el mensaje.")
         return False
 
     # Prepare YCloud request

@@ -16,7 +16,7 @@ import asyncio
 
 import pytest
 
-from backend.routers import evolution_router as er
+from backend.routers import whatsapp_router as er
 
 
 @pytest.fixture(autouse=True)

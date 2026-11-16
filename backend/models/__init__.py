@@ -10,6 +10,7 @@ from backend.models.config import AppConfig
 from backend.models.schedule import ClinicSchedule, ProfessionalSchedule, ProfessionalTimeOff, ClinicHoliday
 from backend.models.tipo_consulta import TipoConsulta
 from backend.models.derivacion import Derivacion, EstadoDerivacion, MotivoDerivacion
+from backend.models.mensaje_procesado import MensajeProcesado
 
 __all__ = [
     "User", "Patient", "Professional", "Appointment",
@@ -18,4 +19,5 @@ __all__ = [
     "ClinicSchedule", "ProfessionalSchedule", "ProfessionalTimeOff", "ClinicHoliday",
     "TipoConsulta",
     "Derivacion", "EstadoDerivacion", "MotivoDerivacion",
+    "MensajeProcesado",
 ]

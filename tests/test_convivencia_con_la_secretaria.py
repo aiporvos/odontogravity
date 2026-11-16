@@ -14,7 +14,7 @@ desde la app llega como `whatsapp.smb.message.echoes`, que no estaba suscripto.
 from datetime import datetime, timedelta
 
 from backend.models.chat_session import ChatMessage, MessageRole
-from backend.routers.evolution_router import (
+from backend.routers.whatsapp_router import (
     _minutos_de_pausa, _pausar_por_intervencion_humana, get_or_create_session,
 )
 

@@ -15,7 +15,7 @@ import asyncio
 
 import pytest
 
-from backend.routers import evolution_router as er
+from backend.routers import whatsapp_router as er
 from bot.tools.appointment_tools import (
     set_opciones_ofrecidas, tomar_opciones_ofrecidas,
 )

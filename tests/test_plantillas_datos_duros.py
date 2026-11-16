@@ -20,7 +20,7 @@ def _correr(monkeypatch, guion, resultado_tool="ok"):
     monkeypatch.setattr(ai_agent, "reiniciar_disponibilidad", lambda: None)
     monkeypatch.setattr(ai_agent, "reiniciar_confirmacion_turno", lambda: None)
     monkeypatch.setattr(ai_agent, "_build_client",
-                        lambda p: (_Cliente(guion), "modelo-de-prueba"))
+                        lambda: (_Cliente(guion), "modelo-de-prueba"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: resultado_tool)
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
@@ -59,7 +59,7 @@ def test_confirmacion_sale_de_plantilla(monkeypatch):
             return "✅ ok"
         return "ok"
     monkeypatch.setattr(ai_agent, "_build_client",
-                        lambda p: (_Cliente(guion), "m"))
+                        lambda: (_Cliente(guion), "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", _tool)
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)

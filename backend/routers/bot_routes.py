@@ -588,15 +588,10 @@ async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(g
     db.commit()
 
     # Notificar a los admins (cada número por separado para que un fallo no bloquee al resto)
-    from backend.models.config import AppConfig
+    from backend.services.config import get_config
     from backend.services.whatsapp import send_whatsapp_message
-    import os
 
-    def get_val(key):
-        conf = db.query(AppConfig).filter(AppConfig.key == key).first()
-        return conf.value if conf and conf.value else os.getenv(key, "")
-
-    admin_numbers = get_val("ADMIN_NOTIFY_NUMBERS")
+    admin_numbers = get_config("ADMIN_NOTIFY_NUMBERS", db=db)
     if admin_numbers:
         numbers = [n.strip() for n in admin_numbers.split(",") if n.strip()]
         msg_text = (

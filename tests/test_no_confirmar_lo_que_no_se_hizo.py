@@ -70,7 +70,7 @@ def _correr(monkeypatch, guion, resultado_tool="✅ Turno agendado"):
     monkeypatch.setattr(ai_agent, "reiniciar_disponibilidad", lambda: None)
 
     monkeypatch.setattr(ai_agent, "_build_client",
-                        lambda p: (_Cliente(guion), "modelo-de-prueba"))
+                        lambda: (_Cliente(guion), "modelo-de-prueba"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: resultado_tool)
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: {})
@@ -119,7 +119,7 @@ def test_si_agendo_de_verdad_usa_plantilla_de_confirmacion(monkeypatch):
     monkeypatch.setattr(ai_agent, "reiniciar_disponibilidad", lambda: None)
     monkeypatch.setattr(ai_agent, "reiniciar_confirmacion_turno", lambda: None)
     monkeypatch.setattr(ai_agent, "_build_client",
-                        lambda p: (_Cliente(guion), "modelo-de-prueba"))
+                        lambda: (_Cliente(guion), "modelo-de-prueba"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "✅ Turno agendado")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
@@ -190,7 +190,7 @@ def test_si_agendo_sale_la_confirmacion_aunque_el_modelo_hable_de_otros_horarios
         tools.registrar_confirmacion_turno(confirmacion)
         return "✅ Turno agendado con Dra. Elena Murad"
 
-    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (_Cliente(guion), "modelo-de-prueba"))
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (_Cliente(guion), "modelo-de-prueba"))
     monkeypatch.setattr(ai_agent, "execute_tool", ejecutar)
     monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
     texto, _, _ = ai_agent.chat("18:00", [], "5492604046245", {"motivo": "Conducto", "obra_social": "Galeno"})

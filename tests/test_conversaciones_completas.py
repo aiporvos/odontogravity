@@ -14,7 +14,7 @@ día. Sin un arnés que recorra el diálogo entero, la única forma de saber si 
 anda es que Claudio lo pruebe con el teléfono.
 
 Esto es ese arnés. Cada test acá abajo es una conversación real, mensaje por
-mensaje, contra el proveedor configurado. Después de CADA respuesta se
+mensaje, contra OpenAI. Después de CADA respuesta se
 verifican las invariantes duras, y al final se verifica el objetivo.
 
 ## Cómo se corre
@@ -24,7 +24,7 @@ corriendo, porque las herramientas del bot van por HTTP contra él. Sin backend
 los tests se saltean con un mensaje que lo explica, en vez de dar resultados
 engañosos.
 
-    export OPENAI_API_KEY=sk-...        # o el proveedor que corresponda
+    export OPENAI_API_KEY=sk-...
     export API_BASE_URL=http://localhost:8000   # donde escuche el backend
     TEST_DATABASE_URL="postgresql://test:test@localhost:55432/dentibot_test" \\
         .venv/bin/python -m pytest tests/test_conversaciones_completas.py -v -s -m conversacion
@@ -63,8 +63,7 @@ TELEFONO = "+5492604590071"   # el mismo del fixture `paciente`
 
 def _hay_proveedor() -> bool:
     """Si no hay con qué hablar, estos tests no corren (no fallan: se saltean)."""
-    return any(os.getenv(k) for k in
-               ("OPENAI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"))
+    return bool(os.getenv("OPENAI_API_KEY"))
 
 
 def _backend_responde() -> bool:
@@ -95,8 +94,7 @@ def _backend_responde() -> bool:
 
 requiere_modelo = pytest.mark.skipif(
     not _hay_proveedor(),
-    reason="Sin API key de ningún proveedor: no se puede hablar con el modelo. "
-           "Exportá OPENAI_API_KEY (u OPENROUTER_API_KEY / GROQ_API_KEY).",
+    reason="Sin OPENAI_API_KEY no se puede hablar con el modelo.",
 )
 
 requiere_backend = pytest.mark.skipif(

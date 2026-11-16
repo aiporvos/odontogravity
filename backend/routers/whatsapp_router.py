@@ -1,4 +1,4 @@
-"""YCloud WhatsApp Router - WhatsApp integration."""
+"""Webhook y conversacion de WhatsApp (YCloud)."""
 import os
 import re
 import json
@@ -10,6 +10,7 @@ import httpx
 import asyncio
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Request, Depends, BackgroundTasks, HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from bot.ai_agent import chat
@@ -27,17 +28,7 @@ router = APIRouter(prefix="/api/whatsapp", tags=["WhatsApp"])
 # Global locks to prevent race conditions per user
 user_locks = {}
 
-def get_config(key: str, default: str = ""):
-    db = SessionLocal()
-    try:
-        conf = db.query(AppConfig).filter(AppConfig.key == key).first()
-        if conf and conf.value:
-            return conf.value
-    except Exception:
-        pass
-    finally:
-        db.close()
-    return os.getenv(key, default)
+from backend.services.config import get_config
 
 def get_or_create_session(db: Session, platform_user_id: str):
     session = db.query(ChatSession).filter(
@@ -235,20 +226,37 @@ def _autenticar_webhook(raw: bytes, header: str | None):
 
 # YCloud reintenta el webhook si no recibe 2xx a tiempo. Sin esto, cada
 # reintento generaba otra respuesta completa: un mensaje cobrado de mas.
-VENTANA_DUPLICADOS = 600.0   # segundos
-_mensajes_vistos: dict[str, float] = {}
+# Vive en la base (no en memoria) para sobrevivir reinicios y servir con mas de
+# un proceso. Se guardan 2 dias: YCloud no reintenta despues de eso.
+DIAS_DUPLICADOS = 2
 
 
 def ya_procesado(id_mensaje: str | None) -> bool:
     if not id_mensaje:
         return False
-    ahora = time.monotonic()
-    for viejo in [k for k, t in _mensajes_vistos.items() if ahora - t > VENTANA_DUPLICADOS]:
-        del _mensajes_vistos[viejo]
-    if id_mensaje in _mensajes_vistos:
-        return True
-    _mensajes_vistos[id_mensaje] = ahora
-    return False
+    db = SessionLocal()
+    try:
+        # Primero se olvidan los viejos: si no, un id de hace dias contaria
+        # como duplicado.
+        db.execute(
+            text("DELETE FROM mensajes_procesados WHERE recibido < now() - make_interval(days => :d)"),
+            {"d": DIAS_DUPLICADOS},
+        )
+        nuevo = db.execute(
+            text("INSERT INTO mensajes_procesados (wamid) VALUES (:w) "
+                 "ON CONFLICT DO NOTHING RETURNING wamid"),
+            {"w": id_mensaje},
+        ).first()
+        db.commit()
+        return nuevo is None
+    except Exception as e:
+        # Ante la duda se procesa: un duplicado cuesta un mensaje de mas,
+        # perder un mensaje del paciente cuesta mucho mas.
+        db.rollback()
+        logger.error("No se pudo registrar el mensaje como procesado: %s", e)
+        return False
+    finally:
+        db.close()
 
 
 @router.post("/webhook")

@@ -7,7 +7,7 @@ cancelar un turno del 18/08 (cinco dias pasado) y volvio a saludar
 from datetime import timedelta
 
 from backend.models.appointment import AppointmentStatus
-from backend.routers.evolution_router import quitar_presentacion, es_repeticion
+from backend.routers.whatsapp_router import quitar_presentacion, es_repeticion
 from backend.routers.bot_routes import _turnos_cancelables
 from backend.services.appointment_service import get_clinic_now
 from conftest import proximo_dia_habil, turno

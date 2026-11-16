@@ -16,7 +16,7 @@ from tests.test_no_confirmar_lo_que_no_se_hizo import _Cliente, _Mensaje, _Respu
 
 def _falso(monkeypatch, respuestas):
     cliente = _Cliente([_Mensaje(r) for r in respuestas])
-    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (cliente, "m"))
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (cliente, "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "ok")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "reiniciar_disponibilidad", lambda: None)
@@ -81,7 +81,7 @@ def test_el_primer_mensaje_no_pide_despedirse(monkeypatch, db, clinica,
                     capturado.update(kwargs)
                     return _Respuesta(_Mensaje("Buen día 😊 ¿En qué te ayudo?"))
 
-    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (_Espia, "m"))
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (_Espia, "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "ok")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "reiniciar_disponibilidad", lambda: None)

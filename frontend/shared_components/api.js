@@ -217,6 +217,7 @@ const API = {
     deleteTipoConsulta(id) { return this.del(`/admin/tipos-consulta/${id}`); },
 
     getConfigs() { return this.get('/admin/configs'); },
+    getEstadoClaves() { return this.get('/admin/configs/claves'); },
     setConfig(key, value, description = '') { return this.post('/admin/configs', { key, value, description }); },
     setConfigsBulk(values) { return this.post('/admin/configs/bulk', values); },
     // Subconjunto no sensible editable por el personal de clínica (recepción)

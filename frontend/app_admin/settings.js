@@ -56,11 +56,13 @@ Router.register('settings', async (container) => {
     let insurances = [];
     let tipos = [];
     let configs = [];
+    let claves = {};
     try {
-        [locations, insurances, configs, tipos] = await Promise.all([
+        [locations, insurances, configs, claves, tipos] = await Promise.all([
             API.getLocations(), 
             API.getInsurances(),
             API.getConfigs(),
+            API.getEstadoClaves().catch(() => ({})),
             // Si falla (base sin migrar todavia) no se rompe la pantalla entera.
             API.getTiposConsulta().catch(() => [])
         ]);
@@ -84,6 +86,14 @@ Router.register('settings', async (container) => {
     }
 
     const getConfig = (key) => configs.find(c => c.key === key)?.value || '';
+    // Las claves viven en el servidor (Dokploy): el panel solo muestra si están.
+    const estadoClave = (key, nombre) => `
+        <div class="form-group">
+            <label>${nombre}</label>
+            <div>${claves[key]
+                ? '✅ Cargada en el servidor'
+                : '⚠️ Falta cargarla en el servidor (Dokploy → Environment)'}</div>
+        </div>`;
 
     container.innerHTML = `
         <div class="page-header">
@@ -141,45 +151,7 @@ Router.register('settings', async (container) => {
                 </div>
                 <form id="form-config" style="display:flex;flex-direction:column;gap:1.5rem;padding-top:.5rem;">
                     <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
-                        <h4 style="margin-bottom:.5rem;">Prioridades de Inteligencia Artificial (Fallback en cascada)</h4>
-                        <p style="font-size:0.85rem; color:var(--slate-500); margin-bottom:1rem;">
-                            El bot intentará responder usando el proveedor de la Prioridad 1. Si este falla (ej: error de red, límite de saldo o modelo incorrecto), pasará automáticamente a la Prioridad 2, y luego a la 3. Si todos fallan, enviará un mensaje de disculpas pidiendo contacto humano.
-                        </p>
-                        
-                        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
-                            <div class="form-group">
-                                <label style="font-weight:700; color:var(--primary-600);">🥇 Prioridad 1 (Principal)</label>
-                                <select name="AI_PROVIDER" class="form-control" style="border: 2px solid var(--primary-200);">
-                                    <option value="openai" ${getConfig('AI_PROVIDER') === 'openai' ? 'selected' : ''}>OpenAI</option>
-                                    <option value="openrouter" ${getConfig('AI_PROVIDER') === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
-                                    <option value="groq" ${getConfig('AI_PROVIDER') === 'groq' ? 'selected' : ''}>Groq</option>
-                                </select>
-                            </div>
-                            
-                            <div class="form-group">
-                                <label style="font-weight:700; color:var(--slate-600);">🥈 Prioridad 2 (Respaldo)</label>
-                                <select name="AI_PROVIDER_2" class="form-control">
-                                    <option value="none" ${(!getConfig('AI_PROVIDER_2') || getConfig('AI_PROVIDER_2') === 'none') ? 'selected' : ''}>Ninguno</option>
-                                    <option value="openai" ${getConfig('AI_PROVIDER_2') === 'openai' ? 'selected' : ''}>OpenAI</option>
-                                    <option value="openrouter" ${getConfig('AI_PROVIDER_2') === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
-                                    <option value="groq" ${getConfig('AI_PROVIDER_2') === 'groq' ? 'selected' : ''}>Groq</option>
-                                </select>
-                            </div>
-                            
-                            <div class="form-group">
-                                <label style="font-weight:700; color:var(--slate-600);">🥉 Prioridad 3 (Emergencia)</label>
-                                <select name="AI_PROVIDER_3" class="form-control">
-                                    <option value="none" ${(!getConfig('AI_PROVIDER_3') || getConfig('AI_PROVIDER_3') === 'none') ? 'selected' : ''}>Ninguno</option>
-                                    <option value="openai" ${getConfig('AI_PROVIDER_3') === 'openai' ? 'selected' : ''}>OpenAI</option>
-                                    <option value="openrouter" ${getConfig('AI_PROVIDER_3') === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
-                                    <option value="groq" ${getConfig('AI_PROVIDER_3') === 'groq' ? 'selected' : ''}>Groq</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
-                        <h4 style="margin-bottom:.8rem;">OpenAI Config</h4>
+                        <h4 style="margin-bottom:.8rem;">🧠 Inteligencia Artificial (OpenAI)</h4>
                         <div class="form-group">
                             <label>Modelo</label>
                             ${(() => {
@@ -201,50 +173,14 @@ Router.register('settings', async (container) => {
                             })()}
                             <small style="color:var(--fg-muted);">El cambio se aplica al próximo mensaje que reciba el bot.</small>
                         </div>
-                        <div class="form-group">
-                            <label>API Key</label>
-                            <input type="password" name="OPENAI_API_KEY" value="${getConfig('OPENAI_API_KEY')}" placeholder="sk-...">
-                        </div>
-                    </div>
-
-                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
-                        <h4 style="margin-bottom:.8rem;">OpenRouter Config</h4>
-                        <div class="form-group">
-                            <label>Modelo</label>
-                            <input type="text" name="OPENROUTER_MODEL" value="${getConfig('OPENROUTER_MODEL') || 'google/gemini-flash-1.5'}" placeholder="google/gemini-flash-1.5">
-                        </div>
-                        <div class="form-group">
-                            <label>API Key</label>
-                            <input type="password" name="OPENROUTER_API_KEY" value="${getConfig('OPENROUTER_API_KEY')}" placeholder="sk-or-v1-...">
-                        </div>
-                    </div>
-
-                    <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
-                        <h4 style="margin-bottom:.8rem;">Groq Config</h4>
-                        <div class="form-group">
-                            <label>Modelo</label>
-                            <input type="text" name="GROQ_MODEL" value="${getConfig('GROQ_MODEL') || 'llama-3.1-70b-versatile'}" placeholder="llama-3.1-70b-versatile">
-                        </div>
-                        <div class="form-group">
-                            <label>API Key</label>
-                            <input type="password" name="GROQ_API_KEY" value="${getConfig('GROQ_API_KEY')}" placeholder="gsk_...">
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label>Telegram Bot Token</label>
-                        <input type="password" name="TELEGRAM_BOT_TOKEN" value="${getConfig('TELEGRAM_BOT_TOKEN')}" placeholder="123456:ABC-DEF...">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Webhook URL (Dokploy)</label>
-                        <input type="text" name="TELEGRAM_WEBHOOK_URL" value="${getConfig('TELEGRAM_WEBHOOK_URL')}" placeholder="https://tu-dominio.com/webhook">
+                        ${estadoClave('OPENAI_API_KEY', 'Clave de OpenAI')}
+                        <small style="color:var(--fg-muted);">Si OpenAI no responde, el bot le pide al paciente que llame al consultorio.</small>
                     </div>
 
                     <div style="background:var(--slate-50); padding:1rem; border-radius:8px; border:1px solid var(--slate-200);">
                         <h4 style="margin-bottom:.8rem;">📱 WhatsApp (YCloud API) & Bot</h4>
                         <p style="font-size:0.85rem; color:var(--slate-500); margin-bottom:1rem;">
-                            Configuración para enviar y recibir mensajes de WhatsApp a través de YCloud. Obtené tu API Key desde el <a href="https://dashboard.ycloud.com" target="_blank">panel de YCloud</a>.
+                            Configuración para enviar y recibir mensajes de WhatsApp a través de YCloud.
                         </p>
                         
                         <div class="form-group" style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem; padding: 1rem; background: var(--bg-surface); border: 2px solid var(--border-color); box-shadow: var(--shadow-sm); border-radius: var(--radius-md);">
@@ -255,10 +191,8 @@ Router.register('settings', async (container) => {
                             </select>
                         </div>
 
-                        <div class="form-group">
-                            <label>YCloud API Key</label>
-                            <input type="password" name="YCLOUD_API_KEY" value="${getConfig('YCLOUD_API_KEY')}" placeholder="Tu API Key de YCloud">
-                        </div>
+                        ${estadoClave('YCLOUD_API_KEY', 'Clave de YCloud')}
+                        ${estadoClave('YCLOUD_WEBHOOK_SECRET', 'Firma de los mensajes entrantes')}
                         <div class="form-group">
                             <label>Número de WhatsApp (con código de país)</label>
                             <input type="text" name="YCLOUD_FROM_PHONE" value="${getConfig('YCLOUD_FROM_PHONE')}" placeholder="Ej: 549341xxxxxxx">
@@ -376,9 +310,6 @@ window.SettingsPage = {
         const values = {};
         form.querySelectorAll('input, select').forEach(el => {
             if (!el.name) return;
-            // Una API Key vacía significa "no la toques", no "borrala". Sin esto,
-            // guardar sin retipear la clave la dejaba en blanco y el bot se caía.
-            if (el.type === 'password' && !el.value) return;
             values[el.name] = el.value;
         });
 

@@ -1,7 +1,7 @@
 """El prompt y las herramientas tienen que viajar IDENTICOS en cada llamada.
 
-Entre el SYSTEM_PROMPT (~6.450 tokens) y las 11 herramientas (~3.500) son unos
-10.000 tokens de entrada que se reenvian hasta MAX_TOOL_ROUNDS veces por cada
+Entre el SYSTEM_PROMPT (~4.100 tokens) y las 11 herramientas (~2.300) son unos
+6.400 tokens de entrada que se reenvian hasta MAX_TOOL_ROUNDS veces por cada
 mensaje del paciente. Una reserva de turno completa ronda las 20 llamadas: el
 costo de este bot es casi todo entrada repetida.
 
@@ -30,7 +30,7 @@ from tests.test_no_confirmar_lo_que_no_se_hizo import _Cliente, _Mensaje
 def _system_y_ultimo(monkeypatch, estado, history=None):
     """Corre un turno y devuelve (system message, ultimo mensaje) enviados."""
     cliente = _Cliente([_Mensaje("Listo.")])
-    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (cliente, "m"))
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (cliente, "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "ok")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: estado)
@@ -141,7 +141,7 @@ def _correr_con_uso(monkeypatch, usos):
         return r
 
     completions.create = create
-    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (cliente, "m"))
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (cliente, "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "ok")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: {})
@@ -165,7 +165,7 @@ def test_registra_los_tokens_y_cuanto_salio_del_cache(monkeypatch, caplog):
 def test_un_proveedor_que_no_devuelve_usage_no_rompe(monkeypatch):
     """La cascada tiene OpenRouter y Groq: no todos informan lo mismo."""
     cliente = _Cliente([_Mensaje("Listo.")])
-    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (cliente, "m"))
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (cliente, "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "ok")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: {})

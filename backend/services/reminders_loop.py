@@ -11,11 +11,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-def get_config(db: Session, key: str, default: str = ""):
-    conf = db.query(AppConfig).filter(AppConfig.key == key).first()
-    if conf and conf.value:
-        return conf.value
-    return os.getenv(key, default)
+from backend.services.config import get_config
 
 from backend.services.whatsapp import (
     send_whatsapp_message, send_whatsapp_template, ofuscar_telefono,
@@ -83,7 +79,7 @@ async def enviar_recordatorio(db: Session, appt, patient, time_str: str,
     return await send_whatsapp_message(patient.phone, msg)
 
 async def notify_admins(db: Session, text: str):
-    admin_numbers = get_config(db, "ADMIN_NOTIFY_NUMBERS", "")
+    admin_numbers = get_config("ADMIN_NOTIFY_NUMBERS", "", db=db)
     if not admin_numbers:
         return
     for number in admin_numbers.split(","):
@@ -95,7 +91,7 @@ async def check_reminders():
     while True:
         try:
             db = SessionLocal()
-            hours_val = get_config(db, "REMINDER_HOURS_BEFORE", "24")
+            hours_val = get_config("REMINDER_HOURS_BEFORE", "24", db=db)
             hours_before = int(hours_val) if hours_val else 24
             from backend.services.urls import url_publica
             public_url = url_publica(db)

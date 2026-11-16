@@ -10,7 +10,7 @@ import asyncio
 import threading
 import time
 
-from backend.routers import evolution_router as er
+from backend.routers import whatsapp_router as er
 
 
 def test_el_rescate_corre_fuera_del_event_loop(db, monkeypatch):

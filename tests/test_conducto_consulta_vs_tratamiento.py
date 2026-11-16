@@ -252,7 +252,7 @@ def test_la_pregunta_mal_armada_se_repone_con_tiempos_y_botones(monkeypatch, par
     from tests.test_no_confirmar_lo_que_no_se_hizo import _Cliente, _Mensaje
 
     monkeypatch.setattr(ai_agent, "_build_client",
-                        lambda p: (_Cliente([_Mensaje(parafraseo)]), "modelo-de-prueba"))
+                        lambda: (_Cliente([_Mensaje(parafraseo)]), "modelo-de-prueba"))
     monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
     texto, opciones, _ = ai_agent.chat("Necesito un turno para un conducto", [], "5492604046245", {})
     assert texto == PREGUNTA_CONDUCTO_PACIENTE
@@ -264,7 +264,7 @@ def test_con_el_motivo_ya_resuelto_no_se_vuelve_a_preguntar(monkeypatch):
     from tests.test_no_confirmar_lo_que_no_se_hizo import _Cliente, _Mensaje
     texto_modelo = "Perfecto, la consulta por conducto es de 30 minutos. ¿Qué día te viene bien?"
     monkeypatch.setattr(ai_agent, "_build_client",
-                        lambda p: (_Cliente([_Mensaje(texto_modelo)]), "modelo-de-prueba"))
+                        lambda: (_Cliente([_Mensaje(texto_modelo)]), "modelo-de-prueba"))
     monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
     texto, _, _ = ai_agent.chat("vengo derivado para un conducto", [], "5492604046245",
                                 {"motivo": "Consulta por conducto"})

@@ -103,8 +103,11 @@ def test_compose_exige_la_clave_de_postgres():
     assert "${DATABASE_URL:?" in c
 
 
-def test_telegram_apagado_por_defecto():
-    assert 'profiles: ["telegram"]' in _compose()
+def test_telegram_no_existe():
+    # Telegram no da un numero verificado: no hay forma de saber quien escribe.
+    # Primero quedo apagado por profile; desde el 15/11 no hay servicio ni codigo.
+    assert "telegram" not in _compose().lower()
+    assert not os.path.exists(os.path.join(RAIZ, "bot", "telegram_bot.py"))
 
 
 def test_dockerignore_deja_afuera_los_backups():

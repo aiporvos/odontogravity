@@ -60,7 +60,7 @@ def _correr(monkeypatch, guion, estado, ultimo="sí", consulta_devuelve=None):
     """El modelo contesta sin tools. Si el código no consulta, nadie lo hace."""
     tools.reiniciar_disponibilidad()
     monkeypatch.setattr(ai_agent, "_build_client",
-                        lambda p: (_Cliente(guion), "modelo-de-prueba"))
+                        lambda: (_Cliente(guion), "modelo-de-prueba"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
@@ -99,7 +99,7 @@ def test_el_sistema_le_ordena_consultar(monkeypatch):
     """Además del rescate, el bloque [SISTEMA] se lo exige al modelo."""
     cliente = _Cliente([_Mensaje(OFERTA)])
     tools.reiniciar_disponibilidad()
-    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (cliente, "m"))
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (cliente, "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: "")
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(tools, "consultar_disponibilidad", lambda **kw: "ok")
@@ -147,7 +147,7 @@ def test_una_respuesta_con_horarios_reales_pasa_intacta(monkeypatch):
         ]
     tools.reiniciar_disponibilidad()
     monkeypatch.setattr(ai_agent, "_build_client",
-                        lambda p: (_Cliente(_guion_con_tool()), "m"))
+                        lambda: (_Cliente(_guion_con_tool()), "m"))
 
     def _tool(n, a):
         tools.registrar_disponibilidad("Dra. Elena Murad", "2026-09-24",

@@ -112,7 +112,7 @@ def _correr(monkeypatch, texto, resultado_tool="✅ ok", tool="indicar_llamar_co
 
     guion = [_Mensaje("", tool_calls=[_LlamadaAHerramienta(tool)]), _Mensaje(texto)] \
         if tool else [_Mensaje(texto)]
-    monkeypatch.setattr(ai_agent, "_build_client", lambda p: (_Cliente(guion), "m"))
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (_Cliente(guion), "m"))
     monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: resultado_tool)
     monkeypatch.setattr(ai_agent, "tomar_opciones_ofrecidas", lambda: None)
     monkeypatch.setattr(ai_agent, "get_estado_conversacion", lambda: {})
@@ -164,7 +164,7 @@ def test_un_mensaje_normal_no_se_toca(monkeypatch):
 
 def test_una_derivacion_pendiente_ya_no_silencia_al_bot(db, monkeypatch):
     """La bandeja dejó de usarse: el bot no se calla por filas viejas."""
-    from backend.routers import evolution_router as er
+    from backend.routers import whatsapp_router as er
 
     class _Sesion:
         paused_until = None

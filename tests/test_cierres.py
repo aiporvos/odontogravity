@@ -13,7 +13,7 @@ Un acuse no es un pedido nuevo. Pero "gracias, ¿me pasás el alias?" sí lo es.
 """
 import pytest
 
-from backend.routers.evolution_router import es_solo_un_cierre
+from backend.routers.whatsapp_router import es_solo_un_cierre
 
 
 @pytest.mark.parametrize("mensaje", [
@@ -68,7 +68,7 @@ def test_no_confunde_otras_cosas_con_un_cierre(mensaje):
 
 # ── Aviso de demora (caso Kiara 16/09) ──────────────────────────────────────
 
-from backend.routers.evolution_router import es_aviso_de_demora
+from backend.routers.whatsapp_router import es_aviso_de_demora
 
 
 @pytest.mark.parametrize("mensaje", [
@@ -113,7 +113,7 @@ import pytest as _pytest
     "listo, gracias, ahi estaremos",
 ])
 def test_despedidas_son_cierre(texto):
-    from backend.routers.evolution_router import es_solo_un_cierre
+    from backend.routers.whatsapp_router import es_solo_un_cierre
     assert es_solo_un_cierre(texto)
 
 
@@ -122,5 +122,5 @@ def test_despedidas_son_cierre(texto):
     "nos vemos el lunes, ¿a qué hora era?",
 ])
 def test_saludos_o_pedidos_no_son_cierre(texto):
-    from backend.routers.evolution_router import es_solo_un_cierre
+    from backend.routers.whatsapp_router import es_solo_un_cierre
     assert not es_solo_un_cierre(texto)

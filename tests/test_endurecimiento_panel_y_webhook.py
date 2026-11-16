@@ -1,4 +1,4 @@
-"""Claves enmascaradas en el panel, webhook cerrado sin secreto y /docs apagado."""
+"""Claves solo en el entorno, webhook cerrado sin secreto y /docs apagado."""
 import hashlib
 import hmac
 import time
@@ -7,42 +7,55 @@ import pytest
 from fastapi import HTTPException
 
 from backend.models.config import AppConfig
-from backend.routers import evolution_router as er
+from backend.routers import whatsapp_router as er
 from backend.routers.admin import admin_routes as ar
 from backend.schemas.schemas import ConfigCreate
 
 
-# ── Claves de API en el panel ───────────────────────────
+# ── Claves: solo en el entorno ──────────────────────────
 
-def test_el_panel_no_devuelve_claves_completas(db):
-    db.add(AppConfig(key="OPENAI_API_KEY", value="sk-secreta-1234"))
+def test_el_codigo_nunca_lee_claves_de_la_base(db, monkeypatch):
+    from backend.services.config import get_config
+    db.add(AppConfig(key="OPENAI_API_KEY", value="vieja-de-la-base"))
+    db.add(AppConfig(key="OPENAI_MODEL", value="gpt-4.1-mini"))
+    db.commit()
+    monkeypatch.setenv("OPENAI_API_KEY", "  la-del-entorno\n")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-4o-mini")
+
+    assert get_config("OPENAI_API_KEY", db=db) == "la-del-entorno"
+    # Lo operativo sigue mandando desde el panel.
+    assert get_config("OPENAI_MODEL", db=db) == "gpt-4.1-mini"
+
+
+def test_el_panel_no_lista_claves(db):
+    db.add(AppConfig(key="YCLOUD_API_KEY", value="no-deberia-estar"))
     db.add(AppConfig(key="OPENAI_MODEL", value="gpt-4o-mini"))
     db.commit()
 
-    configs = {c["key"]: c["value"] for c in ar.list_configs(db)}
+    keys = {c.key for c in ar.list_configs(db)}
 
-    assert configs["OPENAI_API_KEY"] == ar.MASCARA + "1234"
-    assert "sk-secreta" not in configs["OPENAI_API_KEY"]
-    assert configs["OPENAI_MODEL"] == "gpt-4o-mini"
-
-
-def test_guardar_con_la_mascara_conserva_la_clave(db):
-    db.add(AppConfig(key="YCLOUD_API_KEY", value="clave-real-abcd"))
-    db.commit()
-
-    ar.set_configs_bulk({"YCLOUD_API_KEY": ar.MASCARA + "abcd", "OPENAI_MODEL": "x"}, db)
-    ar.set_config(ConfigCreate(key="YCLOUD_API_KEY", value=ar.MASCARA + "abcd"), db)
-
-    assert db.query(AppConfig).filter_by(key="YCLOUD_API_KEY").one().value == "clave-real-abcd"
+    assert "YCLOUD_API_KEY" not in keys
+    assert "OPENAI_MODEL" in keys
 
 
-def test_una_clave_nueva_si_se_guarda(db):
-    db.add(AppConfig(key="GROQ_API_KEY", value="vieja"))
-    db.commit()
+def test_el_panel_no_acepta_claves(db):
+    with pytest.raises(HTTPException) as e:
+        ar.set_configs_bulk({"OPENAI_MODEL": "x", "OPENAI_API_KEY": "sk-nueva"}, db)
+    assert e.value.status_code == 400
+    with pytest.raises(HTTPException):
+        ar.set_config(ConfigCreate(key="YCLOUD_WEBHOOK_SECRET", value="x"), db)
+    assert db.query(AppConfig).filter_by(key="OPENAI_API_KEY").count() == 0
 
-    ar.set_configs_bulk({"GROQ_API_KEY": "nueva-9999"}, db)
 
-    assert db.query(AppConfig).filter_by(key="GROQ_API_KEY").one().value == "nueva-9999"
+def test_estado_de_claves_sin_valores(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secreta")
+    monkeypatch.delenv("YCLOUD_API_KEY", raising=False)
+
+    estado = ar.estado_claves()
+
+    assert estado["OPENAI_API_KEY"] is True
+    assert estado["YCLOUD_API_KEY"] is False
+    assert "sk-secreta" not in str(estado)
 
 
 # ── Webhook de YCloud ───────────────────────────────────

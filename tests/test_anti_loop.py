@@ -9,7 +9,7 @@ dos mensajes casi iguales a propósito —primero las frecuentes, después las
 filtradas— con listas distintas. Repetir la frase mientras se ofrece algo nuevo
 no es estar trabado: es avanzar.
 """
-from backend.routers.evolution_router import (
+from backend.routers.whatsapp_router import (
     CLAVE_ULTIMAS_OPCIONES, debe_derivar_por_loop,
 )
 
@@ -76,7 +76,7 @@ def test_ofrecer_los_mismos_horarios_de_nuevo_si_es_un_loop():
 
 
 # ── Charla 21/09: el detector no detectó (plan E4) ──────────────────────────
-from backend.routers.evolution_router import (  # noqa: E402
+from backend.routers.whatsapp_router import (  # noqa: E402
     CLAVE_RESCATE_HECHO, es_repeticion, resolver_loop,
 )
 
@@ -159,7 +159,7 @@ def test_con_estado_completo_consulta_horarios_antes_de_llamar(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "backend.routers.evolution_router._rescate_por_horarios", _falso_rescate,
+        "backend.routers.whatsapp_router._rescate_por_horarios", _falso_rescate,
     )
     accion, texto, opciones = resolver_loop(
         A, [A], None, completo, dichos=["que dias tenes?", "puede ser un lunes"],

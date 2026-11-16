@@ -54,7 +54,7 @@ def main():
     try:
         _titulo("Versión del código")
         print(f"  GIT_COMMIT (env)   : {os.getenv('GIT_COMMIT') or '(no la pasa el build)'}")
-        print(f"  Proveedores IA     : {os.getenv('AI_PROVIDER_ORDER') or '(default del código)'}")
+        print(f"  Clave de OpenAI    : {'cargada' if os.getenv('OPENAI_API_KEY') else 'FALTA'}")
 
         _titulo("Migraciones")
         version = db.execute(text("SELECT version_num FROM alembic_version")).scalar()

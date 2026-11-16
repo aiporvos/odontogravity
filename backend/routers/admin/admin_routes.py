@@ -1,4 +1,5 @@
 """Admin-only routes: user management, clinic settings."""
+import os
 from uuid import UUID
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import func
@@ -12,6 +13,7 @@ from backend.models.professional import Professional
 from backend.models.clinic_location import ClinicLocation
 from backend.models.insurance import Insurance
 from backend.models.config import AppConfig
+from backend.services.config import es_secreto
 from backend.models.tipo_consulta import TipoConsulta
 from backend.schemas.schemas import (
 # ... existing imports continue ...
@@ -255,39 +257,33 @@ def delete_insurance(ins_id: UUID, db: Session = Depends(get_db)):
     return {"detail": "Obra social eliminada"}
 
 # ── System Config ───────────────────────────────────────
-# Las claves de API se devolvian completas a cualquier admin: con una sesion
-# robada (o con admin123, que estuvo publica) se llevaban las de OpenAI,
-# OpenRouter, YCloud y Telegram. Ahora salen enmascaradas, y si el panel
-# devuelve la mascara al guardar se conserva el valor que ya estaba.
-MASCARA = "••••"
-
-
-def _es_secreto(key: str) -> bool:
-    return key.endswith(("_API_KEY", "_TOKEN", "_SECRET"))
-
-
-def _enmascarar(c: AppConfig) -> dict:
-    valor = c.value or ""
-    if _es_secreto(c.key) and valor:
-        valor = MASCARA + valor[-4:]
-    return {"key": c.key, "value": valor, "description": c.description}
-
-
-def _es_mascara(key: str, value: str | None) -> bool:
-    return _es_secreto(key) and (value or "").startswith(MASCARA)
+# Las claves (OpenAI, YCloud, secreto del webhook) viven SOLO en el entorno de
+# Dokploy: el codigo nunca las lee de app_configs (ver services/config.py).
+# Antes se guardaban aca, se veian desde el panel y una sesion robada se las
+# llevaba. Este panel no las muestra ni las acepta; solo dice si estan cargadas.
+CLAVES_DEL_SERVIDOR = ("OPENAI_API_KEY", "YCLOUD_API_KEY", "YCLOUD_WEBHOOK_SECRET")
 
 
 @router.get("/configs", response_model=list[ConfigRead])
 def list_configs(db: Session = Depends(get_db)):
-    return [_enmascarar(c) for c in db.query(AppConfig).all()]
+    return [c for c in db.query(AppConfig).all() if not es_secreto(c.key)]
+
+
+@router.get("/configs/claves")
+def estado_claves():
+    """Solo si cada clave esta cargada en el servidor, nunca su valor."""
+    return {k: bool(os.getenv(k, "").strip()) for k in CLAVES_DEL_SERVIDOR}
+
+
+def _rechazar_secreto(key: str):
+    if es_secreto(key):
+        raise HTTPException(400, f"{key} se carga en el servidor (Dokploy), no desde el panel")
+
 
 @router.post("/configs", response_model=ConfigRead, status_code=201)
 def set_config(data: ConfigCreate, db: Session = Depends(get_db)):
+    _rechazar_secreto(data.key)
     config = db.query(AppConfig).filter(AppConfig.key == data.key).first()
-    if _es_mascara(data.key, data.value):
-        if not config:
-            raise HTTPException(400, "Valor inválido")
-        return _enmascarar(config)
     if config:
         config.value = data.value
         if data.description:
@@ -297,7 +293,7 @@ def set_config(data: ConfigCreate, db: Session = Depends(get_db)):
         db.add(config)
     db.commit()
     db.refresh(config)
-    return _enmascarar(config)
+    return config
 
 
 @router.post("/configs/bulk", response_model=list[ConfigRead])
@@ -312,6 +308,8 @@ def set_configs_bulk(data: dict[str, str] = Body(...), db: Session = Depends(get
     """
     if not data:
         raise HTTPException(400, "No se recibió ninguna configuración")
+    for key in data:
+        _rechazar_secreto(key.strip())
 
     existentes = {c.key: c for c in db.query(AppConfig).filter(AppConfig.key.in_(data.keys())).all()}
     resultado = []
@@ -319,16 +317,11 @@ def set_configs_bulk(data: dict[str, str] = Body(...), db: Session = Depends(get
         key = key.strip()
         if not key:
             continue
-        # Los valores se guardan sin espacios de sobra: una API Key pegada con
-        # un salto de linea al final falla con un 401 imposible de diagnosticar.
+        # Sin espacios de sobra: un numero pegado con un salto de linea al
+        # final falla de formas imposibles de diagnosticar.
         if isinstance(value, str):
             value = value.strip()
         config = existentes.get(key)
-        if _es_mascara(key, value):
-            # El panel devolvio la mascara: el admin no toco ese campo.
-            if config:
-                resultado.append(config)
-            continue
         if config:
             config.value = value
         else:
@@ -339,7 +332,7 @@ def set_configs_bulk(data: dict[str, str] = Body(...), db: Session = Depends(get
     db.commit()
     for c in resultado:
         db.refresh(c)
-    return [_enmascarar(c) for c in resultado]
+    return resultado
 
 
 # ── Test: Disparar recordatorios manualmente ────────────
@@ -351,7 +344,7 @@ async def trigger_reminders_now(hours_override: float = 24, db: Session = Depend
     - **hours_override**: ventana de horas a revisar (default 24 = turno de maniana).
       Para probar un turno especifico, usa el valor 'hours_override_sugerido' de 'proximos_turnos'.
     """
-    from backend.services.reminders_loop import send_whatsapp_message, get_config as get_cfg
+    from backend.services.reminders_loop import send_whatsapp_message
     from backend.models.appointment import Appointment, AppointmentStatus
     from backend.models.patient import Patient
     from backend.services.appointment_service import get_clinic_now

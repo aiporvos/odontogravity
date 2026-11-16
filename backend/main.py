@@ -15,7 +15,7 @@ from backend.routers.auth import router as auth_router
 from backend.routers.admin.admin_routes import router as admin_router
 from backend.routers.clinic.clinic_routes import router as clinic_router
 from backend.routers.bot_routes import router as bot_router
-from backend.routers.evolution_router import router as whatsapp_router
+from backend.routers.whatsapp_router import router as whatsapp_router
 from backend.routers.public_routes import router as public_router
 from backend.seed import run_seed
 # Recordatorios apagados desde 05/10/2026: desde el 01/10 Meta cobra las
