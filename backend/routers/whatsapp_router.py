@@ -1156,9 +1156,17 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # mismo, el pedido vencia a los 30 s y el paciente recibia
             # "Error consultando disponibilidad: timed out" mientras todos los
             # demas pacientes y el panel quedaban congelados.
-            accion, rescate, botones = await asyncio.to_thread(
-                resolver_loop, response, ultimas, opciones, estado_previo, dichos,
-            )
+            # Con el guion de turnos activo no se aplica: el guion sabe en que
+            # paso esta y tiene su propio limite de intentos. El rescate
+            # cambiaba la respuesta por detras y lo dejaba desincronizado
+            # (simulacion 16/11: "Tengo obra social" terminaba buscado como OS).
+            from bot.flujo_turno import CLAVE as _CLAVE_TURNO
+            if _CLAVE_TURNO in estado_nuevo or _CLAVE_TURNO in (estado_previo or {}):
+                accion, rescate, botones = None, None, None
+            else:
+                accion, rescate, botones = await asyncio.to_thread(
+                    resolver_loop, response, ultimas, opciones, estado_previo, dichos,
+                )
             pausar_despues_de_enviar = False
             if accion == "rescate":
                 logger.warning(f"🔁 Respuesta repetida para {remote_jid}: rescate por código.")

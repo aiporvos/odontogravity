@@ -541,6 +541,13 @@ def _tipo_para_motivo(db: Session, reason: str):
     if not palabras:
         return None
 
+    # El nombre exacto de un tipo gana siempre. Sin esto, "Consulta por
+    # conducto" podia caer en "Conducto" (60') por el sinonimo "conducto",
+    # segun como estuvieran cargados los sinonimos en el panel.
+    for tipo in tipos_consulta_activos(db):
+        if _sin_acentos(tipo.nombre) == _sin_acentos(reason or ""):
+            return tipo
+
     mejores: list[tuple[int, object]] = []
     for tipo in tipos_consulta_activos(db):
         candidatos = [tipo.nombre] + list(tipo.sinonimos or [])

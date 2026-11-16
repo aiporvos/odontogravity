@@ -709,6 +709,26 @@ def chat(user_message: str, history: list[dict] | None = None,
     # no veria lo que se setea adentro.
     set_estado_conversacion(estado)
 
+    # Sacar turno va por el guion fijo (bot/flujo_turno.py): el orden y las
+    # reglas del consultorio los pone el codigo, la IA solo entiende el mensaje.
+    # Si el guion falla por lo que sea, el mensaje lo atiende el agente general:
+    # el paciente nunca se queda sin respuesta.
+    from bot import flujo_turno
+    if flujo_turno.ACTIVO:
+        from bot.tools.appointment_tools import _current_requester_phone
+        try:
+            r = flujo_turno.responder(
+                user_message, history or [], estado or {}, _current_requester_phone(),
+                [m["content"] for m in (history or []) if m.get("role") == "user"],
+            )
+            if r is not None:
+                set_estado_conversacion(r[2])
+                return r
+        except Exception:
+            logger.exception("FLUJO_TURNO -> falló; atiende el agente general")
+            estado = {k: v for k, v in (estado or {}).items() if k != flujo_turno.CLAVE}
+            set_estado_conversacion(estado)
+
     clinic_now = get_clinic_now()
     dia_semana = DIAS_ES[clinic_now.weekday()]
 
@@ -822,6 +842,43 @@ def chat(user_message: str, history: list[dict] | None = None,
             f"registrado en el estado (no llames a `recordar_dato`). Seguí con "
             f"lo que falte: cobertura si no está, si no, `consultar_disponibilidad`."
         )
+    # Eligio un horario de los que se le acaban de ofrecer: se agenda por
+    # codigo. Si el sistema pide algo mas (el nombre, en un numero nuevo), el
+    # modelo sigue desde ahi con esa respuesta en la mano.
+    # Si para agendar falta el nombre (numero nuevo), el horario elegido queda
+    # guardado y cuando el paciente lo dice se agenda con eso. Simulacion 15/11:
+    # "Florencia Ramos" se tomo como busqueda de obra social y termino derivado.
+    from bot.tools.appointment_tools import (
+        eleccion_de_horario, confirmacion_turno_agendada, nombre_dicho,
+    )
+    eleccion = eleccion_de_horario(user_message, respuestas_bot[-1] if respuestas_bot else "")
+    elegido = estado_ahora.get("turno_elegido")
+    nombre = nombre_dicho(user_message) if (elegido and not eleccion) else None
+    if (eleccion or nombre) and (estado_ahora.get("motivo") or "").strip():
+        if eleccion:
+            elegido = dict(zip(("fecha", "hora", "profesional"), eleccion))
+        args = {"reason": estado_ahora["motivo"],
+                "preferred_date": f"{elegido['fecha']} {elegido['hora']}",
+                "profesional": elegido.get("profesional", "")}
+        if nombre:
+            args.update(patient_name=nombre[0], patient_last_name=nombre[1])
+        reiniciar_confirmacion_turno()
+        resultado = execute_tool("agendar_turno", args)
+        if conf := confirmacion_turno_agendada():
+            logger.info("AI_AGENT -> Turno agendado por código con el horario elegido de la lista")
+            estado_ahora = {k: v for k, v in (get_estado_conversacion() or estado_ahora).items()
+                            if k != "turno_elegido"}
+            set_estado_conversacion(estado_ahora)
+            return conf, tomar_opciones_ofrecidas(), estado_ahora
+        estado_ahora = {**(get_estado_conversacion() or estado_ahora), "turno_elegido": elegido}
+        estado = estado_ahora
+        set_estado_conversacion(estado_ahora)
+        hora, fecha = elegido["hora"], elegido["fecha"]
+        forzadas.append(
+            f"El paciente eligió las {hora} del {fecha}. Ya se intentó agendar y el "
+            f"sistema respondió: {resultado} — seguí desde ahí. 🚫 PROHIBIDO volver "
+            f"a mostrarle la lista de horarios."
+        )
     if _paciente_eligio_tiene_obra_social(user_message):
         forzadas.append(
             "OBLIGATORIO AHORA: el paciente dijo que tiene obra social. "
@@ -829,7 +886,7 @@ def chat(user_message: str, history: list[dict] | None = None,
             "🚫 PROHIBIDO volver a preguntar si es particular u obra social. "
             "🚫 PROHIBIDO preguntar el motivo antes de mostrarle la lista."
         )
-    elif busq := _texto_parece_busqueda(user_message):
+    elif not nombre and (busq := _texto_parece_busqueda(user_message)):
         # Primeras letras de una OS que no estaba en la lista tocable.
         # Aunque la ficha diga Particular, si escribe "ava"/"ospe" está buscando.
         os_actual = (estado_ahora.get("obra_social") or "").strip().lower()

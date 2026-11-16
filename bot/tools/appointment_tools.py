@@ -1470,6 +1470,60 @@ def recordar_dato(campo: str, valor: str) -> str:
 _estado_conversacion: contextvars.ContextVar = contextvars.ContextVar("estado_conv", default=None)
 
 
+_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+          "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+_FECHA_COMPLETA = re.compile(r"\b(\d{1,2}) de ([a-z]+) de (\d{4})\b")
+_DIAS_O_FECHAS = re.compile(r"\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo|manana|pasado|semana|de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre))\b")
+_NO_ES_NOMBRE = {"si", "no", "gracias", "particular", "obra", "social", "ok", "dale",
+                 "listo", "perfecto", "hola", "turno", "consulta", "bueno", "claro"}
+
+
+def nombre_dicho(texto: str) -> tuple[str, str] | None:
+    """(nombre, apellido) si el mensaje es solo un nombre: "Florencia Ramos",
+    "a nombre de Florencia Ramos, por favor". Si no, None."""
+    t = re.sub(r"[.,;:!¡?¿]", " ", texto or "")
+    t = re.sub(r"(?i)^\s*(a nombre de|es para|para|soy|me llamo)\s+", "", t)
+    t = re.sub(r"(?i)\s+(por favor|gracias)\s*$", "", t).strip()
+    partes = t.split()
+    if not 2 <= len(partes) <= 5:
+        return None
+    if any(not re.fullmatch(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ'\-]+", p) for p in partes):
+        return None
+    if any(_sin_acentos_txt(p) in _NO_ES_NOMBRE for p in partes):
+        return None
+    return partes[0].capitalize(), " ".join(p.capitalize() for p in partes[1:])
+
+
+_CON_PROFESIONAL = re.compile(r"\bcon (?:el |la )?((?:Dr|Dra)\.?\s+[A-ZÁÉÍÓÚÑ][\wáéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][\wáéíóúñ]+)*)")
+
+
+def eleccion_de_horario(texto: str, ultima_del_bot: str):
+    """(fecha ISO, hora, profesional) si el paciente solo eligio uno de los
+    horarios que el bot le acaba de ofrecer; si no, None.
+
+    Prueba real 15/11: se le ofrecio "lunes 30 de noviembre a las 12:00, 17:00
+    o 19:00", eligio "12:00" y el modelo, en vez de agendar, volvio a consultar
+    y le repitio la lista. Elegir de la lista no se le deja a la IA.
+    """
+    # Corto, y sin nombrar otro dia: "mejor el martes a las 12" es otro pedido.
+    if not ultima_del_bot or len((texto or "").split()) > 7:
+        return None
+    if _DIAS_O_FECHAS.search(_sin_acentos_txt(texto)):
+        return None
+    hora = _hora_elegida(texto)
+    ofrecidas = {f"{int(h):02d}:{m}" for h, m in _HHMM.findall(ultima_del_bot)}
+    if not hora or hora not in ofrecidas:
+        return None
+    # La fecha completa que escribio el bot ("30 de noviembre de 2026"), no
+    # fecha_dicha_por_el_paciente: esa toma "lunes" y devuelve el proximo lunes.
+    m = _FECHA_COMPLETA.search(_sin_acentos_txt(ultima_del_bot).lower())
+    if not m or m.group(2) not in _MESES:
+        return None
+    fecha = f"{m.group(3)}-{_MESES.index(m.group(2)) + 1:02d}-{int(m.group(1)):02d}"
+    prof = _CON_PROFESIONAL.search(ultima_del_bot)
+    return fecha, hora, (prof.group(1) if prof else "")
+
+
 def motivo_por_boton_conducto(texto: str, ultima_del_bot: str = "") -> str | None:
     """El motivo que corresponde si el paciente toco un boton de conducto.
 

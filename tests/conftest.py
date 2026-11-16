@@ -96,6 +96,14 @@ from backend.models.schedule import ClinicSchedule, ClinicHoliday  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _sin_guion_de_turnos(monkeypatch):
+    """Los tests del agente general prueban al agente: el guion de turnos
+    (bot/flujo_turno.py) tiene sus propios tests, que lo prenden."""
+    from bot import flujo_turno
+    monkeypatch.setattr(flujo_turno, "ACTIVO", False)
+
+
+@pytest.fixture(autouse=True)
 def _contexto_de_conversacion_limpio():
     """Los contextvars del bot no se limpian solos entre tests.
 
