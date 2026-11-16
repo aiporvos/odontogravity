@@ -1204,6 +1204,19 @@ def chat(user_message: str, history: list[dict] | None = None,
                         "existe. Mensaje: %d caracteres (texto omitido)", len(texto),
                     )
                     texto = mensaje_inexistente_desde_tool(resultados_tools) or texto
+                # Dijo que ya hizo la consulta por conducto y NO figura: eso se le
+                # dice tal cual. Prueba real 15/11: el sistema lo rechazo bien y
+                # el modelo contesto "Perfecto 😊. Para agendar la consulta de 30
+                # minutos..." como si no hubiera escuchado que ya la hizo.
+                from backend.services.appointment_service import TEXTO_SIN_CONSULTA_PREVIA
+                if any(TEXTO_SIN_CONSULTA_PREVIA in (r or "") for r in resultados_tools) \
+                        and not re.search(r"no (encuentro|figura|aparece|veo)", texto or "", re.IGNORECASE):
+                    from backend.services.appointment_service import BOTON_CONSULTA_CONDUCTO
+                    from bot.tools.appointment_tools import set_opciones_ofrecidas
+                    logger.warning("AI_AGENT -> No dijo que la consulta previa no figura; se repone textual.")
+                    set_opciones_ofrecidas([BOTON_CONSULTA_CONDUCTO], siempre=True, tipo="botones")
+                    return TEXTO_SIN_CONSULTA_PREVIA
+
                 # La pregunta de conducto tiene que llevar los dos tiempos: el
                 # paciente elige entre 30' y 1 hora, no entre dos frases vagas.
                 #

@@ -269,3 +269,50 @@ def test_con_el_motivo_ya_resuelto_no_se_vuelve_a_preguntar(monkeypatch):
     texto, _, _ = ai_agent.chat("vengo derivado para un conducto", [], "5492604046245",
                                 {"motivo": "Consulta por conducto"})
     assert texto == texto_modelo
+
+
+# ── Prueba real 15/11: dijo "sí, ya la hice", no figura, y el modelo lo ignoró ─
+
+def test_si_dice_que_ya_la_hizo_y_no_figura_se_le_dice(monkeypatch):
+    """El sistema rechazó bien el turno de 1 hora; el modelo contestó
+    "Perfecto 😊. Para agendar la consulta de 30 minutos, ¿qué día...?" como
+    si no hubiera escuchado. Eso se le dice tal cual, con el botón."""
+    from bot import ai_agent
+    from backend.services.appointment_service import (
+        RAZON_SIN_CONSULTA_PREVIA, TEXTO_SIN_CONSULTA_PREVIA, BOTON_CONSULTA_CONDUCTO,
+    )
+    from tests.test_no_confirmar_lo_que_no_se_hizo import (
+        _Cliente, _Mensaje, _LlamadaAHerramienta,
+    )
+    guion = [
+        _Mensaje(None, [_LlamadaAHerramienta("recordar_dato", '{"campo": "motivo", "valor": "Conducto"}')]),
+        _Mensaje("Perfecto 😊. Para agendar la consulta de 30 minutos, ¿qué día te vendría bien?"),
+    ]
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (_Cliente(guion), "modelo-de-prueba"))
+    monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: f"❌ {RAZON_SIN_CONSULTA_PREVIA}")
+    monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
+
+    texto, opciones, _ = ai_agent.chat("si", [], "5492604046245", {})
+
+    assert texto == TEXTO_SIN_CONSULTA_PREVIA
+    assert opciones and opciones.get("opciones") == [BOTON_CONSULTA_CONDUCTO]
+
+
+def test_si_el_modelo_ya_lo_dijo_bien_no_se_toca(monkeypatch):
+    from bot import ai_agent
+    from backend.services.appointment_service import RAZON_SIN_CONSULTA_PREVIA
+    from tests.test_no_confirmar_lo_que_no_se_hizo import (
+        _Cliente, _Mensaje, _LlamadaAHerramienta,
+    )
+    bien = "No encuentro registrada esa consulta a tu nombre 😊 ¿Te doy un turno para la consulta de 30 minutos?"
+    guion = [
+        _Mensaje(None, [_LlamadaAHerramienta("recordar_dato", '{"campo": "motivo", "valor": "Conducto"}')]),
+        _Mensaje(bien),
+    ]
+    monkeypatch.setattr(ai_agent, "_build_client", lambda: (_Cliente(guion), "modelo-de-prueba"))
+    monkeypatch.setattr(ai_agent, "execute_tool", lambda n, a: f"❌ {RAZON_SIN_CONSULTA_PREVIA}")
+    monkeypatch.setattr(ai_agent, "corregir_apellidos", lambda t: t)
+
+    texto, _, _ = ai_agent.chat("si", [], "5492604046245", {})
+
+    assert texto == bien
