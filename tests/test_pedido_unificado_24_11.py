@@ -627,3 +627,44 @@ def test_otro_dia_de_la_lista_vieja_mueve_el_turno_recien_agendado(clinica_compl
     assert "Te pasé el turno" in t
     (movido,) = _turnos(clinica_completa)
     assert movido.id == turno.id and movido.start_time.date() > antes.date()
+
+
+# ── Chat real de un paciente, 25/11 10:07 ───────────────────────────────────
+
+def test_real_precio_se_contesta_y_sigue(clinica_completa, monkeypatch):
+    c = Charla(monkeypatch, TEL_NUEVO)
+    monkeypatch.setattr(flujo_turno, "responder_pregunta", lambda p: "El precio lo consultás llamando.")
+    c.dice("quiero un turno", intencion="sacar_turno")
+    t = c.dice("Si me dirías que sale la consulta?", intencion="pregunta",
+               pregunta="¿qué sale la consulta?")
+    assert t.startswith("El precio lo consultás llamando.")
+    t = c.dice("Que sale una consulta", intencion="pregunta", pregunta="Que sale una consulta")
+    assert "precio" in t.lower()
+
+
+def test_real_otro_dia_ignora_la_fecha_que_invente_la_ia(clinica_completa, monkeypatch):
+    c = Charla(monkeypatch, TEL_NUEVO)
+    c.dice("quiero un turno de control", intencion="sacar_turno", motivo="Control")
+    c.dice("Particular")
+    c.dice("Julián Pereyra", nombre="Julián", apellido="Pereyra")
+    primera = c.estado["turno"]["oferta"]["fecha"]
+    # La IA "lee" una fecha anterior en el mensaje del botón.
+    from datetime import date as d_, timedelta as td
+    antes = (d_.fromisoformat(primera) - td(days=1))
+    c.dice("Otro día", dia=f"{antes.day}/{antes.month}")
+    assert c.estado["turno"]["oferta"]["fecha"] > primera
+
+
+def test_real_dato_util_no_pide_perdon(clinica_completa, monkeypatch):
+    c = Charla(monkeypatch, TEL_NUEVO)
+    c.dice("Hola, que sale una consulta", intencion="sacar_turno")
+    t = c.dice("En la tarde viernes", dia="viernes", preferencia_horaria="tarde")
+    assert t.startswith("Dale, lo anoto") and "obra social" in t
+
+
+def test_oferta_explica_como_elegir(clinica_completa, monkeypatch):
+    c = Charla(monkeypatch, TEL_NUEVO)
+    c.dice("quiero un turno de control", intencion="sacar_turno", motivo="Control")
+    c.dice("Particular")
+    t = c.dice("Julián Pereyra", nombre="Julián", apellido="Pereyra")
+    assert "Tocá *Elegir horario* acá abajo" in t

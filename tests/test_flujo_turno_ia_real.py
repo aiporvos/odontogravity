@@ -31,7 +31,7 @@ CASOS = [
     ("si", PREGUNTA_CONDUCTO_PACIENTE, {"respuesta_si_no": "si"}),
     ("es para mi hijo Tomás", "¿El turno es para vos, Claudio, o para otra persona?",
      {"para_quien": "otra_persona", "nombre": "Tomás"}),
-    ("swi", "Elegí tu obra social de la lista. Si no la ves, escribime las primeras letras.",
+    ("swi", "Elegí tu obra social de la lista: tocá *Elegir* acá abajo 👇 Si no la ves, escribime las primeras letras.",
      {"obra_social": "swi"}),
     ("a las 5 de la tarde", "¿Qué horario te queda mejor?", {"hora": "17:00"}),
     ("¿dónde quedan?", "¿El turno es para vos, Claudio, o para otra persona?", {"intencion": "pregunta"}),
@@ -67,6 +67,12 @@ CASOS = [
      {"cobertura": "particular"}),
     # "doctora" puede venir como profesional: el guion descarta los genéricos.
     ("quiero turno para la doctora, por los aparatos", "", {"motivo": "Ortodoncia"}),
+    # Chat real de un paciente, 25/11
+    ("Si me dirías que sale la consulta?", "¿A nombre de quién agendo el turno? Necesito nombre y apellido.",
+     {"intencion": "pregunta"}),
+    ("En la trde viernes", "¿Para qué día te vendría bien?", {"dia": "viernes", "preferencia_horaria": "tarde"}),
+    ("Pereyra  julian", "Para reservarlo necesito tu nombre y apellido, por ejemplo: *Juan Pérez*.",
+     {"apellido": "Pereyra"}),
     ("no llego antes del 26, tenés primeros de diciembre? el 3?", "¿Qué horario te queda mejor?",
      {"quiere_otro_dia": True, "dia": "3"}),
 ]

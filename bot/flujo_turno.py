@@ -69,6 +69,10 @@ BOTON_CAMBIAR = "Quiero cambiarlo"
 BOTON_CANCELAR_SI = "Sí, cancelarlo"
 BOTON_NO = "No"
 
+# Gente mayor no se da cuenta de que la lista se toca (pedido de Claudio 25/11).
+_COMO_ELEGIR = ("\n\n👇 Tocá *Elegir horario* acá abajo y elegí uno, o escribime la hora "
+                "(por ejemplo *17:30*).")
+
 CLAVE_PREVIO = "turno_previo"   # "ya tenía turno": buscar y asociar el existente
 
 # "la doctora", "el dentista": no nombran a nadie. El profesional lo decide la
@@ -105,7 +109,8 @@ _DESPEDIDA = re.compile(r"\b(gracias|grax|chau|saludos|nos vemos|hasta (luego|ma
                         r"|buen(a|as|os) (noche|noches|tarde|tardes|dia|dias))\b")
 # Preguntas de información del consultorio (no del pedido en curso).
 _PREGUNTA_INFO = re.compile(r"\b(donde|direccion|ubicad\w*|queda[n]?|horario de atencion|a que hora (abren|cierran)"
-                            r"|abren|cierran|precio\w*|cuanto (sale|cuesta|cobran)|estacionamiento|telefono)\b")
+                            r"|abren|cierran|precio\w*|(cuanto|que) (sale|cuesta|cobran|vale)|sale (la|una) consulta|valor|costo|arancel\w*"
+                            r"|estacionamiento|telefono)\b")
 # Urgencia: se avisa que llame por un sobreturno, además de ofrecer el turno.
 _URGENCIA = re.compile(r"\b(urgen\w*|hinchad\w*|hinchazon|sangr\w*|no aguanto|dolor (muy )?(intenso|fuerte)"
                        r"|me muero de dolor|insoportable|flemon|infecci\w*)\b")
@@ -425,6 +430,10 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
 
     datos = extraer(mensaje, ultima if (t or p) else "")
     intencion = datos.get("intencion")
+    if _es(mensaje, BOTON_OTRO_DIA):
+        # El botón no trae fecha: la IA a veces "leía" una del mensaje anterior
+        # y volvía a ofrecer el mismo día (chat real 25/11).
+        datos.update(dia=None, hora=None, quiere_otro_dia=True)
 
     # Trámites: firmar la historia clínica, retirar la prótesis. No es turno.
     que = es_tramite(mensaje) or ("eso" if intencion == "tramite_consultorio" else None)
@@ -561,7 +570,12 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
         return _terminar(t, texto, estado, history, ultima, "")
 
     propuesto_antes = t.get("motivo_propuesto")
+    _claves = ("motivo_propuesto", "para_quien", "nombre", "apellido", "obra_social", "os_dicha",
+               "cobertura", "dia", "preferencia_horaria", "profesional", "hora", "hora_pedida")
+    _antes = {k: t.get(k) for k in _claves}
     _incorporar(t, datos, mensaje, motivo_boton)
+    if any(t.get(k) != v for k, v in _antes.items()):
+        t["aporto"] = True
     if t.get("motivo_propuesto") and (t["motivo_propuesto"] != propuesto_antes or motivo_boton):
         # El motivo se valida con lo dicho HASTA el mensaje que lo pidió. Con la
         # obra social antes que el motivo, el "Sí" que confirmaba la cobertura
@@ -602,7 +616,12 @@ def _terminar(t: dict, texto: str, estado: dict, history, ultima: str, aparte: s
     # Si vuelve a decir exactamente lo mismo, no se entendieron: se aclara una
     # vez y a la tercera se lo manda al teléfono, nunca un círculo sin salida.
     reiniciado = t.pop("reiniciado", False)
-    if texto and texto in (ultima or "") and not t.get("terminado") and not reiniciado:
+    aporto = t.pop("aporto", False)
+    if texto and texto in (ultima or "") and not t.get("terminado") and aporto and not reiniciado:
+        # Dio un dato (el día, la franja) aunque no era lo que se preguntó: se
+        # anota y se repite la pregunta, sin "no te entendí" (chat real 25/11).
+        texto = "Dale, lo anoto 👍 " + texto
+    elif texto and texto in (ultima or "") and not t.get("terminado") and not reiniciado:
         t["repeticiones"] = t.get("repeticiones", 0) + 1
         if t["repeticiones"] >= 2:
             t["terminado"] = True
@@ -1018,14 +1037,15 @@ def _siguiente_paso(t: dict, telefono: str, dichos: list[str]):
                                titulo="Horarios", boton="Elegir horario")
         return (f"Ya me fijé: el {fecha_en_palabras(date.fromisoformat(t['dia']))} no tengo "
                 f"lugar para {t['motivo'].lower()}. Lo más cercano es el *{o['fecha_texto']}* "
-                f"con {o['profesional']}. ¿Te sirve alguno de esos horarios, o preferís otro día?"), None
+                f"con {o['profesional']}. ¿Te sirve alguno de esos horarios, o preferís otro día?"
+                + _COMO_ELEGIR), None
     if not t.get("hora"):
         t["esperando"] = "horario"
         o = t["oferta"]
         set_opciones_ofrecidas(o["slots"] + [BOTON_OTRO_DIA], siempre=True,
                                titulo="Horarios", boton="Elegir horario")
         return (f"Elegí uno de los horarios del *{o['fecha_texto']}* con "
-                f"{o['profesional']}, o pedime otro día."), None
+                f"{o['profesional']}, o pedime otro día." + _COMO_ELEGIR), None
 
     # 6. Alta
     return _agendar(t, telefono)
@@ -1196,8 +1216,8 @@ def _falta_obra_social(t: dict):
         t["os_ofrecidas"] = (lista.get("activas") or [])[:9]
         t["esperando"] = "obra_social"
         set_opciones_ofrecidas(t["os_ofrecidas"], siempre=True, titulo="Obras sociales", boton="Elegir")
-        return ("Elegí tu obra social de la lista. Si no la ves, escribime las "
-                "primeras letras."), None
+        return ("Elegí tu obra social de la lista: tocá *Elegir* acá abajo 👇 Si no la ves, "
+                "escribime las primeras letras."), None
 
     t["esperando"] = "cobertura"
     set_opciones_ofrecidas([BOTON_TENGO_OS, BOTON_PARTICULAR], siempre=True, tipo="botones")
@@ -1328,7 +1348,7 @@ def _ofrecer_horarios(t: dict):
     if nombre:
         inicio = f"{nombre}, {inicio[0].lower()}{inicio[1:]}"
     return (f"{aviso}{inicio} te puede atender {t['oferta']['profesional']} el "
-            f"*{t['oferta']['fecha_texto']}*. ¿Qué horario te queda mejor?"), None
+            f"*{t['oferta']['fecha_texto']}*. ¿Qué horario te queda mejor?" + _COMO_ELEGIR), None
 
 
 def _alta(t: dict, hora: str, telefono: str) -> tuple[int, dict]:
