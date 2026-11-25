@@ -1081,7 +1081,11 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # Con barra o sin barra: cualquiera escribe "/reset" por
             # costumbre de Telegram, y antes eso se procesaba como un mensaje
             # normal y no reseteaba nada.
-            if text.strip().lower().lstrip("/") == "reset":
+            # "reset" también vale como primera línea de un lote: en la prueba
+            # del 24/11 llegó pegado a los mensajes siguientes ("reset\nHola,
+            # ya tenía turno") y no se reseteaba nada.
+            lineas = [l for l in (partes or text.split("\n")) if l.strip()]
+            if lineas and lineas[0].strip().lower().lstrip("/") == "reset":
                 # Limpia TODO lo que arrastra la conversación, no solo los
                 # mensajes: si quedara el estado (obra social, motivo) el bot
                 # seguiría "recordando" datos y no sería un arranque de cero;
@@ -1090,12 +1094,15 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
                 session.context_data = None
                 session.paused_until = None
                 db.commit()
-                await send_whatsapp_message(
-                    remote_jid,
-                    "✅ Listo, empezamos de cero: borré el historial, los datos que "
-                    "habías dado y reactivé el bot.",
-                )
-                return
+                resto = lineas[1:]
+                if not resto:
+                    await send_whatsapp_message(
+                        remote_jid,
+                        "✅ Listo, empezamos de cero: borré el historial, los datos que "
+                        "habías dado y reactivé el bot.",
+                    )
+                    return
+                partes, text = resto, "\n".join(resto)
 
             history = load_history(db, session.id)
 
@@ -1206,7 +1213,11 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # paso esta y tiene su propio limite de intentos. El rescate
             # cambiaba la respuesta por detras y lo dejaba desincronizado
             # (simulacion 16/11: "Tengo obra social" terminaba buscado como OS).
-            if _CLAVE_TURNO in estado_nuevo or _CLAVE_TURNO in (estado_previo or {}):
+            # Respuesta del guion (también "ya tenía turno" o un trámite): el
+            # rescate viejo la pisaba cuando repetía a propósito "llamá al
+            # consultorio" (prueba 24/11).
+            del_guion = bool(estado_nuevo.pop("_guion", False))
+            if del_guion or _CLAVE_TURNO in estado_nuevo or _CLAVE_TURNO in (estado_previo or {}):
                 accion, rescate, botones = None, None, None
             else:
                 accion, rescate, botones = await asyncio.to_thread(

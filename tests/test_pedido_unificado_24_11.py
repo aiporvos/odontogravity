@@ -340,3 +340,55 @@ def test_sim_gracias_despues_de_agendar_es_un_cierre(clinica_completa, paciente,
     t = c.dice("Gracias, quedo a la espera. Nos vemos el jueves.", intencion="saludo_o_cierre",
                dia="el jueves")
     assert t.startswith("¡Gracias a vos!")
+
+
+# ── Prueba real de Claudio (24/11, 22:05) ───────────────────────────────────
+
+def _router(monkeypatch, chat_falso, rescate=None):
+    from backend.routers import whatsapp_router as er
+    enviados = []
+
+    async def enviar(jid, texto, *a, **k):
+        enviados.append(texto)
+        return True
+
+    monkeypatch.setattr(er, "chat", chat_falso)
+    monkeypatch.setattr(er, "_responder", enviar)
+    monkeypatch.setattr(er, "send_whatsapp_message", enviar)
+    monkeypatch.setattr(er, "resolver_loop", rescate or (lambda *a: (None, None, None)))
+    return er, enviados
+
+
+def test_reset_pegado_a_otros_mensajes_resetea_y_sigue(db, monkeypatch):
+    import asyncio
+    import json
+    visto = {}
+
+    def chat_falso(text, history, phone, estado):
+        visto.update(text=text, history=history, estado=estado)
+        return "respuesta", None, estado
+
+    er, enviados = _router(monkeypatch, chat_falso)
+    jid = "5492605550997@s.whatsapp.net"
+    session = er.get_or_create_session(db, jid)
+    session.context_data = json.dumps({"tramite": "firmar la historia clínica"})
+    db.commit()
+    asyncio.run(er.handle_text_message(jid, "reset\nHola, ya tenía turno\nel jueves 26",
+                                       partes=["reset", "Hola, ya tenía turno", "el jueves 26"]))
+    assert visto["text"] == "Hola, ya tenía turno\nel jueves 26"
+    assert visto["history"] == [] and visto["estado"] == {}
+    assert enviados == ["respuesta"]
+
+
+def test_el_rescate_viejo_no_pisa_al_guion(db, monkeypatch):
+    import asyncio
+
+    def chat_falso(text, history, phone, estado):
+        return "Llamá al consultorio.", None, {"_guion": True}
+
+    def rescate(*a):
+        raise AssertionError("El rescate no debe correr sobre una respuesta del guion")
+
+    er, enviados = _router(monkeypatch, chat_falso, rescate)
+    asyncio.run(er.handle_text_message("5492605550996@s.whatsapp.net", "Hola, ya tenía turno"))
+    assert enviados == ["Llamá al consultorio."]

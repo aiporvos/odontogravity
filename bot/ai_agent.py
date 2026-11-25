@@ -722,6 +722,7 @@ def chat(user_message: str, history: list[dict] | None = None,
                 [m["content"] for m in (history or []) if m.get("role") == "user"],
             )
             if r is not None:
+                r = (r[0], r[1], {**(r[2] or {}), "_guion": True})
                 set_estado_conversacion(r[2])
                 return r
         except Exception:
