@@ -1115,6 +1115,11 @@ def create_appointment_logic(
     if not candidatos:
         return {"error": "No hay profesionales disponibles"}
 
+    # La duracion real del motivo ANTES de validar al profesional: con el
+    # default de 30' el ultimo turno de 15' de la tarde (20:15) "se pasaba" del
+    # horario y el paciente recibia "problema del sistema" (25/11).
+    duration_minutes = duracion_para_motivo(reason, db)
+
     # Si el paciente pidio un profesional, el turno es con ese o no es. Antes no
     # habia forma de pedirlo: el turno se asignaba a quien estuviera libre y el
     # modelo igual le decia al paciente que quedaba con el que habia nombrado.

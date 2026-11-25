@@ -68,10 +68,32 @@ BOTON_CONFIRMO = "Lo confirmo"
 BOTON_CAMBIAR = "Quiero cambiarlo"
 BOTON_CANCELAR_SI = "Sí, cancelarlo"
 BOTON_NO = "No"
+BOTON_MAS = "Más horarios"
 
 # Gente mayor no se da cuenta de que la lista se toca (pedido de Claudio 25/11).
-_COMO_ELEGIR = ("\n\n👇 Tocá *Elegir horario* acá abajo y elegí uno, o escribime la hora "
-                "(por ejemplo *17:30*).")
+_COMO_ELEGIR = ""   # la explicación la arma _como_elegir(t) con los horarios reales
+
+
+def _botones_horarios(t: dict):
+    """Botones a la vista (no una lista que hay que abrir): los dos horarios
+    más cercanos y "Más horarios"; al final, "Otro día". Pedido de Claudio
+    25/11: la gente mayor no abre la lista "Elegir horario"."""
+    o = t.get("oferta") or {}
+    slots = o.get("slots") or []
+    pag = t.get("pagina", 0)
+    if pag * 2 >= len(slots):
+        pag = t["pagina"] = 0
+    visibles = slots[pag * 2: pag * 2 + 2]
+    mas = len(slots) > (pag + 1) * 2
+    set_opciones_ofrecidas(visibles + [BOTON_MAS if mas else BOTON_OTRO_DIA], siempre=True, tipo="botones")
+
+
+def _como_elegir(t: dict) -> str:
+    slots = (t.get("oferta") or {}).get("slots") or []
+    if not slots:
+        return ""
+    return (f"\n\n🕐 Horarios libres: {' · '.join(slots)}\n👇 Tocá un botón de abajo, o escribime "
+            f"la hora (por ejemplo *{slots[0]}*).")
 
 CLAVE_PREVIO = "turno_previo"   # "ya tenía turno": buscar y asociar el existente
 
@@ -116,7 +138,8 @@ _URGENCIA = re.compile(r"\b(urgen\w*|hinchad\w*|hinchazon|sangr\w*|no aguanto|do
                        r"|me muero de dolor|insoportable|flemon|infecci\w*)\b")
 # Rechazo / despedida mientras se le ofrece algo.
 _RECHAZO = re.compile(r"\b(no gracias|no,? gracias|busco otro|buscar otro|otro lado|otro profesional"
-                      r"|dejalo|dejá|no importa|olvidalo)\b")
+                      r"|dejalo|dejá|no importa|olvidalo|me acerco|voy a pasar|paso por|presencial"
+                      r"|personalmente|voy al consultorio|llamo yo|los llamo|voy a llamar)\b")
 # "Para mí" tiene que estar dicho: la IA lo deducía de "quiero un turno" y el
 # bot no preguntaba para quién era (prueba real 25/11).
 _PARA_MI = re.compile(r"\b(para mi|para mi mismo|para mi misma|mio|mia|yo|soy yo|a mi nombre|me duele|me duelen"
@@ -427,6 +450,11 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
     # Botones y respuestas cortas que se resuelven sin la IA.
     from bot.tools.appointment_tools import motivo_por_boton_conducto
     motivo_boton = motivo_por_boton_conducto(mensaje, ultima) if t.get("esperando") == "conducto" else None
+    if not motivo_boton and t.get("esperando") == "conducto" and "Te doy un turno para la consulta" in (ultima or "") \
+            and re.search(r"\b(bueno|dale|ok|si|sí|listo|de acuerdo|perfecto|esta bien|va)\b", (mensaje or "").lower()):
+        # Chat real 25/11: "bueno" volvía a preguntar para qué era el turno.
+        from backend.services.appointment_service import MOTIVO_CONSULTA_CONDUCTO
+        motivo_boton = MOTIVO_CONSULTA_CONDUCTO
 
     datos = extraer(mensaje, ultima if (t or p) else "")
     intencion = datos.get("intencion")
@@ -557,10 +585,13 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
             "así te ven por sobreturno. Igual te busco el turno más cercano:")
 
     n_msg = _norm(mensaje)
-    if t.get("esperando") in ("horario", "horario_con_otro", "sin_cupo", "dia") and not datos.get("dia") \
-            and not datos.get("hora") and not _es(mensaje, BOTON_OTRO_DIA) and (
-                _RECHAZO.search(n_msg) or intencion == "saludo_o_cierre"
-                or (t.get("esperando") == "horario_con_otro" and datos.get("respuesta_si_no") == "no")):
+    sin_datos = not any(datos.get(k) for k in ("motivo", "obra_social", "cobertura", "hora", "nombre", "apellido"))
+    if t.get("esperando") and not motivo_boton and sin_datos and not _es(mensaje, BOTON_OTRO_DIA) and (
+            _RECHAZO.search(n_msg)
+            or (intencion == "saludo_o_cierre" and _DESPEDIDA.search(n_msg))
+            or (t.get("esperando") in ("horario", "horario_con_otro", "sin_cupo", "dia")
+                and not datos.get("dia") and intencion == "saludo_o_cierre")
+            or (t.get("esperando") == "horario_con_otro" and datos.get("respuesta_si_no") == "no")):
         # Sim 24/11: dijo "no, gracias" o se despidió y el bot le volvía a
         # ofrecer lo mismo pidiendo perdón.
         t["terminado"] = True
@@ -585,6 +616,7 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
     texto, _ = _siguiente_paso(t, telefono, dichos + [mensaje])
     o = t.get("oferta") or {}
     if oferta_antes and not t.get("terminado") and t.get("esperando") == "horario" \
+            and not _es(mensaje, BOTON_MAS) \
             and o.get("fecha") == oferta_antes.get("fecha") and o.get("slots") == oferta_antes.get("slots"):
         t["misma_oferta"] = t.get("misma_oferta", 0) + 1
         if t["misma_oferta"] >= 2:
@@ -842,6 +874,11 @@ def _incorporar(t: dict, d: dict, mensaje: str, motivo_boton: str | None):
     if d.get("apellido") and (esperando in ("nombre", "apellido", "para_quien") or d.get("para_quien")):
         t["apellido"] = d["apellido"].strip().title()
 
+    if esperando == "horario" and _es(mensaje, BOTON_MAS):
+        t["pagina"] = t.get("pagina", 0) + 1
+        t["mas"] = True
+        return
+
     # Sin cupo: el paciente elige una salida.
     if esperando == "sin_cupo":
         if _es(mensaje, BOTON_LLAMAR):
@@ -1025,27 +1062,32 @@ def _siguiente_paso(t: dict, telefono: str, dichos: list[str]):
                 t["hora"] = pedida
                 t["agendado"] = True
                 return _confirmacion(t, d), None
-            set_opciones_ofrecidas(t["oferta"]["slots"] + [BOTON_OTRO_DIA], siempre=True,
-                                   titulo="Horarios", boton="Elegir horario")
+            _botones_horarios(t)
             return f"A las {pedida} ya no tengo lugar ese día. " + texto, opciones
         t["hora"] = pedida
     if not t.get("hora") and t.pop("insiste", None):
         from backend.services.appointment_service import fecha_en_palabras
         from datetime import date
         o = t["oferta"]
-        set_opciones_ofrecidas(o["slots"] + [BOTON_OTRO_DIA], siempre=True,
-                               titulo="Horarios", boton="Elegir horario")
+        _botones_horarios(t)
         return (f"Ya me fijé: el {fecha_en_palabras(date.fromisoformat(t['dia']))} no tengo "
                 f"lugar para {t['motivo'].lower()}. Lo más cercano es el *{o['fecha_texto']}* "
                 f"con {o['profesional']}. ¿Te sirve alguno de esos horarios, o preferís otro día?"
-                + _COMO_ELEGIR), None
+                + _como_elegir(t)), None
+    if not t.get("hora") and t.pop("mas", None):
+        t["esperando"] = "horario"
+        o = t["oferta"]
+        _botones_horarios(t)
+        pag = t.get("pagina", 0)
+        visibles = o["slots"][pag * 2: pag * 2 + 2]
+        return (f"Más horarios del *{o['fecha_texto']}* con {o['profesional']}: "
+                f"*{' y '.join(visibles)}* 👇 Tocá el que te sirva, o escribime la hora."), None
     if not t.get("hora"):
         t["esperando"] = "horario"
         o = t["oferta"]
-        set_opciones_ofrecidas(o["slots"] + [BOTON_OTRO_DIA], siempre=True,
-                               titulo="Horarios", boton="Elegir horario")
+        _botones_horarios(t)
         return (f"Elegí uno de los horarios del *{o['fecha_texto']}* con "
-                f"{o['profesional']}, o pedime otro día." + _COMO_ELEGIR), None
+                f"{o['profesional']}, o pedime otro día." + _como_elegir(t)), None
 
     # 6. Alta
     return _agendar(t, telefono)
@@ -1306,6 +1348,7 @@ def _ofrecer_horarios(t: dict):
     t.pop("busco_lejos", None)
     t["oferta"] = {"fecha": d["date"], "fecha_texto": d.get("fecha_texto") or d["date"],
                    "profesional": d.get("professional") or "", "slots": slots[:9]}
+    t["pagina"] = 0
     t["esperando"] = "horario"
     t.pop("no_le_sirvio", None)
     if t.pop("paso_a_particular", None) and not aviso:
@@ -1338,8 +1381,7 @@ def _ofrecer_horarios(t: dict):
                      f"el primero libre es la semana que viene. "
                      if (ofrecida - hoy).days <= 13 else
                      f"Esta semana ya no me quedan turnos para {t['motivo'].lower()}. ")
-    set_opciones_ofrecidas(t["oferta"]["slots"] + [BOTON_OTRO_DIA], siempre=True,
-                           titulo="Horarios", boton="Elegir horario")
+    _botones_horarios(t)
     nombre = _nombre_de_quien_escribe(t)
     if t.get("reprogramar"):
         inicio = "Para cambiarlo"
@@ -1348,7 +1390,7 @@ def _ofrecer_horarios(t: dict):
     if nombre:
         inicio = f"{nombre}, {inicio[0].lower()}{inicio[1:]}"
     return (f"{aviso}{inicio} te puede atender {t['oferta']['profesional']} el "
-            f"*{t['oferta']['fecha_texto']}*. ¿Qué horario te queda mejor?" + _COMO_ELEGIR), None
+            f"*{t['oferta']['fecha_texto']}*. ¿Qué horario te queda mejor?" + _como_elegir(t)), None
 
 
 def _alta(t: dict, hora: str, telefono: str) -> tuple[int, dict]:
@@ -1443,8 +1485,7 @@ def _agendar(t: dict, telefono: str):
         if fallida and nueva.get("fecha") == o.get("fecha") and fallida in nueva.get("slots", []):
             # Nunca volver a ofrecer la hora que recién falló.
             nueva["slots"] = [h for h in nueva["slots"] if h != fallida]
-            set_opciones_ofrecidas(nueva["slots"] + [BOTON_OTRO_DIA], siempre=True,
-                                   titulo="Horarios", boton="Elegir horario")
+            _botones_horarios(t)
         return "Ese horario se acaba de ocupar. " + texto, op
     t["terminado"] = True
     return ("No pude confirmar el turno por un problema del sistema. " + _texto_llamar()), None

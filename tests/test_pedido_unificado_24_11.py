@@ -667,4 +667,45 @@ def test_oferta_explica_como_elegir(clinica_completa, monkeypatch):
     c.dice("quiero un turno de control", intencion="sacar_turno", motivo="Control")
     c.dice("Particular")
     t = c.dice("Julián Pereyra", nombre="Julián", apellido="Pereyra")
-    assert "Tocá *Elegir horario* acá abajo" in t
+    assert "🕐 Horarios libres:" in t and "Tocá un botón de abajo" in t
+    # Botones a la vista: dos horarios + "Más horarios" (o "Otro día").
+    assert len(c.opciones) <= 3 and c.opciones[-1] in (flujo_turno.BOTON_MAS, flujo_turno.BOTON_OTRO_DIA)
+    assert all(":" in h for h in c.opciones[:-1])
+
+
+
+# ── Chat real 25/11 tarde: botones visibles, conducto "bueno", presencial ───
+
+def test_mas_horarios_pagina_y_al_final_otro_dia(clinica_completa, monkeypatch):
+    c = Charla(monkeypatch, TEL_NUEVO)
+    c.dice("quiero un turno de control", intencion="sacar_turno", motivo="Control")
+    c.dice("Particular")
+    c.dice("Julián Pereyra", nombre="Julián", apellido="Pereyra")
+    todos = c.estado["turno"]["oferta"]["slots"]
+    vistos = [h for h in c.opciones if ":" in h]
+    while flujo_turno.BOTON_MAS in c.opciones:
+        t = c.dice(flujo_turno.BOTON_MAS)
+        assert t.startswith("Más horarios del")
+        vistos += [h for h in c.opciones if ":" in h]
+    assert vistos == todos and c.opciones[-1] == flujo_turno.BOTON_OTRO_DIA
+    t = c.dice(vistos[-1])
+    assert t.startswith("¡Listo")
+
+
+def test_conducto_bueno_agenda_la_consulta(clinica_completa, paciente, monkeypatch):
+    from backend.services.appointment_service import TEXTO_SIN_CONSULTA_PREVIA
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("quiero terminar un conducto", intencion="sacar_turno", motivo="Conducto")
+    c.dice("Para mí"); c.dice("Sí")
+    t = c.dice("Ya hice la consulta", respuesta_si_no="si")
+    assert t == TEXTO_SIN_CONSULTA_PREVIA
+    t = c.dice("bueno")
+    assert "¿Para qué sería el turno?" not in t and "consulta por conducto" in t.lower(), t
+
+
+def test_me_acerco_presencial_cierra(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("quiero un turno", intencion="sacar_turno")
+    c.dice("Para mí"); c.dice("Sí")
+    t = c.dice("me acerco mañana presencial", dia="mañana")
+    assert t.startswith("Entendido") and flujo_turno.CLAVE not in c.estado
