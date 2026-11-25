@@ -181,7 +181,7 @@ def _fecha_iso(dia_dicho: str) -> str:
     m = re.search(r"\b(\d{1,2}) de (" + "|".join(_MESES) + r")\b", n)
     if m:
         dia, mes = int(m.group(1)), _MESES.index(m.group(2)) + 1
-    elif m := re.search(r"\b(\d{1,2})/(\d{1,2})\b", n):
+    elif m := re.search(r"\b(\d{1,2})/(\d{1,2})\b", (dia_dicho or "").lower()):
         dia, mes = int(m.group(1)), int(m.group(2))
     else:
         dia = mes = None
@@ -497,6 +497,20 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
             # Sim 24/11: "¿dónde quedan y en qué horario?" → "llamá". Los datos
             # están en el panel: se contestan.
             return _con_saludo(texto, history), None, estado
+    ultimo = estado.get("ultimo_turno")
+    if not t and ultimo and (datos.get("hora") or datos.get("dia")) and not datos.get("motivo") \
+            and datos.get("para_quien") != "otra_persona" \
+            and intencion in ("dar_datos", "reprogramar_turno", "otro", "pregunta"):
+        # Recién agendado y manda "17:30" u "otro día": es mover ESE turno, no
+        # sacar otro (prueba real 25/11: arrancaba un pedido nuevo).
+        logger.info("FLUJO_TURNO -> cambia el turno recién agendado")
+        t = _t_para_reprogramar(ultimo, datos)
+        t.setdefault("dia", str(ultimo["date"])[:10])
+        if datos.get("hora"):
+            t["hora_pedida"] = datos["hora"]
+        estado.pop("ultimo_turno", None)
+        texto, _ = _siguiente_paso(t, telefono, dichos + [mensaje])
+        return _terminar(t, texto, estado, history, ultima, "")
     if not t:
         if intencion != "sacar_turno" and not (intencion == "dar_datos" and datos.get("motivo")):
             return None
@@ -595,6 +609,8 @@ def _terminar(t: dict, texto: str, estado: dict, history, ultima: str, aparte: s
             estado[CLAVE_PREVIO] = t["previo_sugerido"]
         if t.get("agendado"):
             estado["accion_hecha"] = True
+            if (t.get("recien") or {}).get("id"):
+                estado["ultimo_turno"] = t["recien"]
         if t.get("obra_social"):
             # Para el próximo pedido de la misma persona: no se repregunta.
             titular = t.get("titular") or {}
@@ -1330,6 +1346,14 @@ def _alta(t: dict, hora: str, telefono: str) -> tuple[int, dict]:
 def _confirmacion(t: dict, d: dict) -> str:
     o = t["oferta"]
     t["terminado"] = True
+    # Para entender un "mejor a las 17:30" justo después de confirmar.
+    t["recien"] = {
+        "id": str(d.get("appointment_id") or t.get("reprogramar") or ""),
+        "date": f"{o['fecha']} {t['hora']}:00", "reason": t.get("motivo"),
+        "professional": d.get("professional") or o.get("profesional"),
+        "insurance": t.get("obra_social"),
+        "paciente": f"{t.get('nombre') or ''} {t.get('apellido') or ''}".strip(),
+    }
     nombre = _nombre_de_quien_escribe(t)
     listo = f"¡Listo, {nombre}! 😊" if nombre else "¡Listo! 😊"
     profesional = d.get("professional") or o["profesional"]

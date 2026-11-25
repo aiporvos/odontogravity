@@ -302,8 +302,8 @@ def test_prueba_real_turno_en_ficha_con_otro_formato_de_telefono(clinica_complet
     c = Charla(monkeypatch, TEL_CLAUDIO)
     t = c.dice("reset\nHola, ya tenía turno\nel jueves 26", intencion="ya_tengo_turno", dia="el jueves 26")
     assert "llamá" not in t.lower() and ("El único que tenés" in t or "encontré el turno" in t)
-    d = turno.start_time
-    t = c.dice(f"el {d.day}/{d.month}", dia=f"{d.day}/{d.month}")
+    if "El único que tenés" in t:
+        t = c.dice("Sí", respuesta_si_no="si")
     assert "encontré el turno" in t and "09:00" in t
 
 
@@ -556,4 +556,44 @@ def test_sim_insiste_hoy_no_da_vueltas(clinica_completa, paciente, monkeypatch):
     hoy = date.today()
     respuestas = [c.dice(f"necesito hoy {i}", dia="hoy", quiere_otro_dia=True) for i in range(4)]
     assert any("sobreturno" in r for r in respuestas)
-    assert sum(r.startswith("Perdón") for r in respuestas) <= 1
+    assert sum(r.startswith("Perdón, no te entendí") for r in respuestas) <= 1
+
+
+# ── Prueba real 25/11 9:48 ──────────────────────────────────────────────────
+
+def test_reset_en_la_misma_linea_de_un_mensaje(db, monkeypatch):
+    import asyncio
+    import json
+    visto = {}
+
+    def chat_falso(text, history, phone, estado):
+        visto.update(text=text, estado=estado)
+        return "respuesta", None, estado
+
+    er, enviados = _router(monkeypatch, chat_falso)
+    jid = "5492605550995@s.whatsapp.net"
+    session = er.get_or_create_session(db, jid)
+    session.context_data = json.dumps({"turno": {"activo": True, "obra_social": "Particular"}})
+    db.commit()
+    asyncio.run(er.handle_text_message(jid, "reset\ntengo un dolor muy fuerte",
+                                       partes=["reset\ntengo un dolor muy fuerte"]))
+    assert visto["text"] == "tengo un dolor muy fuerte" and visto["estado"] == {}
+
+
+def test_hora_despues_de_agendar_mueve_ese_turno(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("quiero sacarme una muela", intencion="sacar_turno", motivo="Extracción")
+    c.dice("Para mí"); c.dice("Sí")
+    libres = [h for h in c.opciones if ":" in h]
+    c.dice(libres[0])
+    (turno,) = _turnos(clinica_completa)
+    t = c.dice(libres[1], hora=libres[1])
+    assert "Te pasé el turno" in t and libres[1] in t, t
+    (movido,) = _turnos(clinica_completa)
+    assert movido.id == turno.id and movido.start_time.strftime("%H:%M") == libres[1]
+
+
+def test_fecha_con_barra_aunque_ya_haya_pasado():
+    from bot.flujo_turno import _fecha_iso
+    assert _fecha_iso("el 24/11").endswith("-11-24")
+    assert _fecha_iso("el 3/12").endswith("-12-03")

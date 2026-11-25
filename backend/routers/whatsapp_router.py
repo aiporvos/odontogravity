@@ -1084,7 +1084,9 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # "reset" también vale como primera línea de un lote: en la prueba
             # del 24/11 llegó pegado a los mensajes siguientes ("reset\nHola,
             # ya tenía turno") y no se reseteaba nada.
-            lineas = [l for l in (partes or text.split("\n")) if l.strip()]
+            # Cada parte puede traer varias líneas ("reset\ntengo dolor..." en un
+            # solo mensaje, prueba real 25/11): se mira línea por línea.
+            lineas = [l for parte in (partes or [text]) for l in parte.split("\n") if l.strip()]
             if lineas and lineas[0].strip().lower().lstrip("/") == "reset":
                 # Limpia TODO lo que arrastra la conversación, no solo los
                 # mensajes: si quedara el estado (obra social, motivo) el bot
