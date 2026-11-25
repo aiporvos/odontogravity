@@ -123,7 +123,7 @@ def test_conocido_para_si_mismo(consultorio, paciente, monkeypatch):
     assert "Silvestro" in t and "horario" in t.lower()
     hora = c.opciones[0]
     t = c.dice(hora)
-    assert t.startswith("¡Listo!") and hora in t
+    assert t.startswith("¡Listo, Claudio!") and hora in t
     (turno,) = _turnos(consultorio)
     assert turno.patient_id == paciente.id and turno.reason == "Extracción"
     assert flujo_turno.CLAVE not in c.estado
@@ -134,17 +134,19 @@ def test_conocido_para_si_mismo(consultorio, paciente, monkeypatch):
 # ── Número nuevo: el "mío" que terminó buscado como obra social ─────────────
 
 def test_numero_nuevo_dice_mio(consultorio, monkeypatch):
+    """Orden del 24/11: obra social primero, después el motivo, y recién al
+    final el nombre de quien se atiende (número sin ficha)."""
     c = Charla(monkeypatch, TEL_NUEVO)
     t = c.dice("quiero un turno para una extraccion", intencion="sacar_turno", motivo="Extracción")
+    assert "obra social o particular" in t
+    t = c.dice("Tengo obra social")
+    assert "primeras letras" in t and "PAMI" in c.opciones
+    t = c.dice("PAMI")
     assert "nombre y apellido" in t
     t = c.dice("mio", para_quien="yo")
     assert "obra social" not in t.lower()
     assert "tu nombre y apellido" in t and not t.startswith("Perdón")
     t = c.dice("Ana Pérez", nombre="Ana", apellido="Pérez")
-    assert "obra social o particular" in t
-    t = c.dice("Tengo obra social")
-    assert "primeras letras" in t and "PAMI" in c.opciones
-    t = c.dice("PAMI")
     assert "horario" in t.lower()
     c.dice(c.opciones[0])
     (turno,) = _turnos(consultorio)
@@ -155,6 +157,7 @@ def test_numero_nuevo_dice_mio(consultorio, monkeypatch):
 def test_numero_nuevo_sin_apellido(consultorio, monkeypatch):
     c = Charla(monkeypatch, TEL_NUEVO)
     c.dice("turno para extracción", intencion="sacar_turno", motivo="Extracción")
+    c.dice("Particular")
     t = c.dice("Ana", nombre="Ana")
     assert "apellido de Ana" in t
 
@@ -191,15 +194,16 @@ def test_osde_un_viernes_se_ofrece_otro_dia_sin_explicar_la_regla(consultorio, p
 def test_conducto_dice_que_si_y_no_figura(consultorio, paciente, monkeypatch):
     c = Charla(monkeypatch, TEL_CLAUDIO)
     t = c.dice("me das un turno para un tratamiento de conducto??", intencion="sacar_turno", motivo="Conducto")
+    assert "para vos, Claudio" in t
+    c.dice("Para mí")
+    t = c.dice("Sí")
     assert t.endswith(PREGUNTA_CONDUCTO_PACIENTE)
     assert c.opciones == [BOTON_CONSULTA_CONDUCTO, BOTON_TRATAMIENTO_CONDUCTO]
     t = c.dice("si", respuesta_si_no="si")
     assert t == TEXTO_SIN_CONSULTA_PREVIA
     assert c.opciones == [BOTON_CONSULTA_CONDUCTO]
     t = c.dice("Necesito la consulta")
-    assert "para vos, Claudio" in t
-    c.dice("Para mí")
-    c.dice("Sí")
+    assert "horario" in t.lower()
     c.dice(c.opciones[0])
     (turno,) = _turnos(consultorio)
     assert turno.reason == "Consulta por conducto"
@@ -208,8 +212,10 @@ def test_conducto_dice_que_si_y_no_figura(consultorio, paciente, monkeypatch):
 def test_conducto_boton_necesito_la_consulta(consultorio, paciente, monkeypatch):
     c = Charla(monkeypatch, TEL_CLAUDIO)
     c.dice("turno para conducto", intencion="sacar_turno", motivo="Conducto")
+    c.dice("Para mí")
+    c.dice("Sí")
     t = c.dice("no", respuesta_si_no="no")
-    assert "para vos, Claudio" in t
+    assert "horario" in t.lower()
 
 
 # ── Obra social ─────────────────────────────────────────────────────────────
@@ -217,11 +223,12 @@ def test_conducto_boton_necesito_la_consulta(consultorio, paciente, monkeypatch)
 def test_obra_social_no_cubierta(consultorio, monkeypatch):
     c = Charla(monkeypatch, TEL_NUEVO)
     c.dice("turno para extracción", intencion="sacar_turno", motivo="Extracción")
-    c.dice("Ana Pérez", nombre="Ana", apellido="Pérez")
     c.dice("Tengo obra social")
     t = c.dice("Swiss Medical")
     assert "No trabajamos con" in t and "Particular" in c.opciones
     t = c.dice("Particular")
+    assert "nombre y apellido" in t
+    t = c.dice("Ana Pérez", nombre="Ana", apellido="Pérez")
     assert "horario" in t.lower()
 
 
@@ -234,7 +241,7 @@ def test_elegir_con_una_frase_agenda_sin_repetir_la_lista(consultorio, paciente,
     c.dice("Sí")
     hora = c.opciones[1]
     t = c.dice(f"me viene bien a las {hora} gracias", hora=hora)
-    assert t.startswith("¡Listo!")
+    assert t.startswith("¡Listo")
     assert len(_turnos(consultorio)) == 1
 
 
@@ -310,10 +317,9 @@ def test_obra_social_con_punto_de_la_lista(consultorio, monkeypatch):
     """16-rafaga: "OSEP." no coincidía con la lista y daba vueltas."""
     c = Charla(monkeypatch, TEL_NUEVO)
     c.dice("turno para extracción", intencion="sacar_turno", motivo="Extracción")
-    c.dice("Ana Pérez", nombre="Ana", apellido="Pérez")
     c.dice("Tengo obra social")
     t = c.dice("PAMI.", obra_social="PAMI.")
-    assert "horario" in t.lower()
+    assert "nombre y apellido" in t
 
 
 def test_tres_veces_lo_mismo_manda_a_llamar(consultorio, paciente, monkeypatch):
@@ -339,7 +345,7 @@ def test_pide_otro_dia_con_hora_y_esta_libre_agenda_directo(consultorio, pacient
         d += timedelta(days=1)
     t = c.dice(f"mejor el {d.day}/{d.month} a las 10:00", dia=f"{d.day}/{d.month}", hora="10:00",
                quiere_otro_dia=True)
-    assert t.startswith("¡Listo!") and "10:00" in t
+    assert t.startswith("¡Listo") and "10:00" in t
     (turno,) = _turnos(consultorio)
     assert turno.start_time.date() == d
 
@@ -383,9 +389,9 @@ def test_pide_un_profesional_que_no_hace_esa_practica(consultorio, paciente, mon
     """Prueba real 16/11 0:55: consulta por conducto "con Silvestro"."""
     c = Charla(monkeypatch, TEL_CLAUDIO)
     c.dice("turno para conducto", intencion="sacar_turno", motivo="Conducto")
-    c.dice("Necesito la consulta")
     c.dice("Para mí")
-    t = c.dice("Sí", profesional="Silvestro")
+    c.dice("Sí")
+    t = c.dice("Necesito la consulta", profesional="Silvestro")
     assert "no la hace" in t and "Murad" in t and "con ella" in t
     t = c.dice("dale", respuesta_si_no="si")
     assert "Murad" in t and "horario" in t.lower()
@@ -394,10 +400,11 @@ def test_pide_un_profesional_que_no_hace_esa_practica(consultorio, paciente, mon
 def test_el_nombre_se_pide_cada_vez_distinto(consultorio, monkeypatch):
     """Prueba en producción 16/11: "un lunes" y "mío" repetían la misma frase."""
     c = Charla(monkeypatch, TEL_NUEVO)
-    t1 = c.dice("quiero un turnopara una extraccion", intencion="sacar_turno", motivo="Extracción")
+    c.dice("quiero un turnopara una extraccion", intencion="sacar_turno", motivo="Extracción")
+    t1 = c.dice("Particular")
     t2 = c.dice("un lunes", dia="un lunes", para_quien="yo")
     t3 = c.dice("mio", para_quien="yo")
     assert len({t1, t2, t3}) == 3
     assert not any(t.startswith("Perdón") for t in (t2, t3))
     t = c.dice("Ana Prueba", nombre="Ana", apellido="Prueba")
-    assert "obra social o particular" in t
+    assert "horario" in t.lower()

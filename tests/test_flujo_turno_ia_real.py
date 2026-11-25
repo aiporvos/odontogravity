@@ -20,7 +20,7 @@ pytestmark = [
 ]
 
 TIPOS = ["Control", "Limpieza", "Extracción", "Arreglos", "Ortodoncia", "Implantes",
-         "Consulta", "Consulta por conducto", "Conducto", "Odontopediatría"]
+         "Consulta", "Consulta por conducto", "Conducto", "Odontopediatría", "Prótesis"]
 
 CASOS = [
     # (mensaje, última pregunta del bot, lo que tiene que entender)
@@ -58,6 +58,17 @@ CASOS = [
      {"motivo": "Ortodoncia", "profesional": "Silvestro"}),
     ("Quiero pedir un turno para mi hijo Tomás, de 8 años, porque le duele un diente.", "",
      {"motivo": "Odontopediatría", "para_quien": "otra_persona", "nombre": "Tomás"}),
+    # Chats reales del 24/11 (pedido unificado)
+    ("Ya tenía turno", "¿Para qué sería el turno?", {"intencion": "ya_tengo_turno"}),
+    ("TENGO TURNO EL JUEVES 26 DE NOVIEMBRE A LAS 17:30", "", {"intencion": "ya_tengo_turno", "hora": "17:30"}),
+    ("es por la firma de la historia clínica", "", {"intencion": "tramite_consultorio"}),
+    ("me interesa hacerme una prótesis", "", {"intencion": "sacar_turno", "motivo": "Prótesis"}),
+    ("hacelo sin obra social", "¿Querés que busque otro día, o preferís llamar al consultorio?",
+     {"cobertura": "particular"}),
+    # "doctora" puede venir como profesional: el guion descarta los genéricos.
+    ("quiero turno para la doctora, por los aparatos", "", {"motivo": "Ortodoncia"}),
+    ("no llego antes del 26, tenés primeros de diciembre? el 3?", "¿Qué horario te queda mejor?",
+     {"quiere_otro_dia": True, "dia": "3"}),
 ]
 
 

@@ -67,6 +67,8 @@ def load_history(db: Session, session_id) -> list[dict]:
     subquery = db.query(ChatMessage).filter(
         ChatMessage.session_id == session_id,
         ChatMessage.created_at >= corte,
+        # Los de sistema son marcas internas (gestión humana), no charla.
+        ChatMessage.role != MessageRole.system,
     ).order_by(ChatMessage.created_at.desc()).limit(HISTORY_LIMIT).all()
     
     # Reverse them to be in chronological order
@@ -77,6 +79,28 @@ def load_history(db: Session, session_id) -> list[dict]:
     logger.debug("Historial de %s: %d mensajes", session_id, len(subquery))
 
     return [{"role": m.role.value, "content": m.content} for m in subquery]
+
+# Marca interna: alguien de la clínica escribió a mano en este chat. Sirve para
+# que, vencida la pausa, el bot no pise una gestión de turno que sigue abierta
+# (chat real 24/11: la secretaria negociaba un turno "provisorio"
+# y días después el bot le contestaba "no encuentro turnos asociados").
+MARCA_GESTION_HUMANA = "[gestion_humana]"
+HORAS_GESTION_HUMANA = 72
+
+
+def marcar_gestion_humana(db: Session, session_id):
+    save_message(db, session_id, MessageRole.system, MARCA_GESTION_HUMANA)
+
+
+def gestion_humana_reciente(db: Session, session_id) -> bool:
+    corte = datetime.utcnow() - timedelta(hours=HORAS_GESTION_HUMANA)
+    return db.query(ChatMessage).filter(
+        ChatMessage.session_id == session_id,
+        ChatMessage.role == MessageRole.system,
+        ChatMessage.content == MARCA_GESTION_HUMANA,
+        ChatMessage.created_at >= corte,
+    ).first() is not None
+
 
 def save_message(db: Session, session_id, role: MessageRole, content: str):
     import time
@@ -516,6 +540,7 @@ async def _pausar_por_intervencion_humana(remote_jid: str, texto: str):
         minutos = _minutos_de_pausa()
         session.paused_until = datetime.utcnow() + timedelta(minutes=minutos)
         db.commit()
+        marcar_gestion_humana(db, session.id)
         if texto.strip():
             save_message(db, session.id, MessageRole.assistant, texto.strip())
         logger.info(
@@ -545,6 +570,7 @@ async def _quizas_pausar_por_intervencion_humana(remote_jid: str, texto: str):
             return
         session.paused_until = datetime.utcnow() + timedelta(minutes=_minutos_de_pausa())
         db.commit()
+        marcar_gestion_humana(db, session.id)
         logger.info(
             f"🔕 Una persona respondió a mano en {remote_jid}: el bot se calla "
             f"{_minutos_de_pausa()} minutos."
@@ -1140,10 +1166,13 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
             # Sirve para que el backend verifique que el DNI pertenece a quien escribe.
             requester_phone = normalize_to_e164(remote_jid)
             # chat is sync, run in executor to not block event loop
+            if gestion_humana_reciente(db, session.id):
+                estado_previo = {**estado_previo, "gestion_humana": True}
             loop = asyncio.get_event_loop()
             response, opciones, estado_nuevo = await loop.run_in_executor(
                 None, chat, text, history, requester_phone, estado_previo
             )
+            estado_previo.pop("gestion_humana", None)
             logger.info(f"🤖 IA respondió ({len(response)} caracteres)")
 
             # 1) Si la charla ya venía empezada, no se vuelve a presentar.
@@ -1183,7 +1212,9 @@ async def handle_text_message(remote_jid: str, text: str, partes: list[str] | No
                 accion, rescate, botones = await asyncio.to_thread(
                     resolver_loop, response, ultimas, opciones, estado_previo, dichos,
                 )
-            pausar_despues_de_enviar = False
+            estado_nuevo.pop("gestion_humana", None)
+            # El guion dejó la gestión a la secretaria: el bot se vuelve a callar.
+            pausar_despues_de_enviar = bool(estado_nuevo.pop("pausar", False))
             if accion == "rescate":
                 logger.warning(f"🔁 Respuesta repetida para {remote_jid}: rescate por código.")
                 response, opciones = rescate, botones

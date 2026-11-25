@@ -34,6 +34,11 @@ Router.register('settings', async (container) => {
                             <input type="number" name="REMINDER_HOURS_BEFORE" value="${s.REMINDER_HOURS_BEFORE || '24'}" placeholder="24">
                             <small>Cuántas horas antes del turno se envía el recordatorio.</small>
                         </div>
+                        <div class="form-group">
+                            <label>Trámites sin turno: cuándo NO pasar</label>
+                            <input type="text" name="EXCEPCIONES_TRAMITES" value="${(s.EXCEPCIONES_TRAMITES || '').replace(/"/g, '&quot;')}" placeholder="Ej: menos los miércoles a la tarde">
+                            <small>Firmar historia clínica, autorizaciones o retirar prótesis: el bot dice que pase en horario de atención, con esta aclaración.</small>
+                        </div>
                     </div>
                     <button type="button" class="btn btn-primary" onclick="SettingsPage.saveBotSettings()">Guardar</button>
                 </form>

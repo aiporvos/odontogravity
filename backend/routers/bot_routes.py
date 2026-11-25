@@ -522,6 +522,11 @@ def bot_create_appointment(data: BotAppointmentRequest, db: Session = Depends(ge
     )
     if "error" in result:
         raise HTTPException(404, result["error"])
+    if data.notes and result.get("appointment_id"):
+        turno = db.get(Appointment, UUID(str(result["appointment_id"])))
+        if turno:
+            turno.notes = ((turno.notes + "\n") if turno.notes else "") + data.notes.strip()[:200]
+            db.commit()
 
     # El link lo arma el backend, que es el unico que sabe el dominio publico.
     # La tool lo tenia escrito a mano y podia quedar desincronizado.
@@ -614,12 +619,16 @@ async def bot_cancel_appointment(data: BotCancelRequest, db: Session = Depends(g
 @router.post("/reschedule", dependencies=[Depends(verify_bot_key)])
 def bot_reschedule_appointment(data: BotRescheduleRequest, db: Session = Depends(get_db)):
     patient, opciones = resolver_paciente(db, data.dni, data.requester_phone)
-    if not patient:
-        raise HTTPException(404, _elegir_entre(opciones) if opciones else _NO_IDENTIFICADO)
+    # Número con varias fichas (mamá e hijos): el turno ya viene identificado
+    # por su id, así que alcanza con que sea de alguna ficha de ese número. Sin
+    # esto, "ya tenía turno el jueves, quiero cambiarlo" no se podía mover.
+    ids = [patient.id] if patient else [p.id for p in opciones]
+    if not ids:
+        raise HTTPException(404, _NO_IDENTIFICADO)
 
     appt = db.query(Appointment).filter(
         Appointment.id == data.appointment_id,
-        Appointment.patient_id == patient.id,
+        Appointment.patient_id.in_(ids),
         Appointment.is_deleted == False,
     ).first()
     if not appt:
@@ -705,6 +714,7 @@ def bot_query_appointments(data: BotQueryRequest, db: Session = Depends(get_db))
                 "location": a.location,
                 "professional": a.professional.full_name if a.professional else "?",
                 "paciente": f"{p.first_name} {p.last_name}".strip(),
+                "insurance": a.insurance_name or p.insurance_name or "Particular",
             })
     turnos.sort(key=lambda t: t["date"])
 

@@ -19,8 +19,21 @@ El paciente puede decir todo junto y en cualquier orden ("quiero sacarme una
 muela el lunes, es para mi mamá Ana Pérez, tiene PAMI"): la IA extrae los
 datos de ESE mensaje (JSON estricto) y el código solo pregunta lo que falta.
 
-Cancelar, reprogramar y consultar turnos siguen en el agente general
-(`ai_agent.chat`), que recibe la charla cuando el paciente pide eso.
+Cancelar y consultar turnos siguen en el agente general (`ai_agent.chat`).
+
+Pedido unificado del 24/11/2026 (chats reales de Silprodent):
+
+    - Orden: obra social/particular → para qué → especialista → próximo libre.
+      Con varias fichas en el número se pregunta antes para quién es, porque
+      de eso depende qué obra social mirar.
+    - "Ya tenía turno" / cambiar uno: se pregunta el día, se asocia si hay uno
+      claro y si no, a llamar (nunca un turno duplicado).
+    - Trámites (firmar la historia clínica, retirar la prótesis, traer la
+      orden) no son turno: se pasa por el consultorio en horario.
+    - Prótesis SÍ es turno: el tipo "Prótesis" del panel define duración y
+      profesional (Dr. Silvestro, 30 min).
+    - Sin cupo: se ofrece otro día, particular o llamar; nunca el mismo texto.
+    - Si la secretaria atendió el chat hace poco, el bot no pisa esa gestión.
 """
 from __future__ import annotations
 
@@ -48,6 +61,65 @@ BOTON_PARTICULAR = "Particular"
 BOTON_OTRO_DIA = "Otro día"
 BOTON_SI = "Sí"
 BOTON_CAMBIO = "Cambió"
+BOTON_LLAMAR = "Llamar"
+BOTON_PRIMERA = "1ª consulta"
+BOTON_SEGUNDA = "2ª consulta o más"
+BOTON_CONFIRMO = "Lo confirmo"
+BOTON_CAMBIAR = "Quiero cambiarlo"
+
+CLAVE_PREVIO = "turno_previo"   # "ya tenía turno": buscar y asociar el existente
+
+# "la doctora", "el dentista": no nombran a nadie. El profesional lo decide la
+# práctica (ortodoncia → Dra. Murad); buscarlo por nombre terminaba en "no
+# encuentro a ese profesional" (chat real 24/11).
+_PROFESIONAL_GENERICO = {
+    "la doctora", "doctora", "la dra", "dra", "el doctor", "doctor", "el dr", "dr",
+    "la odontologa", "el odontologo", "la dentista", "el dentista", "la doc", "el doc",
+}
+
+# Trámites que se hacen pasando por el consultorio, sin reservar sillón (caso
+# real del 24/11: el bot buscaba "turno de prótesis" para firmar la historia clínica).
+_TRAMITES = [
+    (re.compile(r"\bfirm\w*\b.{0,40}\b(historia|hc|planilla|papel\w*|ficha|consentimiento)\b"
+                r"|\b(historia clinica|hc)\b.{0,30}\bfirm\w*|\b(venir|ir|pasar) a firmar\b"),
+     "firmar la historia clínica"),
+    (re.compile(r"\b(retir|busc|entreg)\w*\b.{0,30}\b(protesis|placa|dentadura)\b"),
+     "retirar la prótesis"),
+    (re.compile(r"\b(llev|traer|traig|entreg|dej)\w*\b.{0,30}\b(orden|autorizacion|bono)\w*\b"),
+     "traer la orden o la autorización"),
+    (re.compile(r"\bpasar por (el )?consultorio\b"), "eso"),
+]
+
+_PARTICULAR = re.compile(
+    r"\b(particular|sin (la )?obra social|sin os|sin cobertura|no tengo (obra social|os|cobertura)"
+    r"|no uso (la )?obra social|lo pago yo|pago yo|lo abono)\b")
+
+_YA_TENIA = re.compile(
+    r"\bya (tenia|tengo|habia sacado|saque|me dieron)( un)? turno\b"
+    r"|\bmi turno (del|de el|es el|era el|para el|era)\b"
+    r"|\btengo( un)? turno (el|para el|del|de el)\b")
+
+_SALUDO = re.compile(r"^(hola|holi|buen dia|buenos dias|buenas)\b")
+_PIDE_TURNO = re.compile(r"\b(quiero|necesito|queria|quisiera|me das|me da|pedir|sacar)\b.*\bturno\b")
+
+
+def es_tramite(texto: str) -> str | None:
+    """Qué trámite nombra el mensaje ("firmar la historia clínica"), o None."""
+    n = _norm(texto)
+    for patron, que in _TRAMITES:
+        if patron.search(n):
+            return que
+    return None
+
+
+def dice_particular(texto: str) -> bool:
+    """"hacelo sin obra social", "particular", "lo pago yo" (chat real)."""
+    return bool(_PARTICULAR.search(_norm(texto)))
+
+
+def _texto_llamar() -> str:
+    return (f"Para no hacerte perder tiempo, llamá al consultorio al "
+            f"{telefono_consultorio()} y te lo resuelven enseguida 🙏")
 
 
 # ── Utilidades ───────────────────────────────────────────────────────────────
@@ -141,8 +213,9 @@ _ESQUEMA = {
     "additionalProperties": False,
     "properties": {
         "intencion": {"type": "string", "enum": [
-            "sacar_turno", "cancelar_turno", "reprogramar_turno",
-            "consultar_mis_turnos", "dar_datos", "pregunta", "saludo_o_cierre", "otro"]},
+            "sacar_turno", "cancelar_turno", "reprogramar_turno", "ya_tengo_turno",
+            "consultar_mis_turnos", "tramite_consultorio", "dar_datos", "pregunta",
+            "saludo_o_cierre", "otro"]},
         "motivo": {"type": ["string", "null"]},
         "para_quien": {"type": ["string", "null"], "enum": ["yo", "otra_persona", None]},
         "nombre": {"type": ["string", "null"]},
@@ -166,13 +239,13 @@ _INSTRUCCIONES = """Sos el módulo que ENTIENDE los mensajes de pacientes de un 
 
 Contexto: la última pregunta del asistente fue: «{pregunta}». Interpretá el mensaje como respuesta a esa pregunta.
 
-- intencion: sacar_turno si pide un turno; cancelar_turno / reprogramar_turno / consultar_mis_turnos si quiere eso con un turno que YA tiene; dar_datos si responde lo que se le preguntó; pregunta si consulta algo del consultorio (dirección, precios, horarios, si atienden X); saludo_o_cierre; otro.
-- motivo: el tipo de consulta que pide, elegido de esta lista (usá el nombre exacto): {tipos}. "sacarme una muela" = Extracción; "arreglo de una caries" = Arreglos; brackets, aparatos o "control de ortodoncia" = Ortodoncia (NUNCA Control); si el turno es para un niño o niña (menor de 14 años) = Odontopediatría, aunque diga control o dolor. Para conducto/endodoncia devolvé "Conducto". Si dice un síntoma sin práctica clara ("me duele una muela") devolvé "Consulta" solo si existe; si no, null.
+- intencion: sacar_turno si pide un turno; cancelar_turno / reprogramar_turno / consultar_mis_turnos si quiere eso con un turno que YA tiene; ya_tengo_turno si dice que ya tenía un turno o cita la fecha de uno que le dieron ("ya tenía turno", "mi turno del jueves 26"); tramite_consultorio si quiere firmar la historia clínica, traer una orden o autorización, o retirar una prótesis ya hecha (eso NO es sacar turno); dar_datos si responde lo que se le preguntó; pregunta si consulta algo del consultorio (dirección, precios, horarios, si atienden X); saludo_o_cierre; otro.
+- motivo: el tipo de consulta que pide, elegido de esta lista (usá el nombre exacto): {tipos}. "sacarme una muela" = Extracción; "arreglo de una caries" = Arreglos; brackets, aparatos o "control de ortodoncia" = Ortodoncia (NUNCA Control); si el turno es para un niño o niña (menor de 14 años) = Odontopediatría, aunque diga control o dolor. Para conducto/endodoncia devolvé "Conducto". Prótesis, placa, dentadura o "quiero hacerme una prótesis" = Prótesis. Si dice un síntoma sin práctica clara ("me duele una muela") devolvé "Consulta" solo si existe; si no, null.
 - para_quien: "yo" si el turno es para quien escribe ("para mí", "mío", "yo", "soy yo"); "otra_persona" si es para otro ("para mi hijo", "para mi mamá Ana"). nombre/apellido: de la persona que se atiende, solo si los dice.
 - cobertura: "particular" o "obra_social" si lo dice. obra_social: el nombre o las letras que escribió si responde a qué obra social tiene ("osde", "swi", "pami").
 - dia: la expresión de día tal cual la dijo ("el lunes", "mañana", "16/11", "un martes", "la semana que viene"). preferencia_horaria: "mañana", "tarde", "después de las 18", "temprano", etc.
 - hora: si elige o nombra una hora, en HH:MM ("a las 5 de la tarde" = 17:00).
-- profesional: si pide un profesional por nombre.
+- profesional: si pide un profesional por nombre o apellido. "la doctora" o "el dentista" sin nombre = null.
 - pregunta: si además hace una pregunta, la pregunta textual.
 - respuesta_si_no: "si" o "no" si contesta afirmativa o negativamente a la última pregunta.
 - quiere_otro_dia: true si rechaza el día u horarios ofrecidos o pide otra fecha ("no puedo el 20", "otro día", "necesito antes", "no me sirve"). Si además nombra el día que quiere, ponelo en dia.
@@ -256,14 +329,76 @@ def responder_pregunta(pregunta: str) -> str:
 # ── El guion ─────────────────────────────────────────────────────────────────
 
 def _cortar_flujo(estado: dict) -> dict:
-    return {k: v for k, v in (estado or {}).items() if k != CLAVE}
+    return {k: v for k, v in (estado or {}).items() if k not in (CLAVE, CLAVE_PREVIO)}
+
+
+def _cerrar_pedido(estado: dict) -> dict:
+    """Pedido cerrado: el siguiente arranca limpio. Si quedaran el motivo o el
+    día, el próximo turno (o el agente general) los heredaba."""
+    return {k: v for k, v in _cortar_flujo(estado).items()
+            if k not in ("motivo", "fecha_hora", "paciente")}
+
+
+def _con_saludo(texto: str, history: list[dict], nombre: str | None = None) -> str:
+    if history:
+        return texto
+    return f"¡{_saludo().capitalize()}{', ' + nombre if nombre else ''}! 😊 {texto}"
+
+
+def _texto_tramite(que: str) -> str:
+    from backend.services.config import get_config
+    from bot.ai_agent import get_horarios_texto
+    try:
+        horarios = get_horarios_texto()
+    except Exception:
+        horarios = ""
+    if not horarios or "no cargado" in horarios:
+        horarios = ""
+    excepcion = (get_config("EXCEPCIONES_TRAMITES", "") or "").strip().rstrip(".")
+    que = "eso" if que == "eso" else que
+    texto = (f"Para {que} no hace falta sacar turno 😊 Podés pasar por el consultorio "
+             f"cualquier día en horario de atención")
+    if excepcion:
+        texto += f" ({excepcion})"
+    texto += f": {horarios}." if horarios else "."
+    return texto + f" Si tenés dudas, llamá al {telefono_consultorio()}."
+
+
+def _seguimiento_tramite(d: dict) -> str:
+    from datetime import date
+    from bot.ai_agent import get_horarios_texto
+    dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    iso = _fecha_iso(d["dia"]) if d.get("dia") else ""
+    if iso:
+        nombre = dias[date.fromisoformat(iso).weekday()]
+        try:
+            franjas = next((x.split(": ", 1)[1] for x in get_horarios_texto().split(" · ")
+                            if x.startswith(nombre + ":")), "")
+        except Exception:
+            franjas = ""
+        if franjas:
+            return (f"Sí 😊 El {nombre.lower()} podés pasar en este horario: {franjas}. "
+                    "No hace falta turno ni avisar antes.")
+        return (f"El {nombre.lower()} el consultorio no atiende. Podés pasar otro día en "
+                f"horario de atención, o llamar al {telefono_consultorio()}.")
+    return ("Podés pasar cuando te quede cómodo dentro del horario de atención 😊 No hace "
+            "falta turno ni avisar antes.")
+
+
+def _texto_secretaria() -> str:
+    return ("Ese turno lo está viendo la secretaria por este mismo chat 😊 Te responde "
+            "por acá apenas pueda, así no se cruzan dos gestiones.")
 
 
 def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
               dichos: list[str]):
     """(texto, opciones, estado) si el mensaje es del flujo de turnos; si no, None."""
     estado = dict(estado or {})
+    # Lo agrega el router: alguien de la clínica escribió a mano en este chat
+    # en los últimos días. No se guarda en el estado.
+    gestion_humana = estado.pop("gestion_humana", False)
     t = dict(estado.get(CLAVE) or {})
+    p = dict(estado.get(CLAVE_PREVIO) or {})
     respuestas_bot = [m["content"] for m in (history or []) if m.get("role") == "assistant"]
     ultima = respuestas_bot[-1] if respuestas_bot else ""
 
@@ -271,25 +406,108 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
     from bot.tools.appointment_tools import motivo_por_boton_conducto
     motivo_boton = motivo_por_boton_conducto(mensaje, ultima) if t.get("esperando") == "conducto" else None
 
-    datos = extraer(mensaje, ultima if t else "")
+    datos = extraer(mensaje, ultima if (t or p) else "")
     intencion = datos.get("intencion")
+
+    # Trámites: firmar la historia clínica, retirar la prótesis. No es turno.
+    que = es_tramite(mensaje) or ("eso" if intencion == "tramite_consultorio" else None)
+    if que:
+        logger.info("FLUJO_TURNO -> trámite de consultorio, sin turno")
+        set_opciones_ofrecidas(None)
+        estado = _cerrar_pedido(estado)
+        estado["tramite"] = que
+        return _con_saludo(_texto_tramite(que), history), tomar_opciones_ofrecidas(), estado
+
+    # Sigue hablando del trámite ("¿puedo pasar mañana a la mañana?"): no es
+    # un pedido de turno nuevo (simulación 24/11).
+    if estado.get("tramite") and not t and not datos.get("motivo") \
+            and intencion not in ("cancelar_turno", "consultar_mis_turnos", "ya_tengo_turno",
+                                  "reprogramar_turno"):
+        if intencion == "saludo_o_cierre":
+            return "¡De nada! Te esperamos 😊", None, estado
+        set_opciones_ofrecidas(None)
+        return _seguimiento_tramite(datos), tomar_opciones_ofrecidas(), estado
+    estado.pop("tramite", None)
+
+    # "Gracias, nos vemos el jueves" después de confirmar: cierre, no pedido.
+    if not t and not p and intencion == "saludo_o_cierre" and history \
+            and ultima.startswith(("¡Listo", "¡Perfecto")):
+        return "¡Gracias a vos! Te esperamos 😊 Cualquier cosa, escribime.", None, estado
+
+    ya_tenia = intencion in ("ya_tengo_turno", "reprogramar_turno") or bool(_YA_TENIA.search(_norm(mensaje)))
+    sobre_turnos = ya_tenia or intencion in ("sacar_turno", "cancelar_turno", "consultar_mis_turnos") \
+        or (intencion == "dar_datos" and (datos.get("dia") or datos.get("hora")))
+
+    # La secretaria estuvo gestionando este chat: el bot no le pisa la
+    # negociación ni trata un turno provisorio como si no existiera (caso
+    # real del 24/11).
+    if gestion_humana and not t and not p and sobre_turnos:
+        logger.info("FLUJO_TURNO -> gestión humana reciente: se deja a la secretaria")
+        set_opciones_ofrecidas(None)
+        estado["pausar"] = True
+        return _texto_secretaria(), tomar_opciones_ofrecidas(), estado
+
+    # "Ya tenía turno" o cambiar uno: buscar el existente, nunca duplicar.
+    if ya_tenia or (p and intencion != "sacar_turno"):
+        if intencion == "cancelar_turno":
+            estado.pop(CLAVE_PREVIO, None)
+            return None
+        if ya_tenia and not p:
+            p = {"cambiar": intencion == "reprogramar_turno"}
+        r = _turno_previo(p, datos, mensaje, telefono)
+        if r[0] == "respuesta":
+            _, texto, p = r
+            estado = _cortar_flujo(estado) if p is None else {**_cortar_flujo(estado), CLAVE_PREVIO: p}
+            return _con_saludo(texto, history), tomar_opciones_ofrecidas(), estado
+        # Pasa a buscar horario nuevo para el turno encontrado.
+        t = r[1]
+        estado.pop(CLAVE_PREVIO, None)
+        texto, _ = _siguiente_paso(t, telefono, dichos + [mensaje])
+        return _terminar(t, texto, estado, history, ultima, "")
+    estado.pop(CLAVE_PREVIO, None)
 
     if not t:
         if intencion != "sacar_turno" and not (intencion == "dar_datos" and datos.get("motivo")):
             return None
-        t = {"activo": True}
+        t = {"activo": True, "os_previa": estado.get("os_confirmada")}
         logger.info("FLUJO_TURNO -> empieza")
-    elif intencion in ("cancelar_turno", "reprogramar_turno", "consultar_mis_turnos"):
+    elif intencion in ("cancelar_turno", "consultar_mis_turnos"):
         logger.info("FLUJO_TURNO -> el paciente pide %s: pasa al agente general", intencion)
         return None
+    elif intencion == "sacar_turno" and _pedido_nuevo(t, mensaje):
+        # "Hola, quiero un turno" con el pedido trabado: se empieza de nuevo
+        # conservando quién es y su cobertura, en vez de mandarlo a llamar.
+        logger.info("FLUJO_TURNO -> pedido nuevo: se reinicia")
+        t = {k: t[k] for k in ("identificado", "fichas", "ficha_nombre", "titular",
+                               "obra_social", "para_quien", "nombre", "apellido",
+                               "os_previa") if k in t}
+        t["activo"] = True
 
     aparte = ""
     if datos.get("pregunta") and intencion == "pregunta":
         aparte = responder_pregunta(datos["pregunta"])
 
+    propuesto_antes = t.get("motivo_propuesto")
     _incorporar(t, datos, mensaje, motivo_boton)
-    texto, opciones = _siguiente_paso(t, telefono, dichos + [mensaje])
+    if t.get("motivo_propuesto") and (t["motivo_propuesto"] != propuesto_antes or motivo_boton):
+        # El motivo se valida con lo dicho HASTA el mensaje que lo pidió. Con la
+        # obra social antes que el motivo, el "Sí" que confirmaba la cobertura
+        # se tomaba como "sí, ya hice la consulta por conducto".
+        t["dichos_motivo"] = dichos + [mensaje]
+    texto, _ = _siguiente_paso(t, telefono, dichos + [mensaje])
+    return _terminar(t, texto, estado, history, ultima, aparte)
 
+
+def _pedido_nuevo(t: dict, mensaje: str) -> bool:
+    n = _norm(mensaje)
+    if not _PIDE_TURNO.search(n):
+        return False
+    trabado = t.get("repeticiones") or t.get("sin_cupo") or \
+        t.get("esperando") in ("dia", "sin_cupo", "horario_con_otro")
+    return bool(_SALUDO.search(n)) or bool(trabado)
+
+
+def _terminar(t: dict, texto: str, estado: dict, history, ultima: str, aparte: str):
     # Si vuelve a decir exactamente lo mismo, no se entendieron: se aclara una
     # vez y a la tercera se lo manda al teléfono, nunca un círculo sin salida.
     if texto and texto in (ultima or "") and not t.get("terminado"):
@@ -297,33 +515,125 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
         if t["repeticiones"] >= 2:
             t["terminado"] = True
             set_opciones_ofrecidas(None)
-            texto = (f"Perdón, no logro entenderte bien por acá 🙏 Para no hacerte perder "
-                     f"tiempo, llamá al consultorio al {telefono_consultorio()} y te dan el "
-                     f"turno enseguida.")
+            texto = "Perdón, no logro entenderte bien por acá 🙏 " + _texto_llamar()
         else:
             texto = "Perdón, no te entendí bien. " + texto
     elif not t.get("terminado"):
         t["repeticiones"] = 0
 
     if t.get("terminado"):
-        # Pedido cerrado: el siguiente arranca limpio. Si quedaran el motivo o
-        # el día, el próximo turno (o el agente general) los heredaba.
-        estado = {k: v for k, v in _cortar_flujo(estado).items()
-                  if k not in ("motivo", "fecha_hora", "paciente")}
+        estado = _cerrar_pedido(estado)
         if t.get("agendado"):
             estado["accion_hecha"] = True
+        if t.get("obra_social"):
+            # Para el próximo pedido de la misma persona: no se repregunta.
+            titular = t.get("titular") or {}
+            quien = titular.get("nombre_completo") or f"{t.get('nombre') or ''} {t.get('apellido') or ''}".strip()
+            if quien:
+                estado["os_confirmada"] = {"quien": quien, "os": t["obra_social"]}
     else:
+        estado = {k: v for k, v in estado.items() if k != CLAVE_PREVIO}
         estado[CLAVE] = t
         # Compatibilidad con el agente general, que lee estas claves del estado.
         for k in ("motivo", "obra_social"):
             if t.get(k):
                 estado[k] = t[k]
-    if not history:
-        nombre = t.get("ficha_nombre")
-        texto = f"¡{_saludo().capitalize()}{', ' + nombre if nombre else ''}! 😊 {texto}"
+    texto = _con_saludo(texto, history, t.get("ficha_nombre"))
     if aparte:
         texto = f"{aparte}\n\n{texto}"
     return texto, tomar_opciones_ofrecidas(), estado
+
+
+# ── "Ya tenía turno" ─────────────────────────────────────────────────────────
+
+def _mis_turnos(telefono: str) -> list[dict] | None:
+    try:
+        estado_http, d = _post("/api/bot/my-appointments", {"requester_phone": telefono}, timeout=15)
+    except Exception:
+        return None
+    if estado_http != 200:
+        return None
+    return d.get("appointments") or []
+
+
+def _turno_previo(p: dict, d: dict, mensaje: str, telefono: str):
+    """("respuesta", texto, p|None) o ("reprogramar", t)."""
+    from datetime import datetime
+    from backend.services.appointment_service import fecha_en_palabras
+    set_opciones_ofrecidas(None)
+    # "Quiero pasarlo a la mañana" en el primer mensaje vale para buscar el nuevo.
+    if d.get("preferencia_horaria"):
+        p["preferencia"] = d["preferencia_horaria"]
+
+    def llamar():
+        return ("respuesta", "No llego a identificar ese turno desde acá, y no quiero "
+                "sacarte uno repetido. " + _texto_llamar(), None)
+
+    def asociar(turno: dict, cambiar: bool):
+        cuando = datetime.fromisoformat(turno["date"])
+        turno["fecha_texto"] = fecha_en_palabras(cuando.date())
+        turno["hora"] = cuando.strftime("%H:%M")
+        if cambiar:
+            return ("reprogramar", _t_para_reprogramar(turno, {**d, "preferencia_horaria":
+                                                                d.get("preferencia_horaria") or p.get("preferencia")}))
+        set_opciones_ofrecidas([BOTON_CONFIRMO, BOTON_CAMBIAR], siempre=True, tipo="botones")
+        quien = f" de {turno['paciente']}" if p.get("varios") else ""
+        return ("respuesta", f"Sí, encontré el turno{quien}: *{turno['fecha_texto']} a las "
+                f"{turno['hora']}* con {turno['professional']} ({(turno.get('reason') or 'consulta').lower()}). "
+                "¿Lo confirmás o querés cambiarlo?",
+                {"esperando": "confirmar", "turno": turno})
+
+    if p.get("esperando") == "confirmar":
+        turno = p["turno"]
+        if _es(mensaje, BOTON_CONFIRMO) or d.get("respuesta_si_no") == "si":
+            return ("respuesta", f"¡Perfecto! 😊 Queda confirmado: te esperamos el "
+                    f"*{turno['fecha_texto']} a las {turno['hora']}* con {turno['professional']}.", None)
+        if _es(mensaje, BOTON_CAMBIAR) or d.get("respuesta_si_no") == "no" \
+                or d.get("quiere_otro_dia") or d.get("dia") or d.get("intencion") == "reprogramar_turno":
+            return ("reprogramar", _t_para_reprogramar(turno, {**d, "preferencia_horaria":
+                                                                d.get("preferencia_horaria") or p.get("preferencia")}))
+        set_opciones_ofrecidas([BOTON_CONFIRMO, BOTON_CAMBIAR], siempre=True, tipo="botones")
+        return ("respuesta", "¿Lo confirmás o querés cambiarlo?", p)
+
+    turnos = _mis_turnos(telefono)
+    if not turnos:
+        return llamar()
+    p["varios"] = len({x.get("paciente") for x in turnos}) > 1
+    iso = _fecha_iso(d["dia"]) if d.get("dia") else ""
+    if iso:
+        candidatos = [x for x in turnos if str(x["date"])[:10] == iso]
+        if d.get("hora"):
+            candidatos = [x for x in candidatos if str(x["date"])[11:16] == d["hora"]] or candidatos
+        if len(candidatos) == 1:
+            return asociar(candidatos[0], p.get("cambiar"))
+        if p.get("esperando") != "dia":
+            # Puede haber dicho "en un par de días": se le pide el día una vez.
+            p["esperando"] = "dia"
+            return ("respuesta", "No encuentro un turno tuyo ese día. ¿Me decís qué día y a "
+                    "qué hora lo tenías?", p)
+        return llamar()
+    if p.get("esperando") == "dia":
+        # No recuerda el día: solo se asocia si hay uno solo, sin dudas.
+        return asociar(turnos[0], p.get("cambiar")) if len(turnos) == 1 else llamar()
+    p["esperando"] = "dia"
+    return ("respuesta", "¿Qué día tenías el turno? Así lo busco en la agenda.", p)
+
+
+def _t_para_reprogramar(turno: dict, d: dict) -> dict:
+    nombre, _, apellido = (turno.get("paciente") or "").partition(" ")
+    t = {"activo": True, "identificado": True, "para_quien": "listo",
+         "reprogramar": turno["id"], "turno_anterior": turno,
+         "motivo": turno.get("reason") or "Control",
+         "obra_social": turno.get("insurance") or "Particular",
+         "profesional": turno.get("professional") if turno.get("professional") != "?" else None,
+         "nombre": nombre, "apellido": apellido, "orto_vez": "-"}
+    if d.get("dia"):
+        iso = _fecha_iso(d["dia"])
+        if iso and iso != str(turno["date"])[:10]:
+            t["dia"] = iso
+    if d.get("preferencia_horaria"):
+        t["preferencia_horaria"] = d["preferencia_horaria"]
+    return t
 
 
 def _incorporar(t: dict, d: dict, mensaje: str, motivo_boton: str | None):
@@ -337,6 +647,16 @@ def _incorporar(t: dict, d: dict, mensaje: str, motivo_boton: str | None):
         # Cambio de opinión ("mejor que me arreglen la caries"): se recalcula.
         t["motivo_propuesto"], t["motivo"] = d["motivo"], None
         t.pop("oferta", None)
+        t.pop("orto_vez", None)
+
+    # Ortodoncia: primera consulta o ya en tratamiento.
+    if esperando == "orto_vez":
+        n = _norm(mensaje)
+        if _es(mensaje, BOTON_PRIMERA) or re.search(r"\b(1|primera|nunca|primer)\b", n):
+            t["orto_vez"] = BOTON_PRIMERA
+        elif _es(mensaje, BOTON_SEGUNDA) or re.search(
+                r"\b(2|segunda|control|ya tengo|ya tiene|tratamiento|aparatos?|alambr\w*)\b", n):
+            t["orto_vez"] = BOTON_SEGUNDA
 
     # Para quién
     if esperando == "para_quien" and _es(mensaje, BOTON_PARA_MI):
@@ -345,39 +665,51 @@ def _incorporar(t: dict, d: dict, mensaje: str, motivo_boton: str | None):
         t["para_quien"] = "otra_persona"
     elif esperando == "para_quien" and any(_es(mensaje, n) for n in t.get("familia", [])):
         t["para_quien"], t["nombre_elegido"] = "familiar", mensaje.strip()
-    elif d.get("para_quien"):
+    elif d.get("para_quien") and t.get("para_quien") != "listo":
         t["para_quien"] = d["para_quien"]
     if d.get("nombre") and (esperando in ("nombre", "apellido", "para_quien") or d.get("para_quien")):
         t["nombre"] = d["nombre"].strip().title()
     if d.get("apellido") and (esperando in ("nombre", "apellido", "para_quien") or d.get("para_quien")):
         t["apellido"] = d["apellido"].strip().title()
 
+    # Sin cupo: el paciente elige una salida.
+    if esperando == "sin_cupo":
+        if _es(mensaje, BOTON_LLAMAR):
+            t["llamar"] = True
+            return
+        if _es(mensaje, BOTON_OTRO_DIA) and not d.get("dia"):
+            t["pide_dia"] = True
+
+    # Particular dicho con palabras ("hacelo sin obra social"): vale en
+    # cualquier paso y se vuelve a buscar la agenda con esa cobertura.
+    if _es(mensaje, BOTON_PARTICULAR) or dice_particular(mensaje) or d.get("cobertura") == "particular":
+        if t.get("obra_social") and t.get("obra_social") != "Particular":
+            t.pop("oferta", None)
+            t["paso_a_particular"] = True
+        t["obra_social"] = "Particular"
+        t.pop("cobertura", None)
+        t.pop("os_dicha", None)
     # Obra social de la ficha: se confirma, no se da por hecha.
-    if esperando == "confirmar_os":
+    elif esperando == "confirmar_os":
         if d.get("obra_social") or d.get("cobertura"):
             t["os_confirmada"] = "cambio"      # dijo cuál tiene ahora: sigue abajo
         elif _es(mensaje, BOTON_SI) or d.get("respuesta_si_no") == "si":
             t["os_confirmada"] = "si"
         elif _es(mensaje, BOTON_CAMBIO) or d.get("respuesta_si_no") == "no":
             t["os_confirmada"] = "cambio"
-
-    # Obra social
-    if esperando == "cobertura" and _es(mensaje, BOTON_PARTICULAR):
-        t["obra_social"] = "Particular"
+        if d.get("obra_social"):
+            t["os_dicha"] = d["obra_social"]
+        elif d.get("cobertura") == "obra_social":
+            t["cobertura"] = "obra_social"
     elif esperando == "cobertura" and _es(mensaje, BOTON_TENGO_OS):
         t["cobertura"] = "obra_social"
     elif esperando in ("obra_social", "cobertura") and any(_es(mensaje, o) for o in t.get("os_ofrecidas", [])):
         t["os_dicha"] = next(o for o in t["os_ofrecidas"] if _es(mensaje, o))
     elif esperando == "obra_social":
         # En este paso, lo que escribe ES la obra social (o sus primeras letras).
-        if d.get("cobertura") == "particular":
-            t["obra_social"] = "Particular"
-        else:
-            t["os_dicha"] = (d.get("obra_social") or mensaje).strip(" .,;!¡?¿")
-    else:
-        if d.get("cobertura") == "particular":
-            t["obra_social"] = "Particular"
-        elif d.get("obra_social"):
+        t["os_dicha"] = (d.get("obra_social") or mensaje).strip(" .,;!¡?¿")
+    elif not t.get("obra_social"):
+        if d.get("obra_social"):
             t["os_dicha"] = d["obra_social"]
         elif d.get("cobertura") == "obra_social":
             t["cobertura"] = "obra_social"
@@ -388,11 +720,15 @@ def _incorporar(t: dict, d: dict, mensaje: str, motivo_boton: str | None):
         if iso and iso != t.get("dia") and iso != (t.get("oferta") or {}).get("fecha"):
             t["dia"] = iso
             t.pop("oferta", None)
+            t.pop("pide_dia", None)
     if d.get("preferencia_horaria") and d["preferencia_horaria"] != t.get("preferencia_horaria"):
         t["preferencia_horaria"] = d["preferencia_horaria"]
         t.pop("oferta", None)
-    if d.get("profesional") and d["profesional"] != t.get("profesional"):
-        t["profesional"] = d["profesional"]
+    profesional = d.get("profesional")
+    if profesional and _norm(profesional) in _PROFESIONAL_GENERICO:
+        profesional = None
+    if profesional and profesional != t.get("profesional"):
+        t["profesional"] = profesional
         t.pop("oferta", None)
     pide_el_mismo = bool(d.get("dia")) and _fecha_iso(d["dia"]) == (t.get("oferta") or {}).get("fecha")
     # Insiste con el día que pidió y que no tiene lugar ("¿podrían mañana?"):
@@ -443,14 +779,44 @@ def _hora_elegida(texto: str, slots: list[str]) -> str | None:
     return None
 
 
+def _nombre_de_quien_escribe(t: dict) -> str:
+    """Para hablarle por su nombre (chat real: el bot nunca usó su nombre)."""
+    titular = t.get("titular") or {}
+    if t.get("para_quien") in ("yo", None) and titular.get("nombre"):
+        return titular["nombre"]
+    if t.get("para_quien") == "yo" and t.get("nombre"):
+        return t["nombre"]
+    return t.get("ficha_nombre") or ""
+
+
 def _siguiente_paso(t: dict, telefono: str, dichos: list[str]):
-    """Valida lo que haya y pregunta lo primero que falte, en orden fijo."""
+    """Valida lo que haya y pregunta lo primero que falte, en orden fijo:
+    (para quién, si el número tiene fichas) → obra social o particular → para
+    qué → especialista y próximo turno libre."""
     set_opciones_ofrecidas(None)
 
-    # 1. Motivo
+    if t.pop("llamar", None):
+        t["terminado"] = True
+        return _texto_llamar(), None
+
+    # 0. Quién escribe (sin preguntar nada: sale del número)
+    if not t.get("identificado"):
+        _identificar(t, telefono)
+    # 1. Para quién, solo si hay fichas: define qué obra social mirar.
+    falta = _falta_eleccion_persona(t)
+    if falta:
+        return falta
+
+    # 2. Obra social o particular
+    falta = _falta_obra_social(t)
+    if falta:
+        return falta
+
+    # 3. Motivo
     if not t.get("motivo"):
         if t.get("motivo_propuesto"):
-            ok, motivo, razon = _validar_motivo(t["motivo_propuesto"], dichos, telefono)
+            ok, motivo, razon = _validar_motivo(t["motivo_propuesto"],
+                                                t.get("dichos_motivo") or dichos, telefono)
             if ok:
                 t["motivo"] = motivo
             else:
@@ -458,21 +824,25 @@ def _siguiente_paso(t: dict, telefono: str, dichos: list[str]):
         else:
             t["esperando"] = "motivo"
             return ("¿Para qué sería el turno? Por ejemplo: limpieza, control, "
-                    "extracción, arreglo o conducto."), None
+                    "extracción, arreglo, conducto, ortodoncia o prótesis."), None
 
-    # 2. Para quién
-    if not t.get("identificado"):
-        _identificar(t, telefono)
-    falta = _falta_persona(t)
+    # 3b. Ortodoncia: primera consulta o ya en tratamiento.
+    if _norm(t["motivo"]) == "ortodoncia" and not t.get("orto_vez"):
+        t["esperando"] = "orto_vez"
+        set_opciones_ofrecidas([BOTON_PRIMERA, BOTON_SEGUNDA], siempre=True, tipo="botones")
+        return "¿Es la primera consulta de ortodoncia o ya viene en tratamiento?", None
+
+    # 4. Nombre, si es alguien sin ficha
+    falta = _falta_nombre(t)
     if falta:
         return falta
 
-    # 3. Obra social
-    falta = _falta_obra_social(t)
-    if falta:
-        return falta
-
-    # 4 y 5. Profesional (lo decide la agenda), día y horario
+    # 5. Profesional (lo decide la agenda), día y horario
+    if t.get("pide_dia") and not t.get("dia"):
+        t["esperando"] = "dia"
+        return ("¿Para qué día lo busco? Decime una fecha, por ejemplo *el 3 de "
+                "diciembre*, o una franja (mañana o tarde)."), None
+    t.pop("pide_dia", None)
     if not t.get("oferta"):
         texto, opciones = _ofrecer_horarios(t)
         pedida = t.pop("hora_pedida", None)
@@ -483,6 +853,7 @@ def _siguiente_paso(t: dict, telefono: str, dichos: list[str]):
             estado_http, d = _alta(t, pedida, telefono)
             if estado_http == 200:
                 t["hora"] = pedida
+                t["agendado"] = True
                 return _confirmacion(t, d), None
             set_opciones_ofrecidas(t["oferta"]["slots"] + [BOTON_OTRO_DIA], siempre=True,
                                    titulo="Horarios", boton="Elegir horario")
@@ -535,7 +906,8 @@ def _motivo_rechazado(t: dict, razon: str | None):
         return PREGUNTA_CONDUCTO_PACIENTE, None
     t["esperando"] = "motivo"
     return ("Contame un poco más para qué sería el turno, así te doy el tiempo y el "
-            "profesional que corresponde (limpieza, control, extracción, arreglo, conducto…)."), None
+            "profesional que corresponde (limpieza, control, extracción, arreglo, conducto, "
+            "ortodoncia, prótesis…)."), None
 
 
 def _identificar(t: dict, telefono: str):
@@ -551,7 +923,8 @@ def _identificar(t: dict, telefono: str):
         t["ficha_nombre"] = fichas[0].get("nombre")
 
 
-def _falta_persona(t: dict):
+def _falta_eleccion_persona(t: dict):
+    """Con fichas en el número: para quién es (de eso depende la obra social)."""
     fichas = t.get("fichas") or []
     quien = t.get("para_quien")
 
@@ -571,7 +944,7 @@ def _falta_persona(t: dict):
         t.setdefault("apellido", apellido)
         t["titular"] = fichas[0]
         return None
-    if quien == "listo":
+    if quien in ("listo", "otra_persona"):
         return None
 
     if fichas and (not quien or (quien == "yo" and len(fichas) > 1)):
@@ -583,8 +956,14 @@ def _falta_persona(t: dict):
         set_opciones_ofrecidas(t["familia"][:9] + [BOTON_OTRA_PERSONA], siempre=True,
                                titulo="Paciente", boton="Elegir")
         return "¿Para quién es el turno?", None
+    return None
 
-    # Número nuevo, u otra persona: hacen falta nombre y apellido.
+
+def _falta_nombre(t: dict):
+    """Número nuevo, u otra persona: hacen falta nombre y apellido."""
+    if t.get("titular") or t.get("para_quien") == "listo":
+        return None
+    quien = t.get("para_quien")
     if not t.get("nombre"):
         # Cada vez con otras palabras: repetir la misma frase suena a máquina
         # trabada ("mío", "un lunes" no son un nombre, pero tampoco un error).
@@ -610,6 +989,12 @@ def _falta_obra_social(t: dict):
     if t.get("obra_social"):
         return None
     titular = t.get("titular")
+    previa = t.get("os_previa") or {}
+    if titular and previa.get("os") and _norm(previa.get("quien", "")) == _norm(titular.get("nombre_completo", "")) \
+            and not t.get("os_dicha") and not t.get("cobertura") and t.get("os_confirmada") != "cambio":
+        # Ya la confirmó en esta misma conversación: no se repregunta.
+        t["obra_social"] = previa["os"]
+        return None
     if titular and titular.get("obra_social") and t.get("os_confirmada") != "cambio" \
             and not t.get("os_dicha") and not t.get("cobertura"):
         if t.get("os_confirmada") == "si":
@@ -665,27 +1050,73 @@ def _falta_obra_social(t: dict):
 
     t["esperando"] = "cobertura"
     set_opciones_ofrecidas([BOTON_TENGO_OS, BOTON_PARTICULAR], siempre=True, tipo="botones")
-    para = "" if t.get("titular") or t.get("para_quien") == "yo" else f" de {t.get('nombre')}"
+    nombre = t.get("nombre")
+    para = f" de {nombre}" if nombre and not t.get("titular") and t.get("para_quien") == "otra_persona" else ""
     return f"¿La atención{para} sería con obra social o particular?", None
 
 
-def _ofrecer_horarios(t: dict):
-    desde = t.pop("desde", None) if not t.get("dia") else None
+def _disponibilidad(t: dict, fecha: str, obra_social: str | None = None) -> tuple[int, dict]:
     payload = {
-        "reason": t["motivo"], "date": t.get("dia") or desde or "",
-        "obra_social": t.get("obra_social") or "Particular",
+        "reason": t["motivo"], "date": fecha,
+        "obra_social": obra_social or t.get("obra_social") or "Particular",
         "preferencia_horaria": t.get("preferencia_horaria"),
         "profesional_pedido": t.get("profesional"),
     }
     try:
-        estado_http, d = _post("/api/bot/availability", payload)
+        return _post("/api/bot/availability", payload)
     except Exception as e:
         logger.error("FLUJO_TURNO -> disponibilidad falló: %s", e)
-        estado_http, d = 0, {}
+        return 0, {}
+
+
+def _sin_cupo(t: dict, d: dict):
+    """No hay turnos en el horizonte de búsqueda (4 semanas). Nunca el mismo
+    texto ni un "llamá" seco: se busca más adelante, se prueba como particular
+    y se ofrecen salidas con botones (chat real 24/11)."""
+    from datetime import date, timedelta
+    from backend.services.appointment_service import get_clinic_now
+    base = t.get("dia") or get_clinic_now().date().isoformat()
+    if not t.get("busco_lejos"):
+        t["busco_lejos"] = True
+        lejos = (date.fromisoformat(base) + timedelta(days=28)).isoformat()
+        estado_http, d2 = _disponibilidad(t, lejos)
+        if estado_http == 200 and d2.get("available_slots"):
+            return d2, "En las próximas cuatro semanas no me quedan turnos. "
+
+    opciones = [BOTON_OTRO_DIA]
+    extra = ""
+    os_actual = t.get("obra_social") or "Particular"
+    if os_actual != "Particular":
+        estado_http, d3 = _disponibilidad(t, t.get("dia") or "", "Particular")
+        if estado_http == 200 and d3.get("available_slots"):
+            extra = (f" Como *particular* sí tengo lugar desde el "
+                     f"{d3.get('fecha_texto') or d3.get('date')}.")
+        opciones.append(BOTON_PARTICULAR)
+    opciones.append(BOTON_LLAMAR)
+
+    vez = t.get("sin_cupo", 0)
+    t["sin_cupo"] = vez + 1
+    t["esperando"] = "sin_cupo"
+    t.pop("dia", None)
+    t.pop("busco_lejos", None)
+    set_opciones_ofrecidas(opciones, siempre=True, tipo="botones")
+    con = f" con {os_actual}" if os_actual != "Particular" else ""
+    franja = " en esa franja" if t.get("preferencia_horaria") else ""
+    frases = [
+        f"Para {t['motivo'].lower()}{con} no me quedan turnos libres{franja} en las próximas semanas.{extra} "
+        f"¿Querés que busque otro día, o preferís llamar al consultorio?",
+        f"Sigo sin lugar para {t['motivo'].lower()}{con}{franja}.{extra} Podés elegir otro día "
+        f"o una franja distinta, o llamar al {telefono_consultorio()}.",
+    ]
+    return None, frases[min(vez, len(frases) - 1)]
+
+
+def _ofrecer_horarios(t: dict):
+    desde = t.pop("desde", None) if not t.get("dia") else None
+    estado_http, d = _disponibilidad(t, t.get("dia") or desde or "")
     slots = d.get("available_slots") or []
+    aviso = ""
     if estado_http != 200 or not slots:
-        t["esperando"] = "dia"
-        t.pop("dia", None)
         if d.get("message") and "no hace" in d["message"]:
             # Pidió a alguien que no hace esa práctica: se le dice quién sí.
             t.pop("profesional", None)
@@ -695,17 +1126,22 @@ def _ofrecer_horarios(t: dict):
             t["esperando"] = "horario_con_otro"
             return (f"{t['motivo']} no la hace {pedido}: la atiende {quien}. "
                     f"¿Querés que te busque turno con {'ella' if 'Dra' in quien else 'él'}?"), None
-        return (f"No encontré turnos libres para {t['motivo'].lower()} en las próximas "
-                f"semanas{' con esa preferencia' if t.get('preferencia_horaria') else ''}. "
-                f"Podés pedirme otro día o franja, o llamar al consultorio al "
-                f"{telefono_consultorio()}."), None
+        d, aviso = _sin_cupo(t, d)
+        if d is None:
+            return aviso, None
+        slots = d.get("available_slots") or []
 
+    t.pop("sin_cupo", None)
+    t.pop("busco_lejos", None)
     t["oferta"] = {"fecha": d["date"], "fecha_texto": d.get("fecha_texto") or d["date"],
                    "profesional": d.get("professional") or "", "slots": slots[:9]}
     t["esperando"] = "horario"
-    aviso = ""
-    no_sirvio = t.pop("no_le_sirvio", None)
-    if desde:
+    t.pop("no_le_sirvio", None)
+    if t.pop("paso_a_particular", None) and not aviso:
+        aviso = "Dale, lo busco como particular. "
+    if aviso:
+        pass
+    elif desde:
         aviso = "Te busco otra fecha. "
     elif d.get("movido") and d.get("fecha_pedida_texto"):
         # Pidió un día y ahí no hay lugar: se le dice claro, sin reglas internas
@@ -717,23 +1153,51 @@ def _ofrecer_horarios(t: dict):
         else:
             aviso = f"El {d['fecha_pedida_texto']} no tengo turnos para {t['motivo'].lower()}. "
         aviso = aviso[0].upper() + aviso[1:]
+    elif not t.get("dia"):
+        # No pidió día: si lo primero libre cae en otra semana, se explica el salto.
+        from datetime import date
+        from backend.services.appointment_service import get_clinic_now
+        hoy = get_clinic_now().date()
+        try:
+            ofrecida = date.fromisoformat(str(d["date"])[:10])
+        except ValueError:
+            ofrecida = hoy
+        if ofrecida.isocalendar()[:2] != hoy.isocalendar()[:2]:
+            aviso = (f"Esta semana ya no me quedan turnos para {t['motivo'].lower()}; "
+                     f"el primero libre es la semana que viene. "
+                     if (ofrecida - hoy).days <= 13 else
+                     f"Esta semana ya no me quedan turnos para {t['motivo'].lower()}. ")
     set_opciones_ofrecidas(t["oferta"]["slots"] + [BOTON_OTRO_DIA], siempre=True,
                            titulo="Horarios", boton="Elegir horario")
-    return (f"{aviso}Para {t['motivo'].lower()} te puede atender {t['oferta']['profesional']} el "
+    nombre = _nombre_de_quien_escribe(t)
+    if t.get("reprogramar"):
+        inicio = "Para cambiarlo"
+    else:
+        inicio = f"Para {t['motivo'].lower()}"
+    if nombre:
+        inicio = f"{nombre}, {inicio[0].lower()}{inicio[1:]}"
+    return (f"{aviso}{inicio} te puede atender {t['oferta']['profesional']} el "
             f"*{t['oferta']['fecha_texto']}*. ¿Qué horario te queda mejor?"), None
 
 
 def _alta(t: dict, hora: str, telefono: str) -> tuple[int, dict]:
     o = t["oferta"]
-    payload = {
-        "reason": t["motivo"], "preferred_date": f"{o['fecha']} {hora}",
-        "patient_name": t.get("nombre") or "", "patient_last_name": t.get("apellido") or "",
-        "insurance_name": t.get("obra_social") or "Particular",
-        "profesional_pedido": o.get("profesional") or None,
-        "preferencia_horaria": t.get("preferencia_horaria"),
-        "requester_phone": telefono,
-    }
     try:
+        if t.get("reprogramar"):
+            estado_http, d = _post("/api/bot/reschedule", {
+                "appointment_id": t["reprogramar"], "new_start_time": f"{o['fecha']}T{hora}:00",
+                "requester_phone": telefono})
+            return estado_http, {**d, "professional": o.get("profesional")}
+        payload = {
+            "reason": t["motivo"], "preferred_date": f"{o['fecha']} {hora}",
+            "patient_name": t.get("nombre") or "", "patient_last_name": t.get("apellido") or "",
+            "insurance_name": t.get("obra_social") or "Particular",
+            "profesional_pedido": o.get("profesional") or None,
+            "preferencia_horaria": t.get("preferencia_horaria"),
+            "requester_phone": telefono,
+        }
+        if t.get("orto_vez") and t["orto_vez"] != "-":
+            payload["notes"] = f"Ortodoncia: {t['orto_vez']}"
         return _post("/api/bot/appointments", payload)
     except Exception as e:
         return 0, {"detail": str(e)}
@@ -742,10 +1206,16 @@ def _alta(t: dict, hora: str, telefono: str) -> tuple[int, dict]:
 def _confirmacion(t: dict, d: dict) -> str:
     o = t["oferta"]
     t["terminado"] = True
+    nombre = _nombre_de_quien_escribe(t)
+    listo = f"¡Listo, {nombre}! 😊" if nombre else "¡Listo! 😊"
+    profesional = d.get("professional") or o["profesional"]
+    if t.get("reprogramar"):
+        return (f"{listo} Te pasé el turno de {t['motivo'].lower()} al *{o['fecha_texto']} a las "
+                f"{t['hora']}* con {profesional}. El horario anterior quedó libre.")
     para = "" if t.get("titular") or t.get("para_quien") == "yo" else f" para {t.get('nombre')}"
     link = d.get("cancel_url")
-    return (f"¡Listo! 😊 Quedó agendado el turno{para} de {t['motivo'].lower()} con "
-            f"{d.get('professional') or o['profesional']} el *{o['fecha_texto']} a las "
+    return (f"{listo} Quedó agendado el turno{para} de {t['motivo'].lower()} con "
+            f"{profesional} el *{o['fecha_texto']} a las "
             f"{t['hora']}*.\n\nSi necesitás cancelarlo, escribime"
             + (f" o entrá a este link: {link}" if link else "."))
 
@@ -767,12 +1237,11 @@ def _agendar(t: dict, telefono: str):
         t.pop("nombre", None)
         t.pop("apellido", None)
         return "¿A nombre de quién agendo el turno? Necesito nombre y apellido.", None
-    if "ocupado" in detalle.lower() or "disponible" in detalle.lower() or estado_http == 409:
+    if "ocupado" in detalle.lower() or "disponible" in detalle.lower() or "tomado" in detalle.lower() \
+            or "ya tiene otro turno" in detalle.lower() or estado_http == 409:
         t.pop("oferta", None)
         t.pop("hora", None)
         texto, op = _ofrecer_horarios(t)
         return "Ese horario se acaba de ocupar. " + texto, op
     t["terminado"] = True
-    return (f"No pude confirmar el turno por un problema del sistema. Para no hacerte "
-            f"perder tiempo, llamá al consultorio al {telefono_consultorio()} y te lo dan "
-            f"enseguida."), None
+    return ("No pude confirmar el turno por un problema del sistema. " + _texto_llamar()), None

@@ -319,10 +319,13 @@ class BotAppointmentRequest(BaseModel):
     # Lo que pidió sobre día y horario, tal como lo dijo ("a la tarde, menos
     # martes y jueves"). Se revalida al crear, no solo al ofrecer.
     preferencia_horaria: Optional[str] = None
+    # Aclaración para recepción que no cambia el tipo de turno (ej. ortodoncia:
+    # "1ª consulta" o "2ª consulta o más"). Queda en las notas del turno.
+    notes: Optional[str] = None
 
     # Lo dicta el paciente por WhatsApp y termina dibujado en el panel de
     # recepción: un "nombre" con etiquetas HTML era código ejecutándose ahí.
-    @field_validator("patient_name", "patient_last_name", "reason", "insurance_name")
+    @field_validator("patient_name", "patient_last_name", "reason", "insurance_name", "notes")
     @classmethod
     def _sin_etiquetas(cls, v):
         if v is not None and ("<" in v or ">" in v):
