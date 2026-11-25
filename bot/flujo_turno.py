@@ -112,6 +112,10 @@ _URGENCIA = re.compile(r"\b(urgen\w*|hinchad\w*|hinchazon|sangr\w*|no aguanto|do
 # Rechazo / despedida mientras se le ofrece algo.
 _RECHAZO = re.compile(r"\b(no gracias|no,? gracias|busco otro|buscar otro|otro lado|otro profesional"
                       r"|dejalo|dejá|no importa|olvidalo)\b")
+# "Para mí" tiene que estar dicho: la IA lo deducía de "quiero un turno" y el
+# bot no preguntaba para quién era (prueba real 25/11).
+_PARA_MI = re.compile(r"\b(para mi|para mi mismo|para mi misma|mio|mia|yo|soy yo|a mi nombre|me duele|me duelen"
+                      r"|me quiero|me tengo|necesito sacarme|sacarme|hacerme|atenderme|me atiendan)\b")
 _SALUDO = re.compile(r"^(hola|holi|buen dia|buenos dias|buenas)\b")
 _PIDE_TURNO = re.compile(r"\b(quiero|necesito|queria|quisiera|me das|me da|pedir|sacar)\b.*\bturno\b")
 
@@ -498,14 +502,20 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
             # están en el panel: se contestan.
             return _con_saludo(texto, history), None, estado
     ultimo = estado.get("ultimo_turno")
-    if not t and ultimo and (datos.get("hora") or datos.get("dia")) and not datos.get("motivo") \
+    otro_dia = _es(mensaje, BOTON_OTRO_DIA) or datos.get("quiere_otro_dia")
+    if not t and ultimo and (datos.get("hora") or datos.get("dia") or otro_dia) and not datos.get("motivo") \
             and datos.get("para_quien") != "otra_persona" \
-            and intencion in ("dar_datos", "reprogramar_turno", "otro", "pregunta"):
+            and intencion in ("dar_datos", "reprogramar_turno", "otro", "pregunta", "sacar_turno"):
         # Recién agendado y manda "17:30" u "otro día": es mover ESE turno, no
         # sacar otro (prueba real 25/11: arrancaba un pedido nuevo).
         logger.info("FLUJO_TURNO -> cambia el turno recién agendado")
         t = _t_para_reprogramar(ultimo, datos)
-        t.setdefault("dia", str(ultimo["date"])[:10])
+        if otro_dia and not datos.get("dia"):
+            # "Otro día" de la lista vieja: el siguiente con lugar después de ese.
+            from datetime import date as _d, timedelta as _td
+            t["desde"] = (_d.fromisoformat(str(ultimo["date"])[:10]) + _td(days=1)).isoformat()
+        else:
+            t.setdefault("dia", str(ultimo["date"])[:10])
         if datos.get("hora"):
             t["hora_pedida"] = datos["hora"]
         estado.pop("ultimo_turno", None)
@@ -805,7 +815,8 @@ def _incorporar(t: dict, d: dict, mensaje: str, motivo_boton: str | None):
         t["para_quien"] = "otra_persona"
     elif esperando == "para_quien" and any(_es(mensaje, n) for n in t.get("familia", [])):
         t["para_quien"], t["nombre_elegido"] = "familiar", mensaje.strip()
-    elif d.get("para_quien") and t.get("para_quien") != "listo":
+    elif d.get("para_quien") and t.get("para_quien") != "listo" \
+            and (d["para_quien"] != "yo" or _PARA_MI.search(_norm(mensaje))):
         t["para_quien"] = d["para_quien"]
     if d.get("nombre") and (esperando in ("nombre", "apellido", "para_quien") or d.get("para_quien")):
         t["nombre"] = d["nombre"].strip().title()
@@ -1364,7 +1375,8 @@ def _confirmacion(t: dict, d: dict) -> str:
     link = d.get("cancel_url")
     return (f"{listo} Quedó agendado el turno{para} de {t['motivo'].lower()} con "
             f"{profesional} el *{o['fecha_texto']} a las "
-            f"{t['hora']}*.\n\nSi necesitás cancelarlo, escribime"
+            f"{t['hora']}*.\n\nSi querés otro horario, decímelo y lo cambio. Si necesitás "
+            f"cancelarlo, escribime"
             + (f" o entrá a este link: {link}" if link else "."))
 
 

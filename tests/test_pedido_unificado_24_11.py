@@ -597,3 +597,33 @@ def test_fecha_con_barra_aunque_ya_haya_pasado():
     from bot.flujo_turno import _fecha_iso
     assert _fecha_iso("el 24/11").endswith("-11-24")
     assert _fecha_iso("el 3/12").endswith("-12-03")
+
+
+# ── Prueba real 25/11 ~10:00 ────────────────────────────────────────────────
+
+def test_para_quien_no_se_supone_si_no_lo_dijo(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    t = c.dice("quiero un turno", intencion="sacar_turno", para_quien="yo")
+    assert "para vos, Claudio, o para otra persona" in t
+
+
+def test_para_mi_dicho_si_vale(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    t = c.dice("quiero un turno para mí", intencion="sacar_turno", para_quien="yo")
+    assert "para otra persona" not in t
+
+
+def test_otro_dia_de_la_lista_vieja_mueve_el_turno_recien_agendado(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("quiero sacarme una muela", intencion="sacar_turno", motivo="Extracción")
+    c.dice("Para mí"); c.dice("Sí")
+    t = c.dice(c.opciones[0])
+    assert "Si querés otro horario, decímelo y lo cambio" in t
+    (turno,) = _turnos(clinica_completa)
+    antes = turno.start_time
+    t = c.dice("Otro día", quiere_otro_dia=True)
+    assert "Para cambiarlo" in t and "para otra persona" not in t, t
+    t = c.dice(next(h for h in c.opciones if ":" in h))
+    assert "Te pasé el turno" in t
+    (movido,) = _turnos(clinica_completa)
+    assert movido.id == turno.id and movido.start_time.date() > antes.date()
