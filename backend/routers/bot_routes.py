@@ -1,3 +1,4 @@
+import re
 """Bot-facing API routes - used by DentiBot tools to manage appointments."""
 from uuid import UUID
 from datetime import datetime, timedelta
@@ -112,10 +113,20 @@ def buscar_pacientes_por_telefono(db: Session, requester_phone: str | None) -> l
     activos = db.query(Patient).filter(Patient.is_deleted == False).all()  # noqa: E712
 
     exactos = [p for p in activos if p.phone and normalize_to_e164(p.phone) == objetivo]
+    d_req = "".join(filter(str.isdigit, requester_phone))
     if exactos:
+        # El mismo número escrito de otra forma ("2604590071" vs "+54 9 260
+        # 459-0071") es el mismo contacto: característica + número = últimos 10
+        # dígitos. Antes, con una ficha exacta, las otras quedaban afuera, y el
+        # turno guardado en ellas no aparecía (prueba real 24/11: "ya tenía
+        # turno" → "no lo encuentro").
+        if len(d_req) >= 10:
+            ids = {p.id for p in exactos}
+            exactos += [p for p in activos if p.id not in ids and p.phone
+                        and len("".join(filter(str.isdigit, p.phone))) >= 10
+                        and "".join(filter(str.isdigit, p.phone))[-10:] == d_req[-10:]]
         return exactos
 
-    d_req = "".join(filter(str.isdigit, requester_phone))
     if len(d_req) < 8:
         return []
     flexibles = [
@@ -822,7 +833,14 @@ def bot_resolver_motivo(data: dict = Body(...), db: Session = Depends(get_db)):
             tipo_propuesto and tipo_dicho and tipo_dicho.id == tipo_propuesto.id
         )
         coincide_literal = _sin_acentos_simple(propuesto) in _sin_acentos_simple(dicho)
-        if coincide_por_tipo or coincide_literal:
+        # Dijo una palabra que el panel carga para ESE tipo ("mi hijo" para
+        # Odontopediatría), aunque el texto completo caiga antes en otro
+        # ("le duele" → Control). Simulación 24/11: el niño iba a Control.
+        palabras = set(re.findall(r"\w+", _sin_acentos_simple(dicho)))
+        coincide_por_sinonimo = bool(tipo_propuesto) and any(
+            set(re.findall(r"\w+", _sin_acentos_simple(x))) <= palabras
+            for x in (tipo_propuesto.sinonimos or []) if x and x.strip())
+        if coincide_por_tipo or coincide_literal or coincide_por_sinonimo:
             nombre = tipo_propuesto.nombre if tipo_propuesto else propuesto
             return {
                 "ok": True,

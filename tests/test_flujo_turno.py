@@ -278,12 +278,14 @@ def test_pregunta_suelta_en_medio(consultorio, paciente, monkeypatch):
     assert "para vos, Claudio" in t
 
 
-def test_cancelar_en_medio_pasa_al_agente_general(consultorio, paciente, monkeypatch):
+def test_cancelar_en_medio_lo_toma_el_guion(consultorio, paciente, monkeypatch):
+    """24/11: cancelar pasó al guion (antes el agente general decía "no pude
+    confirmar los horarios" antes de cancelar)."""
     c = Charla(monkeypatch, TEL_CLAUDIO)
     c.dice("quiero sacarme una muela", intencion="sacar_turno", motivo="Extracción")
-    c.ia["quiero cancelar mi turno"] = {"intencion": "cancelar_turno"}
-    r = flujo_turno.responder("quiero cancelar mi turno", c.history, c.estado, TEL_CLAUDIO, [])
-    assert r is None
+    t = c.dice("quiero cancelar mi turno", intencion="cancelar_turno")
+    assert flujo_turno.CLAVE not in c.estado
+    assert "¿Qué día tenías el turno?" in t
 
 
 def test_un_saludo_no_arranca_el_guion(consultorio, monkeypatch):

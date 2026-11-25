@@ -447,7 +447,7 @@ def overlapping_appointments(appointments, start: datetime, duration_minutes: in
 
 
 def slot_conflict(appointments, start: datetime, duration_minutes: int, chairs: int,
-                  professional_ids=None, exclude_id=None) -> str | None:
+                  professional_ids=None, exclude_id=None, de_todas_las_sedes=None) -> str | None:
     """Motivo por el que el horario no esta libre, o None si se puede agendar.
 
     professional_ids son los profesionales que podrian tomar ese turno. Si el
@@ -463,7 +463,12 @@ def slot_conflict(appointments, start: datetime, duration_minutes: int, chairs: 
         return f"No hay sillones libres en ese horario (hay {chairs})."
 
     if professional_ids:
-        ocupados = {a.professional_id for a in solapan}
+        # Un profesional no está en dos lugares: sus turnos cuentan aunque la
+        # sede esté escrita de otra forma ("Silproden"). Si no, se ofrecía un
+        # horario que la base después rechazaba ("se acaba de ocupar", 24/11).
+        propios = overlapping_appointments(de_todas_las_sedes, start, duration_minutes, exclude_id) \
+            if de_todas_las_sedes is not None else solapan
+        ocupados = {a.professional_id for a in propios}
         if all(pid in ocupados for pid in professional_ids):
             return "El profesional ya tiene otro turno en ese horario."
     return None
@@ -986,7 +991,8 @@ def profesional_libre(db: Session, candidatos, start: datetime,
     del_dia = get_day_appointments(db, start.date(), location)
     ocupados = {
         a.professional_id
-        for a in overlapping_appointments(del_dia, start, duration_minutes, exclude_id)
+        for a in overlapping_appointments(get_day_appointments(db, start.date(), None),
+                                          start, duration_minutes, exclude_id)
     }
 
     libres = [p for p in trabajan if p.id not in ocupados]
@@ -1057,6 +1063,7 @@ def motivo_no_agendable(db: Session, start: datetime, duration_minutes: int,
     return slot_conflict(
         del_dia, start, duration_minutes, get_chairs_per_location(db),
         [p.id for p in candidatos] if candidatos else None, exclude_id,
+        de_todas_las_sedes=get_day_appointments(db, start.date(), None),
     )
 
 
@@ -1728,6 +1735,7 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
     # como libre aunque hubiera un solo sillon. Ahora se traen todos y la
     # decision la toma slot_conflict segun los sillones configurados.
     existing = get_day_appointments(db, day, location)
+    todas_las_sedes = get_day_appointments(db, day, None)
     chairs = get_chairs_per_location(db)
     
     duration_minutes = duracion_para_motivo(reason, db)
@@ -1738,7 +1746,8 @@ def get_available_slots(db: Session, target_date: str, location: str, reason: st
         shift_end = datetime.combine(day, shift_end_time)
         
         while current + timedelta(minutes=duration_minutes) <= shift_end:
-            conflicto = slot_conflict(existing, current, duration_minutes, chairs, prof_ids)
+            conflicto = slot_conflict(existing, current, duration_minutes, chairs, prof_ids,
+                                      de_todas_las_sedes=todas_las_sedes)
 
             if not conflicto and current > clinic_now:
                 available_slots.append(current.strftime("%H:%M"))

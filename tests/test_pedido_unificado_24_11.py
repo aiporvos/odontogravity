@@ -141,7 +141,7 @@ def test_13_pedido_trabado_se_reinicia(clinica_completa, paciente, monkeypatch):
     c.estado["turno"]["esperando"] = "sin_cupo"
     c.estado["turno"]["sin_cupo"] = 2
     t = c.dice("Hola, quiero un turno", intencion="sacar_turno")
-    assert "llam" not in t.lower()
+    assert "llam" not in t.lower() and not t.startswith("Perdón")
     assert "¿Para qué sería el turno?" in t
     assert c.estado["turno"]["obra_social"] == "Particular"
 
@@ -261,8 +261,8 @@ def test_10_dia_que_no_coincide_manda_a_llamar_sin_duplicar(clinica_completa, pa
     c = Charla(monkeypatch, TEL_CLAUDIO)
     t = c.dice(f"mi turno del {otro.day}/{otro.month}", intencion="ya_tengo_turno",
                dia=f"{otro.day}/{otro.month}")
-    assert "¿Me decís qué día" in t
-    t = c.dice(f"el {otro.day}/{otro.month}, seguro", dia=f"{otro.day}/{otro.month}")
+    assert "El único que tenés" in t
+    t = c.dice("No", respuesta_si_no="no")
     assert "llamá al consultorio" in t and "repetido" in t
     assert len(_turnos(clinica_completa)) == 1
 
@@ -276,10 +276,35 @@ def test_7_ya_tenia_turno_en_medio_del_pedido_no_pide_motivo(clinica_completa, p
     assert "para qué" not in t.lower() and "encontré el turno" in t
 
 
-def test_10_numero_sin_ficha_manda_a_llamar(clinica_completa, monkeypatch):
+def test_10_numero_sin_ficha_pregunta_el_dia_y_despues_llamar(clinica_completa, monkeypatch):
     c = Charla(monkeypatch, TEL_NUEVO)
     t = c.dice("ya tenía turno", intencion="ya_tengo_turno")
-    assert "llamá al consultorio" in t
+    assert "¿Qué día tenías el turno?" in t
+    t = c.dice("el jueves 26", dia="el jueves 26")
+    assert "llamá al consultorio" in t and "repetido" in t
+
+
+def test_prueba_real_turno_en_ficha_con_otro_formato_de_telefono(clinica_completa, paciente, monkeypatch):
+    """24/11 22:06: el turno estaba en una ficha del mismo número escrito de otra
+    forma; la búsqueda solo miraba la ficha exacta y decía que no había nada."""
+    from datetime import datetime as dt
+    from backend.models.patient import Patient
+    db = clinica_completa
+    otra = Patient(first_name="Claudio", last_name="Luna", phone="2604590071", insurance_name="Particular")
+    db.add(otra)
+    db.commit()
+    from backend.models.professional import Professional
+    turno = Appointment(patient_id=otra.id, professional_id=db.query(Professional).first().id,
+                        start_time=dt.combine(date.today() + timedelta(days=1), dt.min.time()).replace(hour=9),
+                        duration_minutes=30, reason="Extracción")
+    db.add(turno)
+    db.commit()
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    t = c.dice("reset\nHola, ya tenía turno\nel jueves 26", intencion="ya_tengo_turno", dia="el jueves 26")
+    assert "llamá" not in t.lower() and ("El único que tenés" in t or "encontré el turno" in t)
+    d = turno.start_time
+    t = c.dice(f"el {d.day}/{d.month}", dia=f"{d.day}/{d.month}")
+    assert "encontré el turno" in t and "09:00" in t
 
 
 # ── 19-21. La secretaria gestiona: el bot no la pisa ────────────────────────
@@ -392,3 +417,143 @@ def test_el_rescate_viejo_no_pisa_al_guion(db, monkeypatch):
     er, enviados = _router(monkeypatch, chat_falso, rescate)
     asyncio.run(er.handle_text_message("5492605550996@s.whatsapp.net", "Hola, ya tenía turno"))
     assert enviados == ["Llamá al consultorio."]
+
+
+def test_hola_quiero_turno_tras_mmm_no_pide_perdon(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("quiero un turno", intencion="sacar_turno")
+    c.dice("mmm")
+    t = c.dice("Hola, quiero un turno", intencion="sacar_turno")
+    assert not t.startswith("Perdón") and "llam" not in t.lower()
+
+
+def test_profesional_ocupado_en_otra_sede_no_se_ofrece(clinica_completa, paciente, silvestro, monkeypatch):
+    """24/11: la agenda ofrecía las 17:00 y la base las rechazaba porque el
+    profesional tenía un turno cargado con la sede escrita distinto."""
+    from datetime import datetime as dt
+    from backend.services.appointment_service import get_available_slots
+    db = clinica_completa
+    dia = date.today() + timedelta(days=1)
+    while dia.weekday() != 3:
+        dia += timedelta(days=1)
+    db.add(Appointment(patient_id=paciente.id, professional_id=silvestro.id,
+                       start_time=dt.combine(dia, dt.min.time()).replace(hour=19),
+                       duration_minutes=60, reason="Control", location="Silproden"))
+    db.commit()
+    r = get_available_slots(db, dia.isoformat(), "San Rafael", "Extracción", "Particular")
+    if r.get("date") == dia.isoformat():
+        assert "19:00" not in r["available_slots"] and "19:30" not in r["available_slots"]
+
+
+def test_cancelar_por_el_guion(clinica_completa, paciente, monkeypatch):
+    turno = _turno_existente(clinica_completa, monkeypatch)
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    t = c.dice("quiero cancelar mi turno", intencion="cancelar_turno")
+    assert "¿Confirmás que cancelo" in t and turno.start_time.strftime("%H:%M") in t
+    t = c.dice(flujo_turno.BOTON_CANCELAR_SI)
+    assert t.startswith("Listo, cancelé")
+    clinica_completa.expire_all()
+    assert clinica_completa.get(Appointment, turno.id).status.value == "cancelled"
+    t = c.dice("Gracias, que tengas buena noche", intencion="saludo_o_cierre")
+    assert "¿Para qué" not in t and ("gracias" in t.lower() or "de nada" in t.lower())
+
+
+def test_turno_repetido_ofrece_el_que_ya_tiene(clinica_completa, paciente, monkeypatch):
+    turno = _turno_existente(clinica_completa, monkeypatch)
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("quiero sacarme una muela", intencion="sacar_turno", motivo="Extracción")
+    c.dice("Para mí")
+    c.dice("Sí")
+    t = c.dice(c.opciones[1] if c.opciones[0] == turno.start_time.strftime("%H:%M") else c.opciones[0])
+    assert "Ya tenés un turno de extracción" in t and "problema del sistema" not in t
+    assert c.opciones == [flujo_turno.BOTON_CONFIRMO, flujo_turno.BOTON_CAMBIAR]
+    t = c.dice(flujo_turno.BOTON_CONFIRMO)
+    assert "Queda confirmado" in t
+    assert len(_turnos(clinica_completa)) == 1
+
+
+def test_despues_de_mandar_a_llamar_no_pregunta_en_circulo(clinica_completa, paciente, monkeypatch):
+    _turno_existente(clinica_completa, monkeypatch)
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("tenía turno el 15/12", intencion="ya_tengo_turno", dia="15/12")
+    t = c.dice("No, era el 15/12", respuesta_si_no="no", dia="15/12")
+    assert "llamá al consultorio" in t
+    t = c.dice("pero no quiero llamar, ya tenía turno", intencion="ya_tengo_turno")
+    assert "llamar" in t and "¿Qué día" not in t
+
+
+def test_hijo_de_8_anios_es_odontopediatria(clinica_completa, paciente, monkeypatch):
+    """Sim 24/11: "mi hijo ... le duele un diente" se rechazaba como Odontopediatría."""
+    clinica_completa.add(TipoConsulta(nombre="Odontopediatría", duracion_minutos=30, especialidad=None,
+                                      sinonimos=["niño", "nene", "hijo", "hija"]))
+    clinica_completa.commit()
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("turno para mi hijo Tomás de 8 años, le duele un diente", intencion="sacar_turno",
+           motivo="Odontopediatría", para_quien="otra_persona", nombre="Tomás")
+    c.dice("Particular")
+    t = c.dice("Benítez", apellido="Benítez")
+    assert "odontopediatría" in t.lower(), t
+
+
+# ── Simulación completa 24/11 23:17 ─────────────────────────────────────────
+
+def test_sim_pregunta_sobre_el_turno_no_recibe_respuesta_generica(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    llamadas = []
+    monkeypatch.setattr(flujo_turno, "responder_pregunta", lambda p: llamadas.append(p) or "LLAMÁ")
+    c.dice("quiero sacarme una muela", intencion="sacar_turno", motivo="Extracción")
+    t = c.dice("¿puedo tener el turno igual?", intencion="pregunta", pregunta="¿puedo tener el turno igual?")
+    assert "LLAMÁ" not in t and llamadas == []
+
+
+def test_sim_rechaza_al_otro_profesional_y_se_cierra(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("control de ortodoncia con Silvestro", intencion="sacar_turno", motivo="Ortodoncia",
+           profesional="Silvestro")
+    c.dice("Para mí"); c.dice("Sí"); t = c.dice(flujo_turno.BOTON_SEGUNDA)
+    assert "con ella" in t
+    t = c.dice("No, gracias. Voy a buscar otro profesional", respuesta_si_no="no")
+    assert t.startswith("Entendido") and _turnos(clinica_completa) == []
+    assert flujo_turno.CLAVE not in c.estado
+
+
+def test_sim_se_despide_en_medio_de_la_oferta(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("quiero sacarme una muela", intencion="sacar_turno", motivo="Extracción")
+    c.dice("Para mí"); c.dice("Sí")
+    t = c.dice("si no hay hoy busco en otro lado, gracias igual", intencion="saludo_o_cierre")
+    assert t.startswith("Entendido") and not t.startswith("Perdón")
+
+
+def test_sim_urgencia_avisa_sobreturno(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    t = c.dice("tengo un dolor intenso y la cara hinchada, necesito turno", intencion="sacar_turno")
+    assert "urgencia" in t and "sobreturno" in t
+
+
+def test_sim_direccion_y_horarios_sin_pedido(clinica_completa, monkeypatch):
+    c = Charla(monkeypatch, TEL_NUEVO)
+    t = c.dice("¿dónde queda el consultorio y en qué horario atienden?", intencion="pregunta",
+               pregunta="¿dónde queda el consultorio y en qué horario atienden?")
+    assert "Av. San Martín" in t
+
+
+def test_sim_dia_equivocado_con_un_solo_turno_pregunta_si_es_ese(clinica_completa, paciente, monkeypatch):
+    turno = _turno_existente(clinica_completa, monkeypatch)
+    otro = turno.start_time.date() + timedelta(days=2)
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    t = c.dice(f"quiero mover mi turno del {otro.day}/{otro.month}", intencion="reprogramar_turno",
+               dia=f"{otro.day}/{otro.month}")
+    assert "El único que tenés" in t and turno.start_time.strftime("%H:%M") in t
+    t = c.dice("Sí")
+    assert "Para cambiarlo" in t
+
+
+def test_sim_insiste_hoy_no_da_vueltas(clinica_completa, paciente, monkeypatch):
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("quiero sacarme una muela", intencion="sacar_turno", motivo="Extracción")
+    c.dice("Para mí"); c.dice("Sí")
+    hoy = date.today()
+    respuestas = [c.dice(f"necesito hoy {i}", dia="hoy", quiere_otro_dia=True) for i in range(4)]
+    assert any("sobreturno" in r for r in respuestas)
+    assert sum(r.startswith("Perdón") for r in respuestas) <= 1

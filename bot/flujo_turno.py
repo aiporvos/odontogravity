@@ -66,6 +66,8 @@ BOTON_PRIMERA = "1ª consulta"
 BOTON_SEGUNDA = "2ª consulta o más"
 BOTON_CONFIRMO = "Lo confirmo"
 BOTON_CAMBIAR = "Quiero cambiarlo"
+BOTON_CANCELAR_SI = "Sí, cancelarlo"
+BOTON_NO = "No"
 
 CLAVE_PREVIO = "turno_previo"   # "ya tenía turno": buscar y asociar el existente
 
@@ -99,6 +101,17 @@ _YA_TENIA = re.compile(
     r"|\bmi turno (del|de el|es el|era el|para el|era)\b"
     r"|\btengo( un)? turno (el|para el|del|de el)\b")
 
+_DESPEDIDA = re.compile(r"\b(gracias|grax|chau|saludos|nos vemos|hasta (luego|mañana|el)"
+                        r"|buen(a|as|os) (noche|noches|tarde|tardes|dia|dias))\b")
+# Preguntas de información del consultorio (no del pedido en curso).
+_PREGUNTA_INFO = re.compile(r"\b(donde|direccion|ubicad\w*|queda[n]?|horario de atencion|a que hora (abren|cierran)"
+                            r"|abren|cierran|precio\w*|cuanto (sale|cuesta|cobran)|estacionamiento|telefono)\b")
+# Urgencia: se avisa que llame por un sobreturno, además de ofrecer el turno.
+_URGENCIA = re.compile(r"\b(urgen\w*|hinchad\w*|hinchazon|sangr\w*|no aguanto|dolor (muy )?(intenso|fuerte)"
+                       r"|me muero de dolor|insoportable|flemon|infecci\w*)\b")
+# Rechazo / despedida mientras se le ofrece algo.
+_RECHAZO = re.compile(r"\b(no gracias|no,? gracias|busco otro|buscar otro|otro lado|otro profesional"
+                      r"|dejalo|dejá|no importa|olvidalo)\b")
 _SALUDO = re.compile(r"^(hola|holi|buen dia|buenos dias|buenas)\b")
 _PIDE_TURNO = re.compile(r"\b(quiero|necesito|queria|quisiera|me das|me da|pedir|sacar)\b.*\bturno\b")
 
@@ -431,8 +444,10 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
 
     # "Gracias, nos vemos el jueves" después de confirmar: cierre, no pedido.
     if not t and not p and intencion == "saludo_o_cierre" and history \
-            and ultima.startswith(("¡Listo", "¡Perfecto")):
-        return "¡Gracias a vos! Te esperamos 😊 Cualquier cosa, escribime.", None, estado
+            and (ultima.startswith(("¡Listo", "¡Perfecto", "Listo")) or _DESPEDIDA.search(_norm(mensaje))):
+        if ultima.startswith(("¡Listo", "¡Perfecto", "Listo")):
+            return "¡Gracias a vos! Te esperamos 😊 Cualquier cosa, escribime.", None, estado
+        return "¡De nada! Cualquier cosa, escribime 😊", None, estado
 
     ya_tenia = intencion in ("ya_tengo_turno", "reprogramar_turno") or bool(_YA_TENIA.search(_norm(mensaje)))
     sobre_turnos = ya_tenia or intencion in ("sacar_turno", "cancelar_turno", "consultar_mis_turnos") \
@@ -448,16 +463,25 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
         return _texto_secretaria(), tomar_opciones_ofrecidas(), estado
 
     # "Ya tenía turno" o cambiar uno: buscar el existente, nunca duplicar.
-    if ya_tenia or (p and intencion != "sacar_turno"):
-        if intencion == "cancelar_turno":
-            estado.pop(CLAVE_PREVIO, None)
-            return None
-        if ya_tenia and not p:
+    cancelar = intencion == "cancelar_turno"
+    if ya_tenia or cancelar or (p and intencion != "sacar_turno"):
+        if cancelar and p.get("esperando") != "cancelar":
+            p = {"cancelar": True}
+        elif ya_tenia and not p:
             p = {"cambiar": intencion == "reprogramar_turno"}
+        if estado.get("previo_llamar") and not p.get("esperando") and not d_dia(datos):
+            # Ya se lo mandó a llamar por este turno: no se vuelve a preguntar
+            # lo mismo en círculo (simulación 24/11).
+            set_opciones_ofrecidas(None)
+            return ("Como no lo pude identificar desde acá, lo más seguro es llamar al "
+                    f"{telefono_consultorio()} 🙏 Así no se duplica nada."), tomar_opciones_ofrecidas(), estado
+        p["ya_llamo"] = bool(estado.get("previo_llamar"))
         r = _turno_previo(p, datos, mensaje, telefono)
         if r[0] == "respuesta":
             _, texto, p = r
             estado = _cortar_flujo(estado) if p is None else {**_cortar_flujo(estado), CLAVE_PREVIO: p}
+            if p is None and "llamá al consultorio" in texto:
+                estado["previo_llamar"] = True
             return _con_saludo(texto, history), tomar_opciones_ofrecidas(), estado
         # Pasa a buscar horario nuevo para el turno encontrado.
         t = r[1]
@@ -466,12 +490,19 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
         return _terminar(t, texto, estado, history, ultima, "")
     estado.pop(CLAVE_PREVIO, None)
 
+    if not t and intencion == "pregunta" and datos.get("pregunta") \
+            and _PREGUNTA_INFO.search(_norm(datos["pregunta"])):
+        texto = responder_pregunta(datos["pregunta"])
+        if texto:
+            # Sim 24/11: "¿dónde quedan y en qué horario?" → "llamá". Los datos
+            # están en el panel: se contestan.
+            return _con_saludo(texto, history), None, estado
     if not t:
         if intencion != "sacar_turno" and not (intencion == "dar_datos" and datos.get("motivo")):
             return None
         t = {"activo": True, "os_previa": estado.get("os_confirmada")}
         logger.info("FLUJO_TURNO -> empieza")
-    elif intencion in ("cancelar_turno", "consultar_mis_turnos"):
+    elif intencion == "consultar_mis_turnos":
         logger.info("FLUJO_TURNO -> el paciente pide %s: pasa al agente general", intencion)
         return None
     elif intencion == "sacar_turno" and _pedido_nuevo(t, mensaje):
@@ -481,11 +512,29 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
         t = {k: t[k] for k in ("identificado", "fichas", "ficha_nombre", "titular",
                                "obra_social", "para_quien", "nombre", "apellido",
                                "os_previa") if k in t}
-        t["activo"] = True
+        t["activo"], t["reiniciado"] = True, True
 
     aparte = ""
-    if datos.get("pregunta") and intencion == "pregunta":
+    if datos.get("pregunta") and intencion == "pregunta" and _PREGUNTA_INFO.search(_norm(datos["pregunta"])):
         aparte = responder_pregunta(datos["pregunta"])
+    if not t.get("aviso_urgencia") and _URGENCIA.search(_norm(mensaje)):
+        t["aviso_urgencia"] = True
+        aparte = (aparte + "\n\n" if aparte else "") + (
+            f"Si es una urgencia (dolor fuerte, hinchazón), llamá al {telefono_consultorio()} "
+            "así te ven por sobreturno. Igual te busco el turno más cercano:")
+
+    n_msg = _norm(mensaje)
+    if t.get("esperando") in ("horario", "horario_con_otro", "sin_cupo", "dia") and not datos.get("dia") \
+            and not datos.get("hora") and not _es(mensaje, BOTON_OTRO_DIA) and (
+                _RECHAZO.search(n_msg) or intencion == "saludo_o_cierre"
+                or (t.get("esperando") == "horario_con_otro" and datos.get("respuesta_si_no") == "no")):
+        # Sim 24/11: dijo "no, gracias" o se despidió y el bot le volvía a
+        # ofrecer lo mismo pidiendo perdón.
+        t["terminado"] = True
+        set_opciones_ofrecidas(None)
+        texto = ("Entendido 😊 Si más adelante te sirve otro día u horario, escribime y te lo busco. "
+                 f"Si es urgente, llamá al {telefono_consultorio()}.")
+        return _terminar(t, texto, estado, history, ultima, "")
 
     propuesto_antes = t.get("motivo_propuesto")
     _incorporar(t, datos, mensaje, motivo_boton)
@@ -494,8 +543,26 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
         # obra social antes que el motivo, el "Sí" que confirmaba la cobertura
         # se tomaba como "sí, ya hice la consulta por conducto".
         t["dichos_motivo"] = dichos + [mensaje]
+    oferta_antes = dict(t.get("oferta") or {})
     texto, _ = _siguiente_paso(t, telefono, dichos + [mensaje])
+    o = t.get("oferta") or {}
+    if oferta_antes and not t.get("terminado") and t.get("esperando") == "horario" \
+            and o.get("fecha") == oferta_antes.get("fecha") and o.get("slots") == oferta_antes.get("slots"):
+        t["misma_oferta"] = t.get("misma_oferta", 0) + 1
+        if t["misma_oferta"] >= 2:
+            # Sim 24/11: insistía "hoy" y el bot repetía lo mismo en círculo.
+            t["terminado"] = True
+            set_opciones_ofrecidas(None)
+            texto = (f"Antes del *{o.get('fecha_texto')}* no me queda lugar, y no quiero hacerte dar "
+                     f"vueltas. Si es urgente, llamá al {telefono_consultorio()} así te ven por "
+                     "sobreturno. Si te sirve ese día, escribime y te lo agendo 😊")
+    else:
+        t.pop("misma_oferta", None)
     return _terminar(t, texto, estado, history, ultima, aparte)
+
+
+def d_dia(d: dict) -> bool:
+    return bool(d.get("dia"))
 
 
 def _pedido_nuevo(t: dict, mensaje: str) -> bool:
@@ -510,7 +577,8 @@ def _pedido_nuevo(t: dict, mensaje: str) -> bool:
 def _terminar(t: dict, texto: str, estado: dict, history, ultima: str, aparte: str):
     # Si vuelve a decir exactamente lo mismo, no se entendieron: se aclara una
     # vez y a la tercera se lo manda al teléfono, nunca un círculo sin salida.
-    if texto and texto in (ultima or "") and not t.get("terminado"):
+    reiniciado = t.pop("reiniciado", False)
+    if texto and texto in (ultima or "") and not t.get("terminado") and not reiniciado:
         t["repeticiones"] = t.get("repeticiones", 0) + 1
         if t["repeticiones"] >= 2:
             t["terminado"] = True
@@ -523,6 +591,8 @@ def _terminar(t: dict, texto: str, estado: dict, history, ultima: str, aparte: s
 
     if t.get("terminado"):
         estado = _cerrar_pedido(estado)
+        if t.get("previo_sugerido"):
+            estado[CLAVE_PREVIO] = t["previo_sugerido"]
         if t.get("agendado"):
             estado["accion_hecha"] = True
         if t.get("obra_social"):
@@ -576,12 +646,46 @@ def _turno_previo(p: dict, d: dict, mensaje: str, telefono: str):
         if cambiar:
             return ("reprogramar", _t_para_reprogramar(turno, {**d, "preferencia_horaria":
                                                                 d.get("preferencia_horaria") or p.get("preferencia")}))
+        if p.get("cancelar"):
+            set_opciones_ofrecidas([BOTON_CANCELAR_SI, BOTON_NO], siempre=True, tipo="botones")
+            return ("respuesta", f"¿Confirmás que cancelo el turno de "
+                    f"{(turno.get('reason') or 'consulta').lower()} del *{turno['fecha_texto']} a las "
+                    f"{turno['hora']}* con {turno['professional']}?",
+                    {"esperando": "cancelar", "turno": turno, "cancelar": True})
         set_opciones_ofrecidas([BOTON_CONFIRMO, BOTON_CAMBIAR], siempre=True, tipo="botones")
         quien = f" de {turno['paciente']}" if p.get("varios") else ""
         return ("respuesta", f"Sí, encontré el turno{quien}: *{turno['fecha_texto']} a las "
                 f"{turno['hora']}* con {turno['professional']} ({(turno.get('reason') or 'consulta').lower()}). "
                 "¿Lo confirmás o querés cambiarlo?",
                 {"esperando": "confirmar", "turno": turno})
+
+    if p.get("esperando") == "es_ese":
+        iso_dicho = _fecha_iso(d["dia"]) if d.get("dia") else ""
+        if iso_dicho and iso_dicho == str(p["propuesto"]["date"])[:10]:
+            return asociar(p["propuesto"], p.get("cambiar"))
+        if _es(mensaje, BOTON_SI) or d.get("respuesta_si_no") == "si":
+            return asociar(p["propuesto"], p.get("cambiar"))
+        if _es(mensaje, BOTON_NO) or d.get("respuesta_si_no") == "no":
+            return llamar()
+        set_opciones_ofrecidas([BOTON_SI, BOTON_NO], siempre=True, tipo="botones")
+        return ("respuesta", "¿Es ese turno?", p)
+
+    if p.get("esperando") == "cancelar":
+        turno = p["turno"]
+        if _es(mensaje, BOTON_CANCELAR_SI) or d.get("respuesta_si_no") == "si":
+            try:
+                estado_http, _r = _post("/api/bot/cancel", {"appointment_id": turno["id"],
+                                                            "requester_phone": telefono}, timeout=15)
+            except Exception:
+                estado_http = 0
+            if estado_http == 200:
+                return ("respuesta", f"Listo, cancelé el turno del *{turno['fecha_texto']} a las "
+                        f"{turno['hora']}*. Si querés sacar otro, escribime 😊", None)
+            return llamar()
+        if _es(mensaje, BOTON_NO) or d.get("respuesta_si_no") == "no":
+            return ("respuesta", "Perfecto, el turno queda como está 😊", None)
+        set_opciones_ofrecidas([BOTON_CANCELAR_SI, BOTON_NO], siempre=True, tipo="botones")
+        return ("respuesta", "¿Lo cancelo?", p)
 
     if p.get("esperando") == "confirmar":
         turno = p["turno"]
@@ -597,18 +701,38 @@ def _turno_previo(p: dict, d: dict, mensaje: str, telefono: str):
 
     turnos = _mis_turnos(telefono)
     if not turnos:
-        return llamar()
+        # Regla del 24/11: primero se pregunta el día; recién si no aparece,
+        # a llamar (prueba real: mandaba a llamar de entrada).
+        if p.get("esperando") == "dia" or (d.get("dia") and p.get("pregunto_dia")):
+            return llamar()
+        p["esperando"], p["pregunto_dia"] = "dia", True
+        if d.get("dia"):
+            return ("respuesta", "No encuentro un turno a tu nombre ese día. ¿Me decís qué día "
+                    "y a qué hora lo tenías?", p)
+        return ("respuesta", "¿Qué día tenías el turno? Así lo busco en la agenda.", p)
     p["varios"] = len({x.get("paciente") for x in turnos}) > 1
     iso = _fecha_iso(d["dia"]) if d.get("dia") else ""
+    if p.get("cancelar") and not iso and len(turnos) == 1:
+        return asociar(turnos[0], False)
     if iso:
         candidatos = [x for x in turnos if str(x["date"])[:10] == iso]
         if d.get("hora"):
             candidatos = [x for x in candidatos if str(x["date"])[11:16] == d["hora"]] or candidatos
         if len(candidatos) == 1:
             return asociar(candidatos[0], p.get("cambiar"))
-        if p.get("esperando") != "dia":
+        if len(turnos) == 1 and not p.get("propuesto"):
+            # Dijo mal el día, pero tiene un solo turno: se le pregunta si es
+            # ese (sim 24/11). Con un "sí" queda claro; si no, a llamar.
+            unico = turnos[0]
+            cuando = datetime.fromisoformat(str(unico["date"]))
+            set_opciones_ofrecidas([BOTON_SI, BOTON_NO], siempre=True, tipo="botones")
+            return ("respuesta", f"Ese día no veo turnos a tu nombre. El único que tenés es el "
+                    f"*{fecha_en_palabras(cuando.date())} a las {cuando.strftime('%H:%M')}* "
+                    f"({(unico.get('reason') or 'consulta').lower()}). ¿Es ese?",
+                    {**p, "esperando": "es_ese", "propuesto": unico})
+        if p.get("esperando") != "dia" and not p.get("ya_llamo"):
             # Puede haber dicho "en un par de días": se le pide el día una vez.
-            p["esperando"] = "dia"
+            p["esperando"], p["pregunto_dia"] = "dia", True
             return ("respuesta", "No encuentro un turno tuyo ese día. ¿Me decís qué día y a "
                     "qué hora lo tenías?", p)
         return llamar()
@@ -1228,6 +1352,23 @@ def _agendar(t: dict, telefono: str):
 
     detalle = str(d.get("detail") or "")
     logger.warning("FLUJO_TURNO -> el alta falló (%s): %s", estado_http, detalle[:200])
+    m = re.search(r"appointment_id=([0-9a-f-]{36})", detalle)
+    if m and "ya tiene un turno" in detalle:
+        # Ya tiene uno del mismo tipo: no se duplica, se le muestra el que tiene
+        # (simulación 24/11: terminaba en "problema del sistema").
+        existente = next((x for x in (_mis_turnos(telefono) or []) if x["id"] == m.group(1)), None)
+        if existente:
+            from datetime import datetime as _dt
+            from backend.services.appointment_service import fecha_en_palabras
+            cuando = _dt.fromisoformat(str(existente["date"]))
+            existente.update(fecha_texto=fecha_en_palabras(cuando.date()), hora=cuando.strftime("%H:%M"))
+            t["terminado"] = True
+            t["previo_sugerido"] = {"esperando": "confirmar", "turno": existente}
+            set_opciones_ofrecidas([BOTON_CONFIRMO, BOTON_CAMBIAR], siempre=True, tipo="botones")
+            return (f"Ya tenés un turno de {(existente.get('reason') or 'consulta').lower()} el "
+                    f"*{existente['fecha_texto']} a las {existente['hora']}* con "
+                    f"{existente['professional']}. Para no duplicarlo: ¿lo confirmás o querés "
+                    f"cambiarlo?"), None
     if "apellido" in detalle.lower():
         t["esperando"] = "apellido"
         t.pop("apellido", None)
@@ -1239,9 +1380,15 @@ def _agendar(t: dict, telefono: str):
         return "¿A nombre de quién agendo el turno? Necesito nombre y apellido.", None
     if "ocupado" in detalle.lower() or "disponible" in detalle.lower() or "tomado" in detalle.lower() \
             or "ya tiene otro turno" in detalle.lower() or estado_http == 409:
-        t.pop("oferta", None)
-        t.pop("hora", None)
+        o = t.pop("oferta", None) or {}
+        fallida = t.pop("hora", None)
         texto, op = _ofrecer_horarios(t)
+        nueva = t.get("oferta") or {}
+        if fallida and nueva.get("fecha") == o.get("fecha") and fallida in nueva.get("slots", []):
+            # Nunca volver a ofrecer la hora que recién falló.
+            nueva["slots"] = [h for h in nueva["slots"] if h != fallida]
+            set_opciones_ofrecidas(nueva["slots"] + [BOTON_OTRO_DIA], siempre=True,
+                                   titulo="Horarios", boton="Elegir horario")
         return "Ese horario se acaba de ocupar. " + texto, op
     t["terminado"] = True
     return ("No pude confirmar el turno por un problema del sistema. " + _texto_llamar()), None
