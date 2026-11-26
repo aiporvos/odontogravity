@@ -667,29 +667,32 @@ def test_oferta_explica_como_elegir(clinica_completa, monkeypatch):
     c.dice("quiero un turno de control", intencion="sacar_turno", motivo="Control")
     c.dice("Particular")
     t = c.dice("Julián Pereyra", nombre="Julián", apellido="Pereyra")
-    assert "🕐 Horarios libres:" in t and "Tocá un botón de abajo" in t
-    # Botones a la vista: dos horarios + "Más horarios" (o "Otro día").
-    assert len(c.opciones) <= 3 and c.opciones[-1] in (flujo_turno.BOTON_MAS, flujo_turno.BOTON_OTRO_DIA)
-    assert all(":" in h for h in c.opciones[:-1])
+    slots = c.estado["turno"]["oferta"]["slots"]
+    assert "Horarios libres:" in t and f"1️⃣ {slots[0]}" in t and "Respondé con el *número*" in t
+    # Botones: los dos más cercanos + "Otro día".
+    assert c.opciones == slots[:2] + [flujo_turno.BOTON_OTRO_DIA]
 
 
 
 # ── Chat real 25/11 tarde: botones visibles, conducto "bueno", presencial ───
 
-def test_mas_horarios_pagina_y_al_final_otro_dia(clinica_completa, monkeypatch):
+def test_elige_por_numero_de_la_lista(clinica_completa, monkeypatch):
     c = Charla(monkeypatch, TEL_NUEVO)
     c.dice("quiero un turno de control", intencion="sacar_turno", motivo="Control")
     c.dice("Particular")
     c.dice("Julián Pereyra", nombre="Julián", apellido="Pereyra")
-    todos = c.estado["turno"]["oferta"]["slots"]
-    vistos = [h for h in c.opciones if ":" in h]
-    while flujo_turno.BOTON_MAS in c.opciones:
-        t = c.dice(flujo_turno.BOTON_MAS)
-        assert t.startswith("Más horarios del")
-        vistos += [h for h in c.opciones if ":" in h]
-    assert vistos == todos and c.opciones[-1] == flujo_turno.BOTON_OTRO_DIA
-    t = c.dice(vistos[-1])
-    assert t.startswith("¡Listo")
+    slots = c.estado["turno"]["oferta"]["slots"]
+    t = c.dice("3")
+    assert t.startswith("¡Listo") and slots[2] in t
+
+
+def test_numero_de_la_lista_variantes():
+    slots = ["09:00", "10:30", "17:00"]
+    assert flujo_turno._numero_elegido("el 2", slots) == "10:30"
+    assert flujo_turno._numero_elegido("2️⃣", slots) == "10:30"
+    assert flujo_turno._numero_elegido("opción 3", slots) == "17:00"
+    assert flujo_turno._numero_elegido("10", slots) is None        # es una hora, no un número de la lista
+    assert flujo_turno._numero_elegido("17:00", slots) is None
 
 
 def test_conducto_bueno_agenda_la_consulta(clinica_completa, paciente, monkeypatch):
@@ -709,3 +712,23 @@ def test_me_acerco_presencial_cierra(clinica_completa, paciente, monkeypatch):
     c.dice("Para mí"); c.dice("Sí")
     t = c.dice("me acerco mañana presencial", dia="mañana")
     assert t.startswith("Entendido") and flujo_turno.CLAVE not in c.estado
+
+
+# ── Prueba de Claudio 25/11 noche: PAMI sin lugar, un solo horario ──────────
+
+def test_pami_sin_lugar_no_ofrece_particular(monkeypatch):
+    monkeypatch.setattr(flujo_turno, "_disponibilidad",
+                        lambda t, f, os=None: (200, {"available_slots": [], "message": "sin lugar"}))
+    t = {"motivo": "Extracción", "obra_social": "PAMI"}
+    texto, _ = flujo_turno._ofrecer_horarios(t)
+    ops = flujo_turno.tomar_opciones_ofrecidas()["opciones"]
+    assert flujo_turno.BOTON_PARTICULAR not in ops and "particular" not in texto.lower()
+
+
+def test_un_solo_horario_se_dice_cual(monkeypatch):
+    t = {"motivo": "Extracción", "obra_social": "Particular", "identificado": True, "para_quien": "listo",
+         "orto_vez": "-", "esperando": "horario",
+         "oferta": {"fecha": "2026-12-02", "fecha_texto": "miércoles 2 de diciembre de 2026",
+                    "profesional": "Dr. Sergio Silvestro", "slots": ["09:00"]}}
+    texto, _ = flujo_turno._siguiente_paso(t, TEL_NUEVO, [])
+    assert "solo me queda *09:00*" in texto and "Otro día" in texto

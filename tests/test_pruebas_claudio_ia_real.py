@@ -130,3 +130,12 @@ def test_6_pedido_trabado(clinica_completa, paciente):
     c.dice("quiero un turno"); c.dice("mmm")
     t = c.dice("Hola, quiero un turno"); _ver(c)
     assert "llam" not in t.lower() and not t.startswith("Perdón")
+
+
+def test_7_elige_por_numero(clinica_completa, paciente):
+    c = Real()
+    c.dice("Hola, quiero un turno para mí"); c.dice("Sí")
+    c.dice("para sacarme una muela")
+    slots = c.estado["turno"]["oferta"]["slots"]
+    t = c.dice("3"); _ver(c)
+    assert t.startswith("¡Listo") and slots[2] in t, t

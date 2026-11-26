@@ -83,17 +83,33 @@ def _botones_horarios(t: dict):
     pag = t.get("pagina", 0)
     if pag * 2 >= len(slots):
         pag = t["pagina"] = 0
-    visibles = slots[pag * 2: pag * 2 + 2]
-    mas = len(slots) > (pag + 1) * 2
-    set_opciones_ofrecidas(visibles + [BOTON_MAS if mas else BOTON_OTRO_DIA], siempre=True, tipo="botones")
+    # La lista completa va numerada en el texto; los botones son un atajo.
+    set_opciones_ofrecidas(slots[:2] + [BOTON_OTRO_DIA], siempre=True, tipo="botones")
+
+
+def _pocos_o_elegir(t: dict) -> str:
+    """Con uno o dos horarios se dice cuáles son, sin "elegí de la lista"."""
+    o = t["oferta"]
+    slots = o.get("slots") or []
+    if 0 < len(slots) <= 2:
+        cuales = " y ".join(f"*{h}*" for h in slots)
+        return (f"Ese día ({o['fecha_texto']}, con {o['profesional']}) solo me queda {cuales}. "
+                f"Si no te sirve, tocá *Otro día* y te busco la fecha siguiente 👇")
+    return (f"Para el *{o['fecha_texto']}* con {o['profesional']}." + _como_elegir(t))
+
+
+_NUMEROS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
 
 
 def _como_elegir(t: dict) -> str:
+    """Lista numerada, toda a la vista: lo más claro para gente mayor (Claudio
+    25/11). WhatsApp no deja mostrar una lista ya desplegada."""
     slots = (t.get("oferta") or {}).get("slots") or []
     if not slots:
         return ""
-    return (f"\n\n🕐 Horarios libres: {' · '.join(slots)}\n👇 Tocá un botón de abajo, o escribime "
-            f"la hora (por ejemplo *{slots[0]}*).")
+    filas = "\n".join(f"{_NUMEROS[i]} {h}" for i, h in enumerate(slots[:9]))
+    return (f" Horarios libres:\n\n{filas}\n\n✍️ Respondé con el *número* (por ejemplo *1*), o tocá "
+            f"un botón. Si ninguno te sirve, tocá *Otro día*.")
 
 CLAVE_PREVIO = "turno_previo"   # "ya tenía turno": buscar y asociar el existente
 
@@ -458,6 +474,9 @@ def responder(mensaje: str, history: list[dict], estado: dict, telefono: str,
 
     datos = extraer(mensaje, ultima if (t or p) else "")
     intencion = datos.get("intencion")
+    if (t.get("oferta") or {}).get("slots") and _numero_elegido(mensaje, t["oferta"]["slots"]):
+        # "3" es la opción 3 de la lista, no el día 3 ni las 03:00.
+        datos = {k: None for k in datos} | {"intencion": "dar_datos", "quiere_otro_dia": False}
     if _es(mensaje, BOTON_OTRO_DIA):
         # El botón no trae fecha: la IA a veces "leía" una del mensaje anterior
         # y volvía a ofrecer el mismo día (chat real 25/11).
@@ -958,7 +977,7 @@ def _incorporar(t: dict, d: dict, mensaje: str, motivo_boton: str | None):
     # Horario elegido: solo vale uno de los ofrecidos.
     oferta = t.get("oferta")
     if oferta:
-        hora = _hora_elegida(mensaje, oferta.get("slots", []))
+        hora = _numero_elegido(mensaje, oferta.get("slots", [])) or _hora_elegida(mensaje, oferta.get("slots", []))
         if not hora and d.get("hora") in oferta.get("slots", []):
             hora = d["hora"]
         if hora:
@@ -967,6 +986,21 @@ def _incorporar(t: dict, d: dict, mensaje: str, motivo_boton: str | None):
         # Nombró una hora para otro día ("el martes 24 a las 10:30"): si está
         # libre cuando se busque ese día, se agenda sin volver a preguntar.
         t["hora_pedida"] = d["hora"]
+
+
+def _numero_elegido(texto: str, slots: list[str]) -> str | None:
+    """"1", "el 2", "opción 3", "3️⃣": el horario de ese número de la lista.
+    Solo un número suelto y dentro de la lista; "10" o "17:30" son horas."""
+    t = (texto or "").strip()
+    for i, emoji in enumerate(_NUMEROS):
+        if emoji in t and i < len(slots):
+            return slots[i]
+    m = re.fullmatch(r"(?:el|la|opci[oó]n|numero|número|nro\.?|n°)?\s*(\d)\s*[.)]?", t.lower())
+    if m and ":" not in t:
+        n = int(m.group(1))
+        if 1 <= n <= len(slots):
+            return slots[n - 1]
+    return None
 
 
 def _hora_elegida(texto: str, slots: list[str]) -> str | None:
@@ -1063,7 +1097,8 @@ def _siguiente_paso(t: dict, telefono: str, dichos: list[str]):
                 t["agendado"] = True
                 return _confirmacion(t, d), None
             _botones_horarios(t)
-            return f"A las {pedida} ya no tengo lugar ese día. " + texto, opciones
+            o = t["oferta"]
+            return (f"A las {pedida} no tengo lugar el *{o['fecha_texto']}*. " + _pocos_o_elegir(t)), opciones
         t["hora"] = pedida
     if not t.get("hora") and t.pop("insiste", None):
         from backend.services.appointment_service import fecha_en_palabras
@@ -1086,8 +1121,7 @@ def _siguiente_paso(t: dict, telefono: str, dichos: list[str]):
         t["esperando"] = "horario"
         o = t["oferta"]
         _botones_horarios(t)
-        return (f"Elegí uno de los horarios del *{o['fecha_texto']}* con "
-                f"{o['profesional']}, o pedime otro día." + _como_elegir(t)), None
+        return _pocos_o_elegir(t), None
 
     # 6. Alta
     return _agendar(t, telefono)
@@ -1299,7 +1333,9 @@ def _sin_cupo(t: dict, d: dict):
     opciones = [BOTON_OTRO_DIA]
     extra = ""
     os_actual = t.get("obra_social") or "Particular"
-    if os_actual != "Particular":
+    if os_actual != "Particular" and os_actual.strip().upper() != "PAMI":
+        # A un paciente de PAMI no se le ofrece pagar como particular por
+        # iniciativa del bot (Claudio 25/11); si lo pide él, igual se puede.
         estado_http, d3 = _disponibilidad(t, t.get("dia") or "", "Particular")
         if estado_http == 200 and d3.get("available_slots"):
             extra = (f" Como *particular* sí tengo lugar desde el "
@@ -1390,7 +1426,7 @@ def _ofrecer_horarios(t: dict):
     if nombre:
         inicio = f"{nombre}, {inicio[0].lower()}{inicio[1:]}"
     return (f"{aviso}{inicio} te puede atender {t['oferta']['profesional']} el "
-            f"*{t['oferta']['fecha_texto']}*. ¿Qué horario te queda mejor?" + _como_elegir(t)), None
+            f"*{t['oferta']['fecha_texto']}*." + _como_elegir(t)), None
 
 
 def _alta(t: dict, hora: str, telefono: str) -> tuple[int, dict]:
