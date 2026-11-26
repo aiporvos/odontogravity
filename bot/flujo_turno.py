@@ -1455,6 +1455,9 @@ def _alta(t: dict, hora: str, telefono: str) -> tuple[int, dict]:
 def _confirmacion(t: dict, d: dict) -> str:
     o = t["oferta"]
     t["terminado"] = True
+    # Turno confirmado: sin botones de horarios colgando (25/11, quedaban los de
+    # la oferta cuando el paciente escribía la hora y se agendaba de una).
+    set_opciones_ofrecidas(None)
     # Para entender un "mejor a las 17:30" justo después de confirmar.
     t["recien"] = {
         "id": str(d.get("appointment_id") or t.get("reprogramar") or ""),

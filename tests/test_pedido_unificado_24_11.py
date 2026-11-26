@@ -732,3 +732,24 @@ def test_un_solo_horario_se_dice_cual(monkeypatch):
                     "profesional": "Dr. Sergio Silvestro", "slots": ["09:00"]}}
     texto, _ = flujo_turno._siguiente_paso(t, TEL_NUEVO, [])
     assert "solo me queda *09:00*" in texto and "Otro día" in texto
+
+
+
+def test_confirmacion_sin_botones_cuando_escribe_la_hora(clinica_completa, paciente, monkeypatch):
+    """Captura de Claudio 26/11: "¡Listo!" seguía mostrando 10:00 / 11:00 / Otro día."""
+    c = Charla(monkeypatch, TEL_CLAUDIO)
+    c.dice("quiero sacarme una muela", intencion="sacar_turno", motivo="Extracción")
+    c.dice("Para mí"); c.dice("Sí")
+    oferta = c.estado["turno"]["oferta"]
+    from datetime import date as d_, timedelta as td
+    otro = d_.fromisoformat(oferta["fecha"]) + td(days=1)
+    while otro.weekday() not in (2, 3):
+        otro += td(days=1)
+    t = c.dice(f"mejor el {otro.day}/{otro.month} a las 10:00", dia=f"{otro.day}/{otro.month}", hora="10:00")
+    assert t.startswith("¡Listo") and c.opciones == [], (t, c.opciones)
+    # Y eligiendo de la lista, tampoco.
+    c2 = Charla(monkeypatch, TEL_NUEVO)
+    c2.dice("quiero un turno de control", intencion="sacar_turno", motivo="Control")
+    c2.dice("Particular"); c2.dice("Julián Pereyra", nombre="Julián", apellido="Pereyra")
+    t = c2.dice("1")
+    assert t.startswith("¡Listo") and c2.opciones == []
